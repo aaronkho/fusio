@@ -26,7 +26,8 @@ classifiers = [
 dynamic = ["version"]
 
 dependencies = [
-   "numpy"
+  "numpy",
+  "freeqdsk",
 ]
 
 [project.optional-dependencies]
