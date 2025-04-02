@@ -382,7 +382,7 @@ class torax(io):
         if 'runtime_params.profile_conditions.psi' in self._data:
             del self._data['runtime_params.profile_conditions.psi']
         self._data['geometry.geometry_type'] = f'{geotype}'
-        self._data['geometry.n_rho'] = 25
+        self._data['geometry.n_rho'] = 50
         self._data['geometry.hires_fac'] = 4
         self._data['geometry.geometry_file'] = f'{geofile}'
         if geodir is not None:
@@ -394,10 +394,11 @@ class torax(io):
 
 
     def add_pedestal(self, pped, nped, tpedratio, wrho):
+        nref = self._data.get('runtime_params.numerics.nref', 1.0e20)
         self._data['runtime_params.profile_conditions.set_pedestal'] = True
         self._data['pedestal.pedestal_model'] = 'set_pped_tpedratio_nped'
         self._data['pedestal.Pped'] = {0.0: float(pped)}
-        self._data['pedestal.neped'] = {0.0: float(nped)}
+        self._data['pedestal.neped'] = {0.0: float(nped) / nref}
         self._data['pedestal.ion_electron_temperature_ratio'] = {0.0: float(tpedratio)}
         self._data['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
 
@@ -523,6 +524,8 @@ class torax(io):
         self._data['stepper.stepper_type'] = 'linear'
         self._data['stepper.theta_imp'] = 1.0
         self._data['stepper.predictor_corrector'] = True
+        self._data['stepper.corrector_steps'] = 10
+        #self._data['stepper.corrector_steps'] = 2
         self._data['stepper.use_pereverzev'] = True
         self._data['stepper.chi_per'] = 20.0
         self._data['stepper.d_per'] = 10.0
@@ -576,7 +579,11 @@ class torax(io):
             if 'current' in data:
                 newobj._data['runtime_params.profile_conditions.Ip_tot'] = {0.0: 1.0e6 * float(data['current'].mean())}
             if 'ne' in data:
-                newobj._data['runtime_params.profile_conditions.ne'] = {0.0: (data['rho'].flatten(), data['ne'].flatten())}
+                newobj._data['runtime_params.numerics.nref'] = 1.0e20
+                nref = newobj._data.get('runtime_params.numerics.nref', 1.0e20)
+                newobj._data['runtime_params.profile_conditions.ne'] = {0.0: (data['rho'].flatten(), 1.0e19 * data['ne'].flatten() / nref)}
+                newobj._data['runtime_params.profile_conditions.normalize_to_nbar'] = False
+                newobj._data['runtime_params.profile_conditions.ne_is_fGW'] = False
             if 'te' in data:
                 newobj._data['runtime_params.profile_conditions.Te'] = {0.0: (data['rho'].flatten(), data['te'].flatten())}
             if 'ti' in data and 'z' in data:
@@ -681,6 +688,4 @@ class torax(io):
                 newobj._data['sources.generic_current_source.mode'] = 'PRESCRIBED'
                 newobj._data['sources.generic_current_source.prescribed_values'] = {0.0: (data['rho'].flatten(), external_current_source)}
                 newobj._data['sources.generic_cuurent_source.use_absolute_current'] = True
-            if not newobj.empty:
-                newobj._data['runtime_params.numerics.nref'] = 1.0e19
         return newobj
