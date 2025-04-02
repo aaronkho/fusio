@@ -507,15 +507,28 @@ class torax(io):
         self._data['sources.cyclotron_radiation_heat_sink.wall_reflection_coeff'] = 0.9
 
 
+    def reset_generic_heat_source(self):
+        if 'sources.generic_ion_el_heat_source.prescribed_values' in self._data:
+            del self._data['sources.generic_ion_el_heat_source.prescribed_values']
+        self._data['sources.generic_ion_el_heat_source.mode'] = 'MODEL_BASED'
+        self._data['sources.generic_ion_el_heat_source.rsource'] = {0.0: 0.0}
+        self._data['sources.generic_ion_el_heat_source.w'] = {0.0: 0.1}
+        self._data['sources.generic_ion_el_heat_source.Ptot'] = {0.0: 2.5e7}
+        self._data['sources.generic_ion_el_heat_source.el_heat_fraction'] = {0.0: 0.4}
+
+
     def add_default_stepper(self):
-        self._data['stepper.stepper_type'] = 'newton_raphson'
+        #self._data['stepper.stepper_type'] = 'newton_raphson'
+        #self._data['stepper.log_iterations'] = True
+        self._data['stepper.stepper_type'] = 'linear'
         self._data['stepper.theta_imp'] = 1.0
         self._data['stepper.predictor_corrector'] = True
-        self._data['stepper.delta_reduction_factor'] = 3.0
-        self._data['stepper.use_pereverzev'] = False
-        self._data['stepper.maxiter'] = 30
-        self._data['stepper.delta_reduction_factor'] = 0.5
-        self._data['stepper.tau_min'] = 0.01
+        self._data['stepper.use_pereverzev'] = True
+        self._data['stepper.chi_per'] = 20.0
+        self._data['stepper.d_per'] = 10.0
+        #self._data['stepper.delta_reduction_factor'] = 0.5
+        #self._data['stepper.maxiter'] = 30
+        #self._data['stepper.tau_min'] = 0.01
         self._data['time_step_calculator.calculator_type'] = 'chi'
 
 
@@ -561,7 +574,7 @@ class torax(io):
                 zeff += nzave * 10.0
                 newobj._data['runtime_params.plasma_composition.Zeff'] = {0.0: (data['rho'].flatten(), zeff.flatten())}
             if 'current' in data:
-                newobj._data['runtime_params.profile_conditions.Ip_tot'] = {0.0: float(data['current'].mean())}
+                newobj._data['runtime_params.profile_conditions.Ip_tot'] = {0.0: 1.0e6 * float(data['current'].mean())}
             if 'ne' in data:
                 newobj._data['runtime_params.profile_conditions.ne'] = {0.0: (data['rho'].flatten(), data['ne'].flatten())}
             if 'te' in data:
@@ -574,7 +587,7 @@ class torax(io):
                 else:
                     newobj._data['runtime_params.profile_conditions.Ti'] = {0.0: (data['rho'].flatten(), ti.flatten())}
             if 'polflux' in data:
-                newobj._data['runtime_params.profile_conditions.psi'] = {0.0: (data['rho'].flatten(), data['polflux'].flatten())}
+                newobj._data['runtime_params.profile_conditions.psi'] = {0.0: (data['rho'].flatten(), 2.0 * np.pi * data['polflux'].flatten())}
             # Place the sources
             external_el_heat_source = None
             external_ion_heat_source = None
@@ -583,43 +596,43 @@ class torax(io):
             fusion_source = None
             if 'qohme' in data and data['qohme'].sum() != 0.0:
                 newobj._data['sources.ohmic_heat_source.mode'] = 'PRESCRIBED'
-                newobj._data['sources.ohmic_heat_source.prescribed_values'] = {0.0: (data['rho'].flatten(), data['qohme'].flatten())}
+                newobj._data['sources.ohmic_heat_source.prescribed_values'] = {0.0: (data['rho'].flatten(), 1.0e6 * data['qohme'].flatten())}
             if 'qbeame' in data and data['qbeame'].sum() != 0.0:
                 if external_el_heat_source is None:
                     external_el_heat_source = np.zeros(data['qbeame'].shape).flatten()
-                external_el_heat_source += data['qbeame'].flatten()
+                external_el_heat_source += 1.0e6 * data['qbeame'].flatten()
             if 'qbeami' in data and data['qbeami'].sum() != 0.0:
                 if external_ion_heat_source is None:
                     external_ion_heat_source = np.zeros(data['qbeami'].shape).flatten()
-                external_ion_heat_source += data['qbeami'].flatten()
+                external_ion_heat_source += 1.0e6 * data['qbeami'].flatten()
             if 'qrfe' in data and data['qrfe'].sum() != 0.0:
                 if external_el_heat_source is None:
                     external_el_heat_source = np.zeros(data['qrfe'].shape).flatten()
-                external_el_heat_source += data['qrfe'].flatten()
+                external_el_heat_source += 1.0e6 * data['qrfe'].flatten()
             if 'qrfi' in data and data['qrfi'].sum() != 0.0:
                 if external_ion_heat_source is None:
                     external_ion_heat_source = np.zeros(data['qrfi'].shape).flatten()
-                external_ion_heat_source += data['qrfi'].flatten()
+                external_ion_heat_source += 1.0e6 * data['qrfi'].flatten()
             if 'qsync' in data and data['qsync'].sum() != 0.0:
                 newobj._data['sources.cyclotron_radiation_heat_sink.mode'] = 'PRESCRIBED'
-                newobj._data['sources.cyclotron_radiation_heat_sink.prescribed_values'] = {0.0: (data['rho'].flatten(), data['qsync'].flatten())}
+                newobj._data['sources.cyclotron_radiation_heat_sink.prescribed_values'] = {0.0: (data['rho'].flatten(), 1.0e6 * data['qsync'].flatten())}
             if 'qbrem' in data and data['qbrem'].sum() != 0.0:
                 newobj._data['sources.bremsstrahlung_heat_sink.mode'] = 'PRESCRIBED'
-                newobj._data['sources.bremsstrahlung_heat_sink.prescribed_values'] = {0.0: (data['rho'].flatten(), data['qbrem'].flatten())}
+                newobj._data['sources.bremsstrahlung_heat_sink.prescribed_values'] = {0.0: (data['rho'].flatten(), 1.0e6 * data['qbrem'].flatten())}
             if 'qline' in data and data['qline'].sum() != 0.0:
                 newobj._data['sources.impurity_radiation_heat_sink.mode'] = 'PRESCRIBED'
-                newobj._data['sources.impurity_radiation_heat_sink.prescribed_values'] = {0.0: (data['rho'].flatten(), data['qline'].flatten())}
+                newobj._data['sources.impurity_radiation_heat_sink.prescribed_values'] = {0.0: (data['rho'].flatten(), 1.0e6 * data['qline'].flatten())}
             if 'qfuse' in data and data['qfuse'].sum() != 0.0:
                 if fusion_source is None:
                     fusion_source = np.zeros(data['qfuse'].shape).flatten()
-                fusion_source += data['qfuse'].flatten()
+                fusion_source += 1.0e6 * data['qfuse'].flatten()
             if 'qfusi' in data and data['qfusi'].sum() != 0.0:
                 if fusion_source is None:
                     fusion_source = np.zeros(data['qfuse'].shape).flatten()
-                fusion_source += data['qfuse'].flatten()
+                fusion_source += 1.0e6 * data['qfuse'].flatten()
             if 'qei' in data and data['qei'].sum() != 0.0:
                 newobj._data['sources.qei_source.mode'] = 'PRESCRIBED'
-                newobj._data['sources.qei_source.prescribed_values'] = {0.0: (data['rho'].flatten(), data['qei'].flatten())}
+                newobj._data['sources.qei_source.prescribed_values'] = {0.0: (data['rho'].flatten(), 1.0e6 * data['qei'].flatten())}
             #if 'qione' in data and data['qione'].sum() != 0.0:
             #    pass
             #if 'qioni' in data and data['qioni'].sum() != 0.0:
@@ -628,21 +641,21 @@ class torax(io):
             #    pass
             if 'jbs' in data and data['jbs'].sum() != 0.0:
                 newobj._data['sources.j_bootstrap.mode'] = 'PRESCRIBED'
-                newobj._data['sources.j_bootstrap.prescribed_values'] = {0.0: (data['rho'].flatten(), data['jbs'].flatten())}
+                newobj._data['sources.j_bootstrap.prescribed_values'] = {0.0: (data['rho'].flatten(), 1.0e6 * data['jbs'].flatten())}
             #if 'jbstor' in data and data['jbstor'].sum() != 0.0:
             #    pass
             if 'johm' in data and data['johm'].sum() != 0.0:
                 if external_current_source is None:
                     external_current_source = np.zeros(data['johm'].shape).flatten()
-                external_current_source += data['johm'].flatten()
+                external_current_source += 1.0e6 * data['johm'].flatten()
             if 'jrf' in data and data['jrf'].sum() != 0.0:
                 if external_current_source is None:
                     external_current_source = np.zeros(data['jrf'].shape).flatten()
-                external_current_source += data['jrf'].flatten()
+                external_current_source += 1.0e6 * data['jrf'].flatten()
             if 'jnb' in data and data['jnb'].sum() != 0.0:
                 if external_current_source is None:
                     external_current_source = np.zeros(data['jnb'].shape).flatten()
-                external_current_source += data['jnb'].flatten()
+                external_current_source += 1.0e6 * data['jnb'].flatten()
             if 'qpar_beam' in data and data['qpar_beam'].sum() != 0.0:
                 if external_particle_source is None:
                     external_particle_source = np.zeros(data['qpar_beam'].shape).flatten()
