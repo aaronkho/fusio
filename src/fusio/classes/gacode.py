@@ -139,6 +139,13 @@ class gacode(io):
             self._data.update(self.read(path))
 
 
+    def correct_magnetic_fluxes(self, exponent=-1):
+        if 'polflux' in self._data:
+            self._data['polflux'] *= np.power(2.0 * np.pi, exponent)
+        if 'torfluxa' in self._data:
+            self._data['torfluxa'] *= np.power(2.0 * np.pi, exponent)
+
+
     def read(self, path):
 
         ipath = Path(path) if isinstance(path, (str, Path)) else None
