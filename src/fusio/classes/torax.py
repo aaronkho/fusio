@@ -382,24 +382,39 @@ class torax(io):
         if 'runtime_params.profile_conditions.psi' in self._data:
             del self._data['runtime_params.profile_conditions.psi']
         self._data['geometry.geometry_type'] = f'{geotype}'
-        self._data['geometry.n_rho'] = 50
+        self._data['geometry.n_rho'] = 25
         self._data['geometry.hires_fac'] = 4
         self._data['geometry.geometry_file'] = f'{geofile}'
         if geodir is not None:
             self._data['geometry.geometry_dir'] = f'{geodir}'
-        self._data['geometry.Ip_from_parameters'] = False
+        self._data['geometry.Ip_from_parameters'] = bool(self._data.get('runtime_params.profile_conditions.Ip_tot', False))
         if geotype == 'eqdsk':
             self._data['geometry.n_surfaces'] = 100
             self._data['geometry.last_surface_factor'] = 0.995
 
 
-    def add_pedestal(self, pped, nped, tpedratio, wrho):
+    def add_pedestal_by_pressure(self, pped, nped, tpedratio, wrho):
         nref = self._data.get('runtime_params.numerics.nref', 1.0e20)
         self._data['runtime_params.profile_conditions.set_pedestal'] = True
+        self._data['transport.smooth_everywhere'] = False
         self._data['pedestal.pedestal_model'] = 'set_pped_tpedratio_nped'
         self._data['pedestal.Pped'] = {0.0: float(pped)}
         self._data['pedestal.neped'] = {0.0: float(nped) / nref}
+        self._data['pedestal.neped_is_fGW'] = False
         self._data['pedestal.ion_electron_temperature_ratio'] = {0.0: float(tpedratio)}
+        self._data['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
+
+
+    def add_pedestal_by_temperature(self, nped, tped, wrho):
+        nref = self._data.get('runtime_params.numerics.nref', 1.0e20)
+        tref = 1.0e3
+        self._data['runtime_params.profile_conditions.set_pedestal'] = True
+        self._data['transport.smooth_everywhere'] = False
+        self._data['pedestal.pedestal_model'] = 'set_tped_nped'
+        self._data['pedestal.neped'] = {0.0: float(nped) / nref}
+        self._data['pedestal.neped_is_fGW'] = False
+        self._data['pedestal.Teped'] = {0.0: float(tped) / tref}
+        self._data['pedestal.Tiped'] = {0.0: float(tped) / tref}
         self._data['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
 
 
@@ -412,6 +427,7 @@ class torax(io):
         self._data['transport.Vemin'] = -10.0
         self._data['transport.Vemax'] = 10.0
         self._data['transport.smoothing_sigma'] = 0.0
+        self._data['transport.smooth_everywhere'] = (not self._data.get('runtime_params.profile_conditions.set_pedestal', False))
         self._data['transport.model_path'] = ''
         self._data['transport.coll_mult'] = 0.25
         self._data['transport.include_ITG'] = True
@@ -514,24 +530,34 @@ class torax(io):
         self._data['sources.generic_ion_el_heat_source.mode'] = 'MODEL_BASED'
         self._data['sources.generic_ion_el_heat_source.rsource'] = {0.0: 0.0}
         self._data['sources.generic_ion_el_heat_source.w'] = {0.0: 0.1}
-        self._data['sources.generic_ion_el_heat_source.Ptot'] = {0.0: 2.5e7}
-        self._data['sources.generic_ion_el_heat_source.el_heat_fraction'] = {0.0: 0.4}
+        self._data['sources.generic_ion_el_heat_source.Ptot'] = {0.0: 0.0}
+        self._data['sources.generic_ion_el_heat_source.el_heat_fraction'] = {0.0: 0.5}
 
 
-    def add_default_stepper(self):
-        #self._data['stepper.stepper_type'] = 'newton_raphson'
-        #self._data['stepper.log_iterations'] = True
+    def add_linear_stepper(self):
         self._data['stepper.stepper_type'] = 'linear'
         self._data['stepper.theta_imp'] = 1.0
         self._data['stepper.predictor_corrector'] = True
         self._data['stepper.corrector_steps'] = 10
-        #self._data['stepper.corrector_steps'] = 2
         self._data['stepper.use_pereverzev'] = True
         self._data['stepper.chi_per'] = 20.0
         self._data['stepper.d_per'] = 10.0
-        #self._data['stepper.delta_reduction_factor'] = 0.5
-        #self._data['stepper.maxiter'] = 30
-        #self._data['stepper.tau_min'] = 0.01
+        self._data['time_step_calculator.calculator_type'] = 'chi'
+
+
+    def add_newton_raphson_stepper(self):
+        self._data['stepper.stepper_type'] = 'newton_raphson'
+        self._data['stepper.theta_imp'] = 1.0
+        self._data['stepper.predictor_corrector'] = True
+        self._data['stepper.corrector_steps'] = 10
+        self._data['stepper.use_pereverzev'] = True
+        self._data['stepper.chi_per'] = 20.0
+        self._data['stepper.d_per'] = 10.0
+        self._data['stepper.log_iterations'] = True
+        self._data['stepper.initial_guess_mode'] = 1
+        self._data['stepper.delta_reduction_factor'] = 0.5
+        self._data['stepper.maxiter'] = 30
+        self._data['stepper.tau_min'] = 0.01
         self._data['time_step_calculator.calculator_type'] = 'chi'
 
 
@@ -577,7 +603,7 @@ class torax(io):
                 zeff += nzave * 10.0
                 newobj._data['runtime_params.plasma_composition.Zeff'] = {0.0: (data['rho'].flatten(), zeff.flatten())}
             if 'current' in data:
-                newobj._data['runtime_params.profile_conditions.Ip_tot'] = {0.0: 1.0e6 * float(data['current'].mean())}
+                newobj._data['runtime_params.profile_conditions.Ip_tot'] = {0.0: float(data['current'].mean())}
             if 'ne' in data:
                 newobj._data['runtime_params.numerics.nref'] = 1.0e20
                 nref = newobj._data.get('runtime_params.numerics.nref', 1.0e20)
@@ -594,7 +620,7 @@ class torax(io):
                 else:
                     newobj._data['runtime_params.profile_conditions.Ti'] = {0.0: (data['rho'].flatten(), ti.flatten())}
             if 'polflux' in data:
-                newobj._data['runtime_params.profile_conditions.psi'] = {0.0: (data['rho'].flatten(), 2.0 * np.pi * data['polflux'].flatten())}
+                newobj._data['runtime_params.profile_conditions.psi'] = {0.0: (data['rho'].flatten(), data['polflux'].flatten())}
             # Place the sources
             external_el_heat_source = None
             external_ion_heat_source = None
