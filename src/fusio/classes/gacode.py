@@ -6,7 +6,7 @@ from fusio.classes.io import io
 logger = logging.getLogger('fusio')
 
 
-class gacode(io):
+class gacode_io(io):
 
     basevars = [
         'nexp',
@@ -128,25 +128,52 @@ class gacode(io):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        path = None
+        ipath = None
+        opath = None
         for arg in args:
-            if path is None and isinstance(arg, (str, Path)):
-                path = Path(arg)
+            if ipath is None and isinstance(arg, (str, Path)):
+                ipath = Path(arg)
+            elif opath is None and isinstance(arg, (str, Path)):
+                opath = Path(arg)
         for key, kwarg in kwargs.items():
-            if path is None and key in ['path', 'file', 'input'] and isinstance(kwarg, (str, Path)):
-                path = Path(kwarg)
-        if path is not None:
-            self._data.update(self.read(path))
+            if ipath is None and key in ['input'] and isinstance(kwarg, (str, Path)):
+                ipath = Path(kwarg)
+            if opath is None and key in ['path', 'file', 'output'] and isinstance(kwargs (str, Path)):
+                opath = Path(kwarg)
+        if ipath is not None:
+            self.load(ipath, side='input')
+        if opath is not None:
+            self.load(opath, side='output')
 
 
-    def correct_magnetic_fluxes(self, exponent=-1):
-        if 'polflux' in self._data:
-            self._data['polflux'] *= np.power(2.0 * np.pi, exponent)
-        if 'torfluxa' in self._data:
-            self._data['torfluxa'] *= np.power(2.0 * np.pi, exponent)
+    def correct_magnetic_fluxes(self, exponent=-1, side='input'):
+        if side == 'input':
+            if 'polflux' in self._input:
+                self._input['polflux'] *= np.power(2.0 * np.pi, exponent)
+            if 'torfluxa' in self._input:
+                self._input['torfluxa'] *= np.power(2.0 * np.pi, exponent)
+        else:
+            if 'polflux' in self._output:
+                self._output['polflux'] *= np.power(2.0 * np.pi, exponent)
+            if 'torfluxa' in self._output:
+                self._output['torfluxa'] *= np.power(2.0 * np.pi, exponent)
 
 
-    def read(self, path):
+    def load(self, path, side='input'):
+        if side == 'input':
+            self._input.update(self._read(path))
+        else:
+            self._output.update(self._read(path))
+
+
+    def dump(self, path, side='input'):
+        if side == 'input':
+            self._write(path, self.input)
+        else:
+            self._write(path, self.output)
+
+
+    def _read(self, path):
 
         ipath = Path(path) if isinstance(path, (str, Path)) else None
         data = {}
@@ -218,19 +245,19 @@ class gacode(io):
         return data
 
 
-    def write(self, path):
+    def _write(self, path, data):
 
         opath = Path(path) if isinstance(path, (str, Path)) else None
         processed_titles = []
 
-        if not self.empty:
-            header = self.data['header'].split('\n')
+        if bool(data):
+            header = data['header'].split('\n')
             lines = [f'{line:<70}\n' for line in header]
             lines += ['#\n']
             processed_titles.append('header')
             for title in titles_singleInt:
                 newlines = []
-                if title in self.data:
+                if title in data:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
@@ -240,7 +267,7 @@ class gacode(io):
                 lines += newlines
             for title in titles_singleStr:
                 newlines = []
-                if title in self.data:
+                if title in data:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
@@ -250,7 +277,7 @@ class gacode(io):
                 lines += newlines
             for title in titles_singleFloat:
                 newlines = []
-                if title in self.data:
+                if title in data:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
@@ -258,7 +285,7 @@ class gacode(io):
                     newlines.append(' '.join([f'{val:14.7E}' for val in profiles[title].flatten().tolist()]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
-            for title in self.data:
+            for title in data:
                 newlines = []
                 if title not in processed_titles:
                     newtitle = title
@@ -284,6 +311,13 @@ class gacode(io):
 
 
     @classmethod
-    def from_file(cls, path):
-        return cls(path=path)
+    def from_file(cls, path=None, input=None, output=None):
+        return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
+    @classmethod
+    def from_gacode(cls, obj, side='output'):
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input if side == 'input' else obj.output
+            newobj._input.update(data)
+        return newobj
