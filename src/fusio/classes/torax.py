@@ -705,13 +705,13 @@ class torax_io(io):
             #if 'qmom' in data and data['qmom'].sum() != 0.0:
             #    pass
             if external_el_heat_source is not None:
-                total_heat_source = copy.deepcopy(external_el_heat_source)
-                if external_ion_heat_source is not None:
-                    total_heat_source += external_ion_heat_source
-                el_heat_fraction = (external_el_heat_source / total_heat_source).mean()
+                #total_heat_source = copy.deepcopy(external_el_heat_source)
+                #if external_ion_heat_source is not None:
+                #    total_heat_source += external_ion_heat_source
+                #el_heat_fraction = (external_el_heat_source / total_heat_source).mean()
                 newobj._input['sources.generic_ion_el_heat_source.mode'] = 'PRESCRIBED'
-                newobj._input['sources.generic_ion_el_heat_source.prescribed_values'] = {0.0: (data['rho'].flatten(), total_heat_source)}
-                newobj._input['sources.generic_ion_el_heat_source.el_heat_fraction'] = {0.0: float(el_heat_fraction)}
+                newobj._input['sources.generic_ion_el_heat_source.prescribed_values'] = ({0.0: (data['rho'].flatten(), external_ion_heat_source)}, {0.0: (data['rho'].flatten(), external_el_heat_source)})
+                #newobj._input['sources.generic_ion_el_heat_source.el_heat_fraction'] = {0.0: float(el_heat_fraction)}
             if external_particle_source is not None:
                 newobj._input['sources.generic_particle_source.mode'] = 'PRESCRIBED'
                 newobj._input['sources.generic_particle_source.prescribed_values'] = {0.0: (data['rho'].flatten(), external_particle_source)}
