@@ -1,6 +1,7 @@
 from pathlib import Path
 import logging
 import numpy as np
+import xarray as xr
 from fusio.classes.io import io
 
 logger = logging.getLogger('fusio')
@@ -141,9 +142,10 @@ class gacode_io(io):
             if opath is None and key in ['path', 'file', 'output'] and isinstance(kwargs (str, Path)):
                 opath = Path(kwarg)
         if ipath is not None:
-            self.load(ipath, side='input')
+            self.read(ipath, side='input')
         if opath is not None:
-            self.load(opath, side='output')
+            self.read(opath, side='output')
+        self.autoformat()
 
 
     def correct_magnetic_fluxes(self, exponent=-1, side='input'):
@@ -159,24 +161,26 @@ class gacode_io(io):
                 self._output['torfluxa'] *= np.power(2.0 * np.pi, exponent)
 
 
-    def load(self, path, side='input'):
+    def read(self, path, side='input'):
         if side == 'input':
-            self._input.update(self._read(path))
+            self.input = self._read_gacode_file(path)
         else:
-            self._output.update(self._read(path))
+            self.output = self._read_gacode_file(path)
 
 
-    def dump(self, path, side='input'):
+    def write(self, path, side='input'):
         if side == 'input':
-            self._write(path, self.input)
+            self._write_gacode_file(path, self.input)
         else:
-            self._write(path, self.output)
+            self._write_gacode_file(path, self.output)
 
 
-    def _read(self, path):
+    def _read_gacode_file(self, path):
 
         ipath = Path(path) if isinstance(path, (str, Path)) else None
-        data = {}
+        coords = {}
+        data_vars = {}
+        attrs = {}
         titles_single = self.titles_singleInt + self.titles_singleStr + self.titles_singleFloat
 
         if ipath is not None and ipath.is_file():
@@ -190,7 +194,7 @@ class gacode_io(io):
             header = lines[:istartProfs]
             if header[-1].strip() == '#':
                 header = header[:-1]
-            data['header'] = '\n'.join(header)
+            attrs['header'] = '\n'.join(header)
 
             singleLine, title, var = None, None, None
             found = False
@@ -202,7 +206,7 @@ class gacode_io(io):
                     if found and not singleLine:
                         profiles[title] = np.array(var)
                         if profiles[title].shape[1] == 1:
-                            profiles[title] = profiles[title][:, 0]
+                            profiles[title] = data_vars[title][:, 0]
                     linebr = lines[i].split('#')[1].split('\n')[0].split()
                     title = linebr[0]
                     #title_orig = linebr[0]
@@ -221,11 +225,11 @@ class gacode_io(io):
                     var0 = lines[i].split()
                     if singleLine:
                         if title in self.titles_singleFloat:
-                            profiles[title] = np.array(var0, dtype=float)
+                            attrs[title] = np.array(var0, dtype=float)
                         elif title in self.titles_singleInt:
-                            profiles[title] = np.array(var0, dtype=int)
+                            attrs[title] = np.array(var0, dtype=int)
                         else:
-                            profiles[title] = np.array(var0, dtype=str)
+                            attrs[title] = np.array(var0, dtype=str)
                     else:
                         varT = [
                             float(j) if (j[-4].upper() == "E" or "." in j) else 0.0
@@ -239,13 +243,21 @@ class gacode_io(io):
                     var = var[:-1]  # Sometimes there's an extra space, remove
                 profiles[title] = np.array(var)
                 if profiles[title].shape[1] == 1:
-                    profiles[title] = profiles[title][:, 0]
-            data.update(profiles)
+                    profiles[title] = data_vars[title][:, 0]
 
-        return data
+            base_coord = 'rho' if 'rho' in profiles else 'polflux'
+            if base_coord in profiles:
+                coords[base_coord] = profiles.pop(base_coord)
+            for key, val in profiles.items():
+                if key in ['rho', 'polflux', 'rmin']:
+                    coords[key] = ([base_coord], profiles[key])
+                else:
+                    data_vars[key] = ([base_coord], profiles[key])
+
+        return xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
 
 
-    def _write(self, path, data):
+    def _write_gacode_file(self, path, data):
 
         opath = Path(path) if isinstance(path, (str, Path)) else None
         processed_titles = []
@@ -262,7 +274,7 @@ class gacode_io(io):
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(f'{profiles[title]:d}\n')
+                    newlines.append(f'{data[title]:d}\n')
                     processed_titles.append(title)
                 lines += newlines
             for title in titles_singleStr:
@@ -272,7 +284,7 @@ class gacode_io(io):
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(' '.join([f'{val}' for val in profiles[title].flatten().tolist()]) + '\n')
+                    newlines.append(' '.join([f'{val}' for val in data[title].flatten().tolist()]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
             for title in titles_singleFloat:
@@ -282,7 +294,7 @@ class gacode_io(io):
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(' '.join([f'{val:14.7E}' for val in profiles[title].flatten().tolist()]) + '\n')
+                    newlines.append(' '.join([f'{val:14.7E}' for val in data[title].flatten().tolist()]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
             for title in data:
@@ -296,9 +308,9 @@ class gacode_io(io):
                     newlines.append(f'# {newtitle}\n')
                     if profiles[title].ndim > 1:
                         for ii in range(profiles[title].shape[0]):
-                            newlines.append(' '.join([f'{ii:3d}'] + [f'{val:14.7E}' for val in profiles[title][ii].flatten().tolist()]) + '\n')
+                            newlines.append(' '.join([f'{ii:3d}'] + [f'{val:14.7E}' for val in data[title][ii].flatten().tolist()]) + '\n')
                     else:
-                        newlines.extend([f'{ii:3d} {val:14.7E}\n' for ii, val in enumerate(profiles[title].flatten().tolist())])
+                        newlines.extend([f'{ii:3d} {val:14.7E}\n' for ii, val in enumerate(data[title].flatten().tolist())])
                     processed_titles.append(title)
                 lines += newlines
 
@@ -314,10 +326,11 @@ class gacode_io(io):
     def from_file(cls, path=None, input=None, output=None):
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
+
+    # Assumed that the self creation method transfers output to input
     @classmethod
     def from_gacode(cls, obj, side='output'):
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input if side == 'input' else obj.output
-            newobj._input.update(data)
+            newobj.input = obj.input if side == 'input' else obj.output
         return newobj
