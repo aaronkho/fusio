@@ -15,35 +15,37 @@ class io():
     ]
 
     def __init__(self, *args, **kwargs):
-        self._tree = xr.DataTree(name='root', data=xr.Dataset(attrs={'class': f'{self.__class__.__name__}'}))
-        self._input = xr.DataTree(name='input', parent=self._tree)
-        self._output = xr.DataTree(name='output', parent=self._tree)
+        self._tree = xr.DataTree(
+            name='root',
+            children={'input': xr.DataTree(name='input'), 'output': xr.DataTree(name='output')},
+            dataset=xr.Dataset(attrs={'class': f'{self.__class__.__name__}'})
+        )
 
     @property
     def has_input(self):
-        return (not self._input.is_empty)
+        return (not self._tree['input'].is_empty)
 
     @property
     def has_output(self):
-        return (not self._output.is_empty)
+        return (not self._tree['output'].is_empty)
 
     @property
     def input(self):
-        return self._input.copy(deep=True)
+        return self._tree['input'].copy(deep=True)
 
-    @property.setter
+    @input.setter
     def input(self, data):
         if isinstance(data, xr.Dataset):
-            self._input = xr.DataTree(name='input', parent=self._tree, data=data.copy(deep=True))
+            self._tree['input'] = xr.DataTree(name='input', dataset=data.copy(deep=True))
 
     @property
     def output(self):
-        return self._output.copy(deep=True)
+        return self._tree['output'].copy(deep=True)
 
-    @property.setter
+    @output.setter
     def output(self):
         if isinstance(data, xr.Dataset):
-            self._output = xr.DataTree(name='output', parent=self._tree, data=data.copy(deep=True))
+            self._tree['output'] = xr.DataTree(name='output', dataset=data.copy(deep=True))
 
     @property
     def format(self):
@@ -54,7 +56,7 @@ class io():
 
     @property
     def is_empty(self):
-        return (self._input.is_empty and self._output.is_empty)
+        return (self._tree['input'].is_empty and self._tree['output'].is_empty)
 
     # These functions always assume data is placed on input side of target format
 
@@ -87,9 +89,9 @@ class io():
             if overwrite or not dump_path.exists():
                 self._tree.to_netcdf(dump_path)
             else:
-                logger.warning('Requested dump path, {dump_path.resolve()}, already exists! Aborting dump...')
+                logger.warning(f'Requested dump path, {dump_path.resolve()}, already exists! Aborting dump...')
         else:
-            logger.warning('Invalid path argument given to dump function! Aborting dump...')
+            logger.warning(f'Invalid path argument given to dump function! Aborting dump...')
 
     @classmethod
     def load(cls, path):
