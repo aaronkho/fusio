@@ -195,10 +195,11 @@ class gacode_io(io):
             header = lines[:istartProfs]
             if header[-1].strip() == '#':
                 header = header[:-1]
-            attrs['header'] = '\n'.join(header)
+            attrs['header'] = ''.join(header)
 
             singleLine, title, var = None, None, None
             found = False
+            singles = {}
             profiles = {}
             for i in range(len(lines)):
 
@@ -226,11 +227,11 @@ class gacode_io(io):
                     var0 = lines[i].split()
                     if singleLine:
                         if title in self.titles_singleFloat:
-                            attrs[title] = np.array(var0, dtype=float)
+                            singles[title] = np.array(var0, dtype=float)
                         elif title in self.titles_singleInt:
-                            attrs[title] = np.array(var0, dtype=int)
+                            singles[title] = np.array(var0, dtype=int)
                         else:
-                            attrs[title] = np.array(var0, dtype=str)
+                            singles[title] = np.array(var0, dtype=str)
                     else:
                         varT = [
                             float(j) if (j[-4].upper() == "E" or "." in j) else 0.0
@@ -246,22 +247,30 @@ class gacode_io(io):
                 if profiles[title].shape[1] == 1:
                     profiles[title] = profiles[title][:, 0]
 
+            ncoord = 'n'
             rcoord = 'rho' if 'rho' in profiles else 'polflux'
-            scoord = 'name' if 'name' in attrs else 'z'
+            scoord = 'name' if 'name' in singles else 'z'
+            coords[ncoord] = [0]
             if rcoord in profiles:
                 coords[rcoord] = profiles.pop(rcoord)
-            if scoord in attrs:
-                coords[scoord] = attrs.pop(scoord)
+            if scoord in singles:
+                coords[scoord] = singles.pop(scoord)
             for key, val in profiles.items():
                 if key in ['rho', 'polflux', 'rmin']:
-                    coords[key] = ([rcoord], val)
+                    coords[key] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
                 elif key in ['ni', 'ti']:
-                    data_vars[key] = ([rcoord, scoord], val)
+                    data_vars[key] = ([ncoord, rcoord, scoord], np.expand_dims(val, axis=0))
+                elif key in ['w0']:
+                    data_vars['omega0'] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
                 else:
-                    data_vars[key] = ([rcoord], val)
-            for key in ['name', 'z', 'mass', 'type']:
-                if key in attrs:
-                    coords[key] = ([scoord], attrs.pop(key))
+                    data_vars[key] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
+            for key, val in singles.items():
+                if key in ['name', 'z', 'mass', 'type']:
+                    coords[key] = ([ncoord, scoord], np.expand_dims(val, axis=0))
+                elif key in ['header']:
+                    attrs[key] = val
+                else:
+                    data_vars[key] = ([ncoord], val)
 
         return xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
 
@@ -269,14 +278,16 @@ class gacode_io(io):
     def _write_gacode_file(self, path, data, overwrite=False):
 
         opath = Path(path) if isinstance(path, (str, Path)) else None
-        processed_titles = []
+        if isinstance(data, xr.DataTree):
+            data = data.to_dataset().sel(n=0, drop=True) if not data.is_empty else None
 
-        if isinstance(data, (xr.Dataset, xr.DataTree)) and not data.is_empty:
-            header = data['header'].split('\n')
+        if isinstance(data, xr.Dataset):
+            processed_titles = []
+            header = data.attrs.get('header', '').split('\n')
             lines = [f'{line:<70}\n' for line in header]
             lines += ['#\n']
             processed_titles.append('header')
-            for title in titles_singleInt:
+            for title in self.titles_singleInt:
                 newlines = []
                 if title in data:
                     newtitle = title
@@ -286,27 +297,27 @@ class gacode_io(io):
                     newlines.append(f'{data[title]:d}\n')
                     processed_titles.append(title)
                 lines += newlines
-            for title in titles_singleStr:
+            for title in self.titles_singleStr:
                 newlines = []
                 if title in data:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(' '.join([f'{val}' for val in data[title].flatten().tolist()]) + '\n')
+                    newlines.append(' '.join([f'{val}' for val in data[title].to_numpy().flatten().tolist()]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
-            for title in titles_singleFloat:
+            for title in self.titles_singleFloat:
                 newlines = []
                 if title in data:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(' '.join([f'{val:14.7E}' for val in data[title].flatten().tolist()]) + '\n')
+                    newlines.append(' '.join([f'{val:14.7E}' for val in data[title].to_numpy().flatten().tolist()]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
-            for title in data:
+            for title in list(data.coords) + list(data.data_vars):
                 newlines = []
                 if title not in processed_titles:
                     newtitle = title
@@ -315,17 +326,15 @@ class gacode_io(io):
                     else:
                         newtitle += f' | -'
                     newlines.append(f'# {newtitle}\n')
-                    if profiles[title].ndim > 1:
-                        for ii in range(profiles[title].shape[0]):
-                            newlines.append(' '.join([f'{ii:3d}'] + [f'{val:14.7E}' for val in data[title][ii].flatten().tolist()]) + '\n')
-                    else:
-                        newlines.extend([f'{ii:3d} {val:14.7E}\n' for ii, val in enumerate(data[title].flatten().tolist())])
+                    rcoord = [f'{dim}' for dim in data[title].dims if dim in ['rho', 'polflux', 'rmin']]
+                    for ii in range(len(data[rcoord[0]])):
+                        newlines.append(' '.join([f'{ii+1:3d}'] + [f'{val:14.7E}' for val in data[title].isel(**{f'{rcoord[0]}': ii}).to_numpy().flatten().tolist()]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
 
             with open(opath, 'w') as f:
                 f.writelines(lines)
-            logger.info(f'Saved {self.format} data into {path.resolve()}')
+            logger.info(f'Saved {self.format} data into {opath.resolve()}')
 
         else:
             logger.error(f'Attempting to write empty {self.format} class instance... Failed!')
