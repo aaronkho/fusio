@@ -139,7 +139,7 @@ class gacode_io(io):
         for key, kwarg in kwargs.items():
             if ipath is None and key in ['input'] and isinstance(kwarg, (str, Path)):
                 ipath = Path(kwarg)
-            if opath is None and key in ['path', 'file', 'output'] and isinstance(kwargs (str, Path)):
+            if opath is None and key in ['path', 'file', 'output'] and isinstance(kwarg, (str, Path)):
                 opath = Path(kwarg)
         if ipath is not None:
             self.read(ipath, side='input')
@@ -151,14 +151,14 @@ class gacode_io(io):
     def correct_magnetic_fluxes(self, exponent=-1, side='input'):
         if side == 'input':
             if 'polflux' in self._input:
-                self._input['polflux'] *= np.power(2.0 * np.pi, exponent)
+                self._tree['input']['polflux'] *= np.power(2.0 * np.pi, exponent)
             if 'torfluxa' in self._input:
-                self._input['torfluxa'] *= np.power(2.0 * np.pi, exponent)
+                self._tree['input']['torfluxa'] *= np.power(2.0 * np.pi, exponent)
         else:
             if 'polflux' in self._output:
-                self._output['polflux'] *= np.power(2.0 * np.pi, exponent)
+                self._tree['output']['polflux'] *= np.power(2.0 * np.pi, exponent)
             if 'torfluxa' in self._output:
-                self._output['torfluxa'] *= np.power(2.0 * np.pi, exponent)
+                self._tree['output']['torfluxa'] *= np.power(2.0 * np.pi, exponent)
 
 
     def read(self, path, side='input'):
@@ -168,11 +168,11 @@ class gacode_io(io):
             self.output = self._read_gacode_file(path)
 
 
-    def write(self, path, side='input'):
+    def write(self, path, side='input', overwrite=False):
         if side == 'input':
-            self._write_gacode_file(path, self.input)
+            self._write_gacode_file(path, self.input, overwrite=overwrite)
         else:
-            self._write_gacode_file(path, self.output)
+            self._write_gacode_file(path, self.output, overwrite=overwrite)
 
 
     def _read_gacode_file(self, path):
@@ -206,7 +206,7 @@ class gacode_io(io):
                     if found and not singleLine:
                         profiles[title] = np.array(var)
                         if profiles[title].shape[1] == 1:
-                            profiles[title] = data_vars[title][:, 0]
+                            profiles[title] = profiles[title][:, 0]
                     linebr = lines[i].split('#')[1].split('\n')[0].split()
                     title = linebr[0]
                     #title_orig = linebr[0]
@@ -243,7 +243,7 @@ class gacode_io(io):
                     var = var[:-1]  # Sometimes there's an extra space, remove
                 profiles[title] = np.array(var)
                 if profiles[title].shape[1] == 1:
-                    profiles[title] = data_vars[title][:, 0]
+                    profiles[title] = profiles[title][:, 0]
 
             base_coord = 'rho' if 'rho' in profiles else 'polflux'
             if base_coord in profiles:
@@ -257,12 +257,12 @@ class gacode_io(io):
         return xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
 
 
-    def _write_gacode_file(self, path, data):
+    def _write_gacode_file(self, path, data, overwrite=False):
 
         opath = Path(path) if isinstance(path, (str, Path)) else None
         processed_titles = []
 
-        if bool(data):
+        if isinstance(data, (xr.Dataset, xr.DataTree)) and not data.is_empty:
             header = data['header'].split('\n')
             lines = [f'{line:<70}\n' for line in header]
             lines += ['#\n']
