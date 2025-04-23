@@ -127,6 +127,7 @@ class gacode_io(io):
         'qmom': 'N/m^2',
     }
 
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         ipath = None
@@ -245,14 +246,22 @@ class gacode_io(io):
                 if profiles[title].shape[1] == 1:
                     profiles[title] = profiles[title][:, 0]
 
-            base_coord = 'rho' if 'rho' in profiles else 'polflux'
-            if base_coord in profiles:
-                coords[base_coord] = profiles.pop(base_coord)
+            rcoord = 'rho' if 'rho' in profiles else 'polflux'
+            scoord = 'name' if 'name' in attrs else 'z'
+            if rcoord in profiles:
+                coords[rcoord] = profiles.pop(rcoord)
+            if scoord in attrs:
+                coords[scoord] = attrs.pop(scoord)
             for key, val in profiles.items():
                 if key in ['rho', 'polflux', 'rmin']:
-                    coords[key] = ([base_coord], profiles[key])
+                    coords[key] = ([rcoord], val)
+                elif key in ['ni', 'ti']:
+                    data_vars[key] = ([rcoord, scoord], val)
                 else:
-                    data_vars[key] = ([base_coord], profiles[key])
+                    data_vars[key] = ([rcoord], val)
+            for key in ['name', 'z', 'mass', 'type']:
+                if key in attrs:
+                    coords[key] = ([scoord], attrs.pop(key))
 
         return xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
 

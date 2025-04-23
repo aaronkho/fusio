@@ -43,7 +43,7 @@ class io():
         return self._tree['output'].copy(deep=True)
 
     @output.setter
-    def output(self):
+    def output(self, data):
         if isinstance(data, xr.Dataset):
             self._tree['output'] = xr.DataTree(name='output', dataset=data.copy(deep=True))
 
