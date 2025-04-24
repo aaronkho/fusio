@@ -1,3 +1,4 @@
+import copy
 import logging
 import importlib
 from pathlib import Path
@@ -57,6 +58,14 @@ class io():
     @property
     def is_empty(self):
         return (self._tree['input'].is_empty and self._tree['output'].is_empty)
+
+    def update_input_attrs(self, data):
+        if isinstance(data, dict):
+            self._tree['input'].attrs.update(data)
+
+    def delete_input_attrs(self, data):
+        for key in data:
+            self._tree['input'].attrs.pop(key, None)
 
     # These functions always assume data is placed on input side of target format
 
