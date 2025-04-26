@@ -101,5 +101,5 @@ def define_ion_species(z=None, a=None, short_name=None, long_name=None, user_mas
             if sa == int(np.rint(val[0])) and sz == int(np.rint(val[1])):
                 sname = key
 
-    return (sname, sa, sz)
+    return sname, sa, sz
 
