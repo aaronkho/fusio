@@ -4,8 +4,8 @@ from pathlib import Path
 import logging
 import numpy as np
 import xarray as xr
-from fusio.classes.io import io
-from fusio.utils.json_tools import serialize, deserialize
+from .io import io
+from ..utils.json_tools import serialize, deserialize
 
 logger = logging.getLogger('fusio')
 
@@ -371,12 +371,15 @@ class torax_io(io):
         return odict
 
 
-    def read(self, path, side='input'):
-        logger.warning(f'{self.format} reading function not defined yet...')
+    def read(self, path, side='output'):
+        if side == 'input':
+            self.input = self._read_torax_file(path)
+        else:
+            self.output = self._read_torax_file(path)
+        #logger.warning(f'{self.format} reading function not defined yet...')
 
 
     def write(self, path, side='input', overwrite=False):
-        opath = Path(path) if isinstance(path, (str, Path)) else None
         if side == 'input':
             self._write_torax_file(path, self.input, overwrite=overwrite)
         else:
@@ -388,6 +391,16 @@ class torax_io(io):
         #    logger.info(f'Saved {self.format} data into {opath.resolve()}')
         #else:
         #    logger.error(f'Attempting to write empty {self.format} class instance... Failed!')
+
+
+    def _read_torax_file(self, path):
+        ds = xr.Dataset()
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)
+            if ipath.exists():
+                dt = xr.open_datatree(ipath)
+                ds = xr.combine_by_coords([dt[key].to_dataset() for key in dt.groups], compat="override")
+        return ds
 
 
     def _write_torax_file(self, path, data, overwrite=False):
@@ -687,8 +700,8 @@ class torax_io(io):
 
 
     @classmethod
-    def from_file(cls, obj, side='output'):
-        raise NotImplementedError(f'{self.__class__.__name__}.from_file() not yet implemented since there is not standard TORAX config file format.')
+    def from_file(cls, path=None, input=None, output=None):
+        return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
     @classmethod
@@ -696,7 +709,7 @@ class torax_io(io):
         newobj = cls()
         if isinstance(obj, io):
             data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
-            if 'n' in data.coords and  'rho' in data.coords:
+            if 'n' in data.coords and 'rho' in data.coords:
                 coords = {}
                 data_vars = {}
                 attrs = {}
