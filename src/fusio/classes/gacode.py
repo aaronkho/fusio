@@ -2,7 +2,8 @@ from pathlib import Path
 import logging
 import numpy as np
 import xarray as xr
-from fusio.classes.io import io
+from .io import io
+from ..utils.plasma_tools import define_ion_species
 
 logger = logging.getLogger('fusio')
 
@@ -162,7 +163,7 @@ class gacode_io(io):
                 self._tree['output']['torfluxa'] *= np.power(2.0 * np.pi, exponent)
 
 
-    def read(self, path, side='input'):
+    def read(self, path, side='output'):
         if side == 'input':
             self.input = self._read_gacode_file(path)
         else:
@@ -178,16 +179,18 @@ class gacode_io(io):
 
     def _read_gacode_file(self, path):
 
-        ipath = Path(path) if isinstance(path, (str, Path)) else None
         coords = {}
         data_vars = {}
         attrs = {}
-        titles_single = self.titles_singleInt + self.titles_singleStr + self.titles_singleFloat
 
-        if ipath is not None and ipath.is_file():
-            with open(ipath, 'r') as f:
-                lines = f.readlines()
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)
+            if ipath.is_file():
+                titles_single = self.titles_singleInt + self.titles_singleStr + self.titles_singleFloat
+                with open(ipath, 'r') as f:
+                    lines = f.readlines()
 
+            istartProfs = None
             for i in range(len(lines)):
                 if "# nexp" in lines[i]:
                     istartProfs = i
@@ -277,11 +280,11 @@ class gacode_io(io):
 
     def _write_gacode_file(self, path, data, overwrite=False):
 
-        opath = Path(path) if isinstance(path, (str, Path)) else None
         if isinstance(data, xr.DataTree):
             data = data.to_dataset().sel(n=0, drop=True) if not data.is_empty else None
 
-        if isinstance(data, xr.Dataset):
+        if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
+            opath = Path(path)
             processed_titles = []
             header = data.attrs.get('header', '').split('\n')
             lines = [f'{line:<70}\n' for line in header]
@@ -352,3 +355,120 @@ class gacode_io(io):
         if isinstance(obj, io):
             newobj.input = obj.input if side == 'input' else obj.output
         return newobj
+
+    @classmethod
+    def from_torax(cls, obj, side='output', window=None):
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            if 'rho_cell' in data.coords:
+                data = data.isel(time=-1)
+                zeros = np.zeros_like(data.coords['rho_cell'].to_numpy().flatten())
+                coords = {}
+                data_vars = {}
+                attrs = {}
+                name = []
+                coords['n'] = [0]
+                if 'rho_cell_norm' in data.coords:
+                    coords['rho'] = data.coords['rho_cell_norm'].to_numpy().flatten()
+                    data_vars['nexp'] = (['n'], [len(coords['rho'])])
+                if 'psi' in data:
+                    coords['polflux'] = (['n', 'rho'], np.expand_dims(data['psi'].to_numpy().flatten(), axis=0))
+                if 'rmid' in data:
+                    coords['rmin'] = (['n', 'rho'], np.expand_dims(data['rmid'].to_numpy().flatten(), axis=0))
+                data_vars['shot'] = (['n'], [0])
+                data_vars['masse'] = (['n'], [5.4488748e-04])
+                data_vars['ze'] = (['n'], [-1.0])
+                if 'Phib' in data:
+                    data_vars['torfluxa'] = (['n'], data['Phib'].to_numpy().flatten())
+                'rcentr'
+                if 'B0' in data:
+                    data_vars['bcentr'] = (['n'], data['B0'].to_numpy().flatten())
+                if 'Ip_total' in data:
+                    data_vars['current'] = (['n'], data['Ip_total'].to_numpy().flatten())
+                if 'q_face' in data:
+                    q = data['q'].to_numpy().flatten()
+                    data_vars['q'] = (['n', 'rho'], np.expand_dims(q[0:] + 0.5 * np.diff(q), axis=0))
+                if 'Rmaj' in data:
+                    data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(np.ones_like(zeros) * data['Rmaj'].to_numpy().flatten(), axis=0))
+                if '_z_magnetic_axis' in data:
+                    data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.ones_like(zeros) * data['_z_magnetic_axis'].to_numpy().flatten(), axis=0))
+                if 'elongation' in data:
+                    data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data['elongation'].to_numpy().flatten(), axis=0))
+                if 'delta_face' in data:
+                    delta = data['delta_face'].to_numpy().flatten()
+                    data_vars['delta'] = (['n', 'rho'], np.expand_dims(delta[0:] + 0.5 * np.diff(delta), axis=0))
+                data['zeta'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                #'shape_cos'
+                #'shape_sin'
+                if 'ni' in data:
+                    nref = data.get('nref', 1.0e20)
+                    ni = np.expand_dims(1.0e19 * data['ni'].to_numpy().flatten() / nref, axis=-1)
+                    if 'nimp' in data:
+                        nimp = np.expand_dims(1.0e19 * data['nimp'].to_numpy().flatten() / nref, axis=-1)
+                        if 'Zimp' in data and 'ne' in data:
+                            ne = np.expand_dims(1.0e19 * data['ne'].to_numpy().flatten() / nref, axis=-1)
+                            zimp = np.expand_dims(data['Zimp'].to_numpy().flatten(), axis=-1)
+                            zeff = (ni + nimp * zimp * zimp) / ne
+                            data_vars['z_eff'] = (['n', 'rho'], np.expand_dims(zeff.flatten(), axis=0))
+                        ni = np.concatenate([ni, nimp], axis=-1)
+                    'name',
+                    'type',
+                    'mass',
+                    'z',
+                    data_vars['ni'] = (['n', 'rho', 'name'], np.expand_dims(ni, axis=0))
+                    data_vars['nion'] = (['n'], [data_vars['ni'].shape[-1]])
+                if 'temp_ion' in data:
+                    data_vars['ti'] = (['n', 'rho'], np.expand_dims(data['ti'].to_numpy().flatten(), axis=0))
+                if 'ne' in data:
+                    nref = data.get('nref', 1.0e20)
+                    data_vars['ne'] = (['n', 'rho'], np.expand_dims(1.0e19 * data['ne'].to_numpy().flatten() / nref, axis=0))
+                if 'temp_el' in data:
+                    data_vars['te'] = (['n', 'rho'], np.expand_dims(data['te'].to_numpy().flatten(), axis=0))
+                if 'ohmic_heat_source_el' in data:
+                    data_vars['qohme'] = (['n', 'rho'], np.expand_dims(data['ohmic_heat_source_el'].to_numpy().flatten(), axis=0))
+                if 'generic_ion_el_heat_source_el' in data:
+                    data_vars['qrfe'] = (['n', 'rho'], np.expand_dims(data['generic_ion_el_heat_source_el'].to_numpy().flatten(), axis=0))
+                    #data_vars['qbeame'] = (['n', 'rho'], np.expand_dims(data['generic_ion_el_heat_source_el'].to_numpy().flatten(), axis=0))
+                if 'generic_ion_el_heat_source_ion' in data:
+                    data_vars['qrfi'] = (['n', 'rho'], np.expand_dims(data['generic_ion_el_heat_source_ion'].to_numpy().flatten(), axis=0))
+                    #data_vars['qbeami'] = (['n', 'rho'], np.expand_dims(data['generic_ion_el_heat_source_ion'].to_numpy().flatten(), axis=0))
+                if 'cyclotron_radiation_heat_sink_el' in data:
+                    data_vars['qsync'] = (['n', 'rho'], np.expand_dims(data['cyclotron_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
+                if 'bremsstrahlung_heat_sink_el' in data:
+                    data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(data['bremsstrahlung_heat_sink_el'].to_numpy().flatten(), axis=0))
+                if 'impurity_radiation_heat_sink_el' in data:
+                    data_vars['qline'] = (['n', 'rho'], np.expand_dims(data['impurity_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
+                if 'fusion_heat_source_el' in data:
+                    data_vars['qfuse'] = (['n', 'rho'], np.expand_dims(data['fusion_heat_source_el'].to_numpy().flatten(), axis=0))
+                if 'fusion_heat_source_ion' in data:
+                    data_vars['qfusi'] = (['n', 'rho'], np.expand_dims(data['fusion_heat_source_ion'].to_numpy().flatten(), axis=0))
+                if 'qei_source' in data:
+                    data_vars['qei'] = (['n', 'rho'], np.expand_dims(data['qei_source'].to_numpy().flatten(), axis=0))
+                #'qione'
+                #'qioni'
+                #'qcxi'
+                if 'johm' in data:
+                    data_vars['johm'] = (['n', 'rho'], np.expand_dims(data['johm'].to_numpy().flatten(), axis=0))
+                if 'j_bootstrap' in data:
+                    data_vars['jbs'] = (['n', 'rho'], np.expand_dims(data['j_bootstrap'].to_numpy().flatten(), axis=0))
+                    #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(data['j_bootstrap'].to_numpy().flatten(), axis=0))
+                if 'external_current_source' in data:
+                    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(data['external_current_source'].to_numpy().flatten(), axis=0))
+                    #data_vars['jnb'] = (['n', 'rho'], np.expand_dims(data['external_current_source'].to_numpy().flatten(), axis=0))
+                #if 'generic_current_source_j' in data:
+                #    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(data['generic_current_source_j'].to_numpy().flatten(), axis=0))
+                #    data_vars['jnb'] = (['n', 'rho'], np.expand_dims(data['generic_current_source_j'].to_numpy().flatten(), axis=0))
+                #'vtor'
+                #'vpol'
+                #'omega0'
+                if 'pressure_thermal_tot_face' in data:
+                    ptot = data['pressure_thermal_tot_face'].to_numpy().flatten()
+                    data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ptot[0:] + 0.5 * np.diff(ptot), axis=0))
+                if 'gas_puff_source_el' in data:
+                    data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(data['gas_puff_source_el'].to_numpy().flatten(), axis=0))
+                if 'generic_particle_source_el' in data:
+                    data_vars['qpar_beam'] = (['n', 'rho'], np.expand_dims(data['generic_particle_source_el'].to_numpy().flatten(), axis=0))
+                #'qmom'
+                newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+       # return newobj
