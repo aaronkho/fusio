@@ -356,6 +356,7 @@ class gacode_io(io):
             newobj.input = obj.input if side == 'input' else obj.output
         return newobj
 
+
     @classmethod
     def from_torax(cls, obj, side='output', window=None):
         newobj = cls()
@@ -387,8 +388,8 @@ class gacode_io(io):
                 if 'Ip_total' in data:
                     data_vars['current'] = (['n'], data['Ip_total'].to_numpy().flatten())
                 if 'q_face' in data:
-                    q = data['q'].to_numpy().flatten()
-                    data_vars['q'] = (['n', 'rho'], np.expand_dims(q[0:] + 0.5 * np.diff(q), axis=0))
+                    q = data['q_face'].to_numpy().flatten()
+                    data_vars['q'] = (['n', 'rho'], np.expand_dims(q[:-1] + 0.5 * np.diff(q), axis=0))
                 if 'Rmaj' in data:
                     data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(np.ones_like(zeros) * data['Rmaj'].to_numpy().flatten(), axis=0))
                 if '_z_magnetic_axis' in data:
@@ -397,78 +398,107 @@ class gacode_io(io):
                     data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data['elongation'].to_numpy().flatten(), axis=0))
                 if 'delta_face' in data:
                     delta = data['delta_face'].to_numpy().flatten()
-                    data_vars['delta'] = (['n', 'rho'], np.expand_dims(delta[0:] + 0.5 * np.diff(delta), axis=0))
+                    data_vars['delta'] = (['n', 'rho'], np.expand_dims(delta[:-1] + 0.5 * np.diff(delta), axis=0))
                 data['zeta'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                #'shape_cos'
-                #'shape_sin'
+                data['shape_cos0'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_cos1'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_cos2'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_cos3'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_cos4'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_cos5'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_cos6'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_sin3'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_sin4'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_sin5'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                data['shape_sin6'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
                 if 'ni' in data:
-                    nref = data.get('nref', 1.0e20)
-                    ni = np.expand_dims(1.0e19 * data['ni'].to_numpy().flatten() / nref, axis=-1)
+                    split_dt = True
+                    nref = data['nref'].to_numpy().flatten() if 'nref' in data else np.array([1.0e20])
+                    ni = np.expand_dims(1.0e-19 * data['ni'].to_numpy().flatten() * nref, axis=-1)
+                    zimps = None
                     if 'nimp' in data:
-                        nimp = np.expand_dims(1.0e19 * data['nimp'].to_numpy().flatten() / nref, axis=-1)
+                        nimp = np.expand_dims(1.0e-19 * data['nimp'].to_numpy().flatten() * nref, axis=-1)
                         if 'Zimp' in data and 'ne' in data:
-                            ne = np.expand_dims(1.0e19 * data['ne'].to_numpy().flatten() / nref, axis=-1)
+                            ne = np.expand_dims(1.0e-19 * data['ne'].to_numpy().flatten() * nref, axis=-1)
                             zimp = np.expand_dims(data['Zimp'].to_numpy().flatten(), axis=-1)
+                            zimps = zimp[0, 0]
                             zeff = (ni + nimp * zimp * zimp) / ne
                             data_vars['z_eff'] = (['n', 'rho'], np.expand_dims(zeff.flatten(), axis=0))
+                        if split_dt:
+                            ni = np.concatenate([0.5 * ni, 0.5 * ni], axis=-1)
                         ni = np.concatenate([ni, nimp], axis=-1)
-                    'name',
-                    'type',
-                    'mass',
-                    'z',
+                    names = ['D']
+                    types = ['[therm]']
+                    masses = [2.0]
+                    zs = [1.0]
+                    if split_dt:
+                        names.append('T')
+                        types.append('[therm]')
+                        masses.append(3.0)
+                        zs.append(1.0)
+                    if zimps is not None:
+                        impname, impa, impz = define_ion_species(z=zimps)
+                        names.append(impname)
+                        types.append('[therm]')
+                        masses.append(impa)
+                        zs.append(impz)
+                    coords['name'] = names
                     data_vars['ni'] = (['n', 'rho', 'name'], np.expand_dims(ni, axis=0))
-                    data_vars['nion'] = (['n'], [data_vars['ni'].shape[-1]])
+                    data_vars['nion'] = (['n'], [len(names)])
+                    data_vars['type'] = (['n', 'name'], np.expand_dims(types, axis=0))
+                    data_vars['mass'] = (['n', 'name'], np.expand_dims(masses, axis=0))
+                    data_vars['z'] = (['n', 'name'], np.expand_dims(zs, axis=0))
                 if 'temp_ion' in data:
-                    data_vars['ti'] = (['n', 'rho'], np.expand_dims(data['ti'].to_numpy().flatten(), axis=0))
+                    data_vars['ti'] = (['n', 'rho'], np.expand_dims(data['temp_ion'].to_numpy().flatten(), axis=0))
                 if 'ne' in data:
-                    nref = data.get('nref', 1.0e20)
-                    data_vars['ne'] = (['n', 'rho'], np.expand_dims(1.0e19 * data['ne'].to_numpy().flatten() / nref, axis=0))
+                    nref = data['nref'].to_numpy().flatten() if 'nref' in data else np.array([1.0e20])
+                    data_vars['ne'] = (['n', 'rho'], np.expand_dims(1.0e-19 * data['ne'].to_numpy().flatten() * nref, axis=0))
                 if 'temp_el' in data:
-                    data_vars['te'] = (['n', 'rho'], np.expand_dims(data['te'].to_numpy().flatten(), axis=0))
+                    data_vars['te'] = (['n', 'rho'], np.expand_dims(data['temp_el'].to_numpy().flatten(), axis=0))
                 if 'ohmic_heat_source_el' in data:
-                    data_vars['qohme'] = (['n', 'rho'], np.expand_dims(data['ohmic_heat_source_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qohme'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['ohmic_heat_source_el'].to_numpy().flatten(), axis=0))
                 if 'generic_ion_el_heat_source_el' in data:
-                    data_vars['qrfe'] = (['n', 'rho'], np.expand_dims(data['generic_ion_el_heat_source_el'].to_numpy().flatten(), axis=0))
-                    #data_vars['qbeame'] = (['n', 'rho'], np.expand_dims(data['generic_ion_el_heat_source_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qrfe'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['generic_ion_el_heat_source_el'].to_numpy().flatten(), axis=0))
+                    #data_vars['qbeame'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['generic_ion_el_heat_source_el'].to_numpy().flatten(), axis=0))
                 if 'generic_ion_el_heat_source_ion' in data:
-                    data_vars['qrfi'] = (['n', 'rho'], np.expand_dims(data['generic_ion_el_heat_source_ion'].to_numpy().flatten(), axis=0))
-                    #data_vars['qbeami'] = (['n', 'rho'], np.expand_dims(data['generic_ion_el_heat_source_ion'].to_numpy().flatten(), axis=0))
+                    data_vars['qrfi'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['generic_ion_el_heat_source_ion'].to_numpy().flatten(), axis=0))
+                    #data_vars['qbeami'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['generic_ion_el_heat_source_ion'].to_numpy().flatten(), axis=0))
                 if 'cyclotron_radiation_heat_sink_el' in data:
-                    data_vars['qsync'] = (['n', 'rho'], np.expand_dims(data['cyclotron_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qsync'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['cyclotron_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
                 if 'bremsstrahlung_heat_sink_el' in data:
-                    data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(data['bremsstrahlung_heat_sink_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['bremsstrahlung_heat_sink_el'].to_numpy().flatten(), axis=0))
                 if 'impurity_radiation_heat_sink_el' in data:
-                    data_vars['qline'] = (['n', 'rho'], np.expand_dims(data['impurity_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qline'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['impurity_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
                 if 'fusion_heat_source_el' in data:
-                    data_vars['qfuse'] = (['n', 'rho'], np.expand_dims(data['fusion_heat_source_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qfuse'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['fusion_heat_source_el'].to_numpy().flatten(), axis=0))
                 if 'fusion_heat_source_ion' in data:
-                    data_vars['qfusi'] = (['n', 'rho'], np.expand_dims(data['fusion_heat_source_ion'].to_numpy().flatten(), axis=0))
+                    data_vars['qfusi'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['fusion_heat_source_ion'].to_numpy().flatten(), axis=0))
                 if 'qei_source' in data:
-                    data_vars['qei'] = (['n', 'rho'], np.expand_dims(data['qei_source'].to_numpy().flatten(), axis=0))
-                #'qione'
-                #'qioni'
-                #'qcxi'
+                    data_vars['qei'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['qei_source'].to_numpy().flatten(), axis=0))
                 if 'johm' in data:
-                    data_vars['johm'] = (['n', 'rho'], np.expand_dims(data['johm'].to_numpy().flatten(), axis=0))
+                    data_vars['johm'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['johm'].to_numpy().flatten(), axis=0))
                 if 'j_bootstrap' in data:
-                    data_vars['jbs'] = (['n', 'rho'], np.expand_dims(data['j_bootstrap'].to_numpy().flatten(), axis=0))
-                    #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(data['j_bootstrap'].to_numpy().flatten(), axis=0))
+                    data_vars['jbs'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['j_bootstrap'].to_numpy().flatten(), axis=0))
+                    #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['j_bootstrap'].to_numpy().flatten(), axis=0))
                 if 'external_current_source' in data:
-                    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(data['external_current_source'].to_numpy().flatten(), axis=0))
-                    #data_vars['jnb'] = (['n', 'rho'], np.expand_dims(data['external_current_source'].to_numpy().flatten(), axis=0))
+                    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['external_current_source'].to_numpy().flatten(), axis=0))
+                    #data_vars['jnb'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['external_current_source'].to_numpy().flatten(), axis=0))
                 #if 'generic_current_source_j' in data:
-                #    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(data['generic_current_source_j'].to_numpy().flatten(), axis=0))
-                #    data_vars['jnb'] = (['n', 'rho'], np.expand_dims(data['generic_current_source_j'].to_numpy().flatten(), axis=0))
-                #'vtor'
-                #'vpol'
-                #'omega0'
+                #    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['generic_current_source_j'].to_numpy().flatten(), axis=0))
+                #    data_vars['jnb'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['generic_current_source_j'].to_numpy().flatten(), axis=0))
                 if 'pressure_thermal_tot_face' in data:
                     ptot = data['pressure_thermal_tot_face'].to_numpy().flatten()
-                    data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ptot[0:] + 0.5 * np.diff(ptot), axis=0))
+                    data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ptot[:-1] + 0.5 * np.diff(ptot), axis=0))
                 if 'gas_puff_source_el' in data:
                     data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(data['gas_puff_source_el'].to_numpy().flatten(), axis=0))
                 if 'generic_particle_source_el' in data:
                     data_vars['qpar_beam'] = (['n', 'rho'], np.expand_dims(data['generic_particle_source_el'].to_numpy().flatten(), axis=0))
+                #'qione'
+                #'qioni'
+                #'qcxi'
+                #'vtor'
+                #'vpol'
+                #'omega0'
                 #'qmom'
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
-       # return newobj
+        return newobj
