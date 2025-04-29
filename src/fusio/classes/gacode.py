@@ -338,9 +338,10 @@ class gacode_io(io):
             with open(opath, 'w') as f:
                 f.writelines(lines)
             logger.info(f'Saved {self.format} data into {opath.resolve()}')
-
+            #else:
+            #    logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
         else:
-            logger.error(f'Attempting to write empty {self.format} class instance... Failed!')
+            logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
     @classmethod
