@@ -400,6 +400,16 @@ class torax_io(io):
             if ipath.exists():
                 dt = xr.open_datatree(ipath)
                 ds = xr.combine_by_coords([dt[key].to_dataset() for key in dt.groups], compat="override")
+                newattrs = {}
+                for attr in ds.attrs:
+                    if isinstance(ds.attrs[attr], str):
+                        if ds.attrs[attr].startswith('dict'):
+                            newattrs[attr] = json.loads(ds.attrs[attr][4:])
+                        if ds.attrs[attr] == 'true':
+                            newattrs[attr] = True
+                        if ds.attrs[attr] == 'false':
+                            newattrs[attr] = False
+                ds.attrs.update(newattrs)
         return ds
 
 
@@ -408,11 +418,19 @@ class torax_io(io):
             opath = Path(path)
             if overwrite or not opath.exists():
                 if isinstance(data, (xr.Dataset, xr.DataTree)):
-                    data.to_netcdf(dump_path)
+                    newattrs = {}
+                    for attr in data.attrs:
+                        if isinstance(data.attrs[attr], dict):
+                            newattrs[attr] = 'dict' + json.dumps(data.attrs[attr])
+                        if isinstance(data.attrs[attr], bool):
+                            newattrs[attr] = str(data.attrs[attr])
+                    data.attrs.update(newattrs)
+                    data.to_netcdf(opath)
+                    logger.info(f'Saved {self.format} data into {opath.resolve()}')
             else:
-                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting dump...')
+                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
         else:
-            logger.warning(f'Invalid path argument given to {self.format} write function! Aborting dump...')
+            logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
     def add_output_dir(self, outdir):
