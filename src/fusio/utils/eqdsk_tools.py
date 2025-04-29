@@ -78,7 +78,7 @@ def detect_cocos(eqdsk):
     return determine_cocos(sign_dict)
 
 
-def convert_cocos(eqdsk, cocos_in, cocos_out):
+def convert_cocos(eqdsk, cocos_in, cocos_out, bt_sign_out=None, ip_sign_out=None):
     out = {
         'nx': eqdsk.get('nx', None),
         'ny': eqdsk.get('ny', None),
@@ -93,22 +93,34 @@ def convert_cocos(eqdsk, cocos_in, cocos_out):
         'cpasma': eqdsk.get('cpasma', None),
     }
     sign_dict = define_cocos_converter(cocos_in, cocos_out)
+    sIp = sign_dict['scyl']
+    sBt = sign_dict['scyl']
+    if 'bcentr' in eqdsk:
+        out['bcentr'] = copy.deepcopy(eqdsk['bcentr']) * sBt
+        if bt_sign_out is not None:
+            out['bcentr'] *= np.sign(out['bcentr']) * np.sign(bt_sign_out)
+            sBt *= int(np.sign(out['bcentr']) * np.sign(bt_sign_out))
+    if 'cpasma' in eqdsk:
+        out['cpasma'] = copy.deepcopy(eqdsk['cpasma']) * sIp
+        if ip_sign_out is not None:
+            out['cpasma'] *= np.sign(out['cpasma']) * np.sign(ip_sign_out)
+            sIp *= int(np.sign(out['cpasma']) * np.sign(ip_sign_out))
     if 'simagx' in eqdsk:
-        out['simagx'] = copy.deepcopy(eqdsk['simagx']) * np.power(2.0 * np.pi, sign_dict['eBp']) * sign_dict['sBp']
+        out['simagx'] = copy.deepcopy(eqdsk['simagx']) * np.power(2.0 * np.pi, sign_dict['eBp']) * sign_dict['sBp'] * sIp
     if 'sibdry' in eqdsk:
-        out['sibdry'] = copy.deepcopy(eqdsk['sibdry']) * np.power(2.0 * np.pi, sign_dict['eBp']) * sign_dict['sBp']
+        out['sibdry'] = copy.deepcopy(eqdsk['sibdry']) * np.power(2.0 * np.pi, sign_dict['eBp']) * sign_dict['sBp'] * sIp
     if 'fpol' in eqdsk:
-        out['fpol'] = copy.deepcopy(eqdsk['fpol'])
+        out['fpol'] = copy.deepcopy(eqdsk['fpol']) * sBt
     if 'pres' in eqdsk:
         out['pres'] = copy.deepcopy(eqdsk['pres'])
     if 'ffprime' in eqdsk:
-        out['ffprime'] = copy.deepcopy(eqdsk['ffprime']) * np.power(2.0 * np.pi, -sign_dict['eBp']) * sign_dict['sBp']
+        out['ffprime'] = copy.deepcopy(eqdsk['ffprime']) * np.power(2.0 * np.pi, -sign_dict['eBp']) * sign_dict['sBp'] * sIp
     if 'pprime' in eqdsk:
-        out['pprime'] = copy.deepcopy(eqdsk['pprime']) * np.power(2.0 * np.pi, -sign_dict['eBp']) * sign_dict['sBp']
+        out['pprime'] = copy.deepcopy(eqdsk['pprime']) * np.power(2.0 * np.pi, -sign_dict['eBp']) * sign_dict['sBp'] * sIp
     if 'psi' in eqdsk:
-        out['psi'] = copy.deepcopy(eqdsk['psi']) * np.power(2.0 * np.pi, sign_dict['eBp']) * sign_dict['sBp']
+        out['psi'] = copy.deepcopy(eqdsk['psi']) * np.power(2.0 * np.pi, sign_dict['eBp']) * sign_dict['sBp'] * sIp
     if 'qpsi' in eqdsk:
-        out['qpsi'] = copy.deepcopy(eqdsk['qpsi']) * sign_dict['spol']
+        out['qpsi'] = copy.deepcopy(eqdsk['qpsi']) * sign_dict['spol'] * sIp * sBt
     if 'rlim' in eqdsk and 'zlim' in eqdsk:
         out['rlim'] = copy.deepcopy(eqdsk['rlim'])
         out['zlim'] = copy.deepcopy(eqdsk['zlim'])
