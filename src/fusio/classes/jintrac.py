@@ -1,11 +1,10 @@
-import os.path
-from getpass import getuser
+#from getpass import getuser
 import datetime
 import re
 import struct
-import shutil
+#import shutil
 import copy
-import collections
+#import collections
 from itertools import tee
 
 from pathlib import Path
@@ -325,7 +324,7 @@ class jintrac_io(io):
 
     def _write_jintrac_binary_file(self, data, output_file='custom'):
 
-        if not isinstance(data, (dict, collections.OrderedDict)):
+        if not isinstance(data, dict):
             raise TypeError('Invalid input data structure, must be a dictionary. Abort.')
         elif 'info' not in data or 'sections' not in data:
             raise TypeError('Input data dictionary not correctly formatted. Abort.')
@@ -572,7 +571,7 @@ class jintrac_io(io):
 #        itag = itag + ' - ' + tag
 #
 #    odata = copy.deepcopy(data)
-#    if isinstance(data, (dict, collections.OrderedDict)) and ikey is not None:
+#    if isinstance(data, dict) and ikey is not None:
 #        check_flag = True
 #        if ikey not in ["TVEC1", "XVEC1"]:
 #            check_array = [False] * idata.ndim
@@ -633,7 +632,7 @@ class jintrac_io(io):
 #        itag = itag + ' - ' + tag
 #
 #    odata = None
-#    if isinstance(data, (dict, collections.OrderedDict)) and ikey in data:
+#    if isinstance(data, dict) and ikey in data:
 #        if data[ikey].size == idata.size:
 #            idata = np.reshape(idata, data[ikey].shape)
 #        writeData = False
@@ -673,7 +672,7 @@ class jintrac_io(io):
 #            if isinstance(dtype, str):
 #                odata["INFO"][ikey]["FORM"] = dtype             # Data type for conversion to binary representation
 #            odata["INFO"][ikey]["LABEL"] = ikey                 # Name of data field, printed verbatim into ex-file
-#    elif isinstance(data, (dict, collections.OrderedDict)):
+#    elif isinstance(data, dict):
 #        print("   Base data to be modified does not contain the entry %s. Modification aborted.")
 #    else:
 #        print("   Base data to be modified is not a dictionary. Use read_binary_file() function to create it.")
@@ -687,12 +686,12 @@ class jintrac_io(io):
 #    gtag = None
 #    expath = None
 #    opath = Path('./modded_exfile.txt')
-#    if isinstance(inputdata, (dict, collections.OrderedDict)):
+#    if isinstance(inputdata, dict):
 #        pdata = copy.deepcopy(inputdata)
 #    if isinstance(qlist, (list, tuple)) and len(qlist) > 0:
 #        qqlist = []
 #        for item in qlist:
-#            if isinstance(pdata, (dict, collections.OrderedDict)) and item in pdata:
+#            if isinstance(pdata, dict) and item in pdata:
 #                qqlist.append(item)
 #    if isinstance(exfilename, str):
 #        exname = exfilename
@@ -737,7 +736,7 @@ class jintrac_io(io):
 #def repackage_data(data, quantities):
 #    odata = None
 #    qlist = []
-#    if isinstance(data, (dict, collections.OrderedDict)):
+#    if isinstance(data, dict):
 #        odata = copy.deepcopy(data)
 #    if isinstance(quantities, str):
 #        qlist = quantities.split(',')
