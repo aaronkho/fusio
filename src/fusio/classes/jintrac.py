@@ -15,25 +15,44 @@ from .io import io
 
 logger = logging.getLogger('fusio')
 
-dtypes = {'int':'i', 'float':'f', 'double':'d', 'char':None}
-byte_orderingtag = {'>':'Big-endian', '<':'Little-endian'}
-byte_ordering = {'b': '>', 'l': '<'}
-
-header_finder = re.compile(b'\*\n\*[\w, \d]+\n')
-spec_finder = re.compile(b'#\w+;\d+;\d+;[\w, \d\-]+;\d+\n')
-tracking_conversion = {
-    'File Header': 0,
-    'General Info': 0,
-    'PPF Attributes': 1,
-    'PPF Base Vectors': 2,
-    'Profiles': 3,
-    'Traces': -1,
-    '': -1
-}
-tracking_tags = [' in file header', ' in provenance section', ' in base vector section', ' in time slice', '']
-
 
 class jintrac_io(io):
+
+    dtypes = {
+        'int': 'i',
+        'float': 'f',
+        'double': 'd',
+        'char': None,
+    }
+    dsizes = {
+        'int': 4,
+        'float': 4,
+        'double': 8,
+    }
+    byte_orderingtag = {
+        '>': 'Big-endian',
+        '<': 'Little-endian',
+    }
+    byte_ordering = {
+        'b': '>',
+        'l': '<',
+    }
+
+    header_finder = re.compile(b'\*\n\*[\w, \d]+\n')
+    spec_finder = re.compile(b'#\w+;\d+;\d+;[\w, \d\-]+;\d+\n')
+    tracking_conversion = {
+        'File Header': 0,
+        'General Info': 0,
+        'PPF Attributes': 1,
+        'PPF Base Vectors': 2,
+        'Profiles': 3,
+        'Traces': -1,
+        '': -1,
+    }
+    tracking_tags = [' in file header', ' in provenance section', ' in base vector section', ' in time slice', '']
+    supported_file_extensions = ['.ex', '.ext', '.jsp', '.jst', '.jss', '.jse', '.jhp', '.jht', '.ssp', '.sst', '.jasp', '.jast', '.jsd']
+    metadata_tags = ['units', 'desc', 'scstr', 'xbase', 'uid', 'dda', 'dtype', 'seq']
+
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -64,46 +83,43 @@ class jintrac_io(io):
 
     def _decode_spec(self, spec):
         if not spec.startswith('#'):
-            raise Exception(spec, ' is not a spec line')
+            logger.error(f'{spec} is not a spec line')
         splitted = spec[1:-1].split(';')
         if len(splitted) != 5:
-            raise Exception(spec, ' is not a spec line')
-        jet_format = splitted[0]
+            logger.error(f'{spec} is not a spec line')
+        dformat = splitted[0]
         ignored = splitted[1]
         npoints = int(splitted[2])
         label = splitted[3]
         nlines = int(splitted[4])
-        return label, jet_format, npoints, nlines
+        return label, dformat, npoints, nlines
 
 
-    def _decode_metadata(self, raw_metadata):
+    def _decode_metadata(self, raw):
         itag = None
-        tags = ['UNITS', 'DESC', 'SCSTR', 'XBASE', 'UID', 'DDA', 'DTYPE', 'SEQ']
-        meta = list(map(lambda x: x.decode('latin-1').strip(), raw_metadata))
-        metadata = dict(zip(tags, meta))
-        if 'SCSTR' in metadata:
-            metadata['SCALE'] = float(metadata['SCSTR'].strip())
-        if 'UNITS' in metadata:
-            if metadata['UNITS'] == '':
-                metadata['UNITS'] = None
-        return metadata
+        decoded = list(map(lambda x: x.decode('latin-1').strip(), raw))
+        meta = dict(zip(self.metadata_tags, decoded))
+        if 'scstr' in meta:
+            meta['scale'] = float(meta['scstr'].strip())
+        if 'units' in meta:
+            if meta['units'] == '':
+                meta['units'] = None
+        return meta
 
 
     def _decode_block(self, block, endianness='>', track_num=-1):
-        """
-        A block is the entire portion between spec lines, and typically contain the data for a single variable
-        """
-        loc = tracking_tags[track_num] if track_num < 3 else tracking_tags[3]
+        # A block is the entire portion between spec lines, and typically contain the data for a single variable
+        loc = self.tracking_tags[track_num] if track_num < 3 else self.tracking_tags[3]
         if track_num >= 3:
-            loc += ' number {:d}'.format(track_num - 3)
+            loc += f' number {track_num - 3:d}'
         corrupted = False
         # Read specification
-        m = spec_finder.match(block)
+        m = self.spec_finder.match(block)
         spec_string = block[:m.end()]
         block_string = block[m.end():]
         spec = spec_string.decode('latin-1')
-        var_label, jet_format, npoints, nlines = decode_spec(spec)
-        var_format = dtypes[jet_format]
+        var_label, dformat, npoints, nlines = self._decode_spec(spec)
+        var_format = self.dtypes[dformat]
         spec = spec.strip()
         # Read metadata
         try:
@@ -111,27 +127,27 @@ class jintrac_io(io):
             raw_metadata = splitted[:2*nlines:2]
             raw_data = b''.join(splitted[2*nlines:-2])
         # Protection against invalid specification line
-        except Exception:
+        except:
             corrupted = True
             raw_metadata = None
             raw_data = None
-            print('Could not split {!s} block with spec {!s}{!s}'.format(var_label, spec, loc))
+            logger.warning(f'Could not split {var_label} block with spec {spec}{loc}')
         try:
-            var_metadata = decode_metadata(raw_metadata)
-            var_metadata['LABEL'] = var_label
-            var_metadata['FORM'] = jet_format
+            var_metadata = self._decode_metadata(raw_metadata)
+            var_metadata['label'] = var_label
+            var_metadata['form'] = dformat
         # Protection against incorrect number of metadata lines
-        except Exception:
+        except:
             corrupted = True
             var_metadata = {}
-            print('Could not decode {!s} metadata with spec {!s}{!s}'.format(var_label, spec, loc))
+            logger.warning(f'Could not decode {var_label} metadata with spec {spec}{loc}')
         # Read data
         if var_format is None:
             # No decoding needed, just read
             try:
                 decoded_var = raw_data.decode('latin-1').strip()
             # Protection against plain read failure (highly unlikely)
-            except Exception:
+            except:
                 corrupted = True
                 decoded_var = None
         else:
@@ -142,52 +158,49 @@ class jintrac_io(io):
                     decoded_var = np.full(npoints, np.nan)
             else:
                 try:
-                    decoded_var = struct.unpack(endianness + npoints*var_format, raw_data)
+                    decoded_var = struct.unpack(endianness + npoints * var_format, raw_data)
                     if var_format is None:
                         decoded_var = decoded_var[0]
                     elif var_format in ['i', 'f', 'd']:
                         decoded_var = np.array(decoded_var)
                 # Protection against incorrect specification of binary line length / format
-                except Exception:
+                except:
                     corrupted = True
                     decoded_var = np.full(npoints, np.nan)
-                    print('Could not decode {!s} data with spec {!s}{!s}'.format(var_label, spec, loc))
+                    logger.warning(f'Could not decode {var_label} data with spec {spec}{loc}')
         # Scale numerical data based on metadata value
-        if 'SCALE' in var_metadata:
+        if 'scale' in var_metadata:
             try:
-                decoded_var *= var_metadata['SCALE']
+                decoded_var *= var_metadata['scale']
             # Protection against invalid value in scaling factor metadata
-            except Exception:
+            except:
                 corrupted = True
                 decoded_var = np.full(npoints, np.nan)
-                print('Could not rescale {!s}{!s}'.format(var_label, loc))
-        return var_label.upper(), decoded_var, var_metadata, corrupted
+                logger.warning(f'Could not rescale {var_label}{loc}')
+        var_label = re.sub(' ', '_', var_label)
+        return var_label.lower(), decoded_var, var_metadata, corrupted
 
 
     def _decode_section(self, section, sec_num, endianness='>', metadata=None, data_start_num=-1):
-        """
-        A section is the entire portion between lines beginning with **
-    
-        Metadata option improves robustness of read routine by providing NaN vector shape in case of read failure
-        """
+        # A section is the entire portion between lines beginning with **
         known_info = metadata if isinstance(metadata, dict) else {}
-        m = header_finder.match(section)
+        m = self.header_finder.match(section)
         header_string = section[:m.end()]
         section_string = section[m.end():]
         section_header = header_string[3:-1].decode('latin-1')
         # Look for all data specs in the section (starts with #dtype;....)
-        spec_starts = [match.start() for match in spec_finder.finditer(section_string)]
+        spec_starts = [m.start() for m in self.spec_finder.finditer(section_string)]
         spec_starts.append(len(section_string)) # To also read the last block
-        blocks = [section_string[start:next_start] for start, next_start in pairwise(spec_starts)]
+        blocks = [section_string[start:next_start] for start, next_start in self._pairwise(spec_starts)]
         if b''.join(blocks) != section_string:
-            raise Exception('Something weird happened, did not split all blocks correctly')
+            logger.error('Something weird happened, did not split all blocks correctly')
         section_data = {}
         section_info = {}
-        track_num = tracking_conversion[section_header] if section_header in tracking_conversion else -1
+        track_num = self.tracking_conversion[section_header] if section_header in self.tracking_conversion else -1
         if track_num == 3 and data_start_num > 0:
             track_num += (sec_num - data_start_num)
         for block_num, block in enumerate(blocks):
-            var_label, block_data, var_info, corrupted = decode_block(block, endianness=endianness, track_num=track_num)
+            var_label, block_data, var_info, corrupted = self._decode_block(block, endianness=endianness, track_num=track_num)
             record = True
             # Check if variable metadata is already known (i.e. corrupted entry is not in the first time slice)
             if corrupted and var_label in known_info:
@@ -196,125 +209,129 @@ class jintrac_io(io):
             if var_label in section_info and var_label in section_data:
                 record = False
                 # Check if existing data is already good, if yes, keep it
-                good_entry = ('XBASE' in section_info[var_label] and section_data[var_label] is not None and np.all(np.isfinite(section_data[var_label])))
+                good_entry = ('xbase' in section_info[var_label] and section_data[var_label] is not None and np.all(np.isfinite(section_data[var_label])))
                 if not good_entry and not corrupted:
                     record = True
             if record:
                 section_data[var_label] = block_data
                 section_info[var_label] = var_info
-                section_info[var_label]['SECNUM'] = sec_num + 1
+                section_info[var_label]['section_number'] = sec_num + 1
         return section_header, section_data, section_info
 
 
-    def _read_jintrac_binary_file(self, input_path, output_file=None):
+    def _read_jintrac_file(self, path):
 
-        supported_file_extensions = ['.ex', '.ext', '.jsp', '.jst', '.jss', '.jse', '.jhp', '.jht', '.ssp', '.sst', '.jasp', '.jast', '.jsd']
-        ipath = Path(input_path)
-        if not ipath.is_file():
-            raise Exception("File %s not found. Abort." % (str(ipath.absolute())))
+        coords = {}
+        data_vars = {}
+        attrs = {}
 
-        if (ipath.suffix not in supported_file_extensions)\
-        and (not ipath.suffix.startswith('.ssp')) and\
-        (not ipath.suffix.startswith('.sst')) and\
-        (not ipath.suffix.startswith('.jsp')):
-            raise Exception("Extention of file %s not in allowed list. Abort." % (str(ipath.absolute())))
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)
+            if not ipath.is_file():
+                logging.error(f'File {ipath.absolute()} not found. Abort.')
+            if ((ipath.suffix not in supported_file_extensions) and
+                (not ipath.suffix.startswith('.ssp')) and
+                (not ipath.suffix.startswith('.sst')) and
+                (not ipath.suffix.startswith('.jsp'))
+            ):
+                logger.error(f'Extension of file {ipath.absolute()} not in allowed list. Abort.')
 
-        if isinstance(output_file,str):
-            convert_binary_file(str(ipath.absolute()), output_file)
+            #if isinstance(output_file,str):
+            #    convert_binary_file(str(ipath.absolute()), output_file)
 
-        # Store data from input file in dictionary
-        data = collections.OrderedDict()
-        data['INFO'] = collections.OrderedDict()
+            data['info'] = {}
 
-        data_types = {'int': 'i', 'float': 'f', 'double': 'd'}
-        data_size = {'int': 4, 'float': 4, 'double': 8}
+            with open(ipath, 'rb') as bf:
+                indata = bf.read()
 
-        with open(str(ipath.absolute()), 'rb') as inh:
-            indata = inh.read()
+            # First split the huge string into sections. A section starts with *\n*HEADER
+            section_header_starts = [m.start() for m in self.header_finder.finditer(indata)]
+            section_header_starts.append(len(indata)) # Also read the last section
+            sections = [indata[start:next_start] for start, next_start in self._pairwise(section_header_starts)]
+            if b''.join(sections) != indata:
+                logger.error(f'Something weird happened, did not split all sections correctly')
 
-        # First split the huge string into sections. A section starts with *\n*HEADER
-        section_header_starts = [match.start() for match in header_finder.finditer(indata)]
-        section_header_starts.append(len(indata)) # Also read the last section
-        sections = [indata[start:next_start] for start, next_start in pairwise(section_header_starts)]
-        if b''.join(sections) != indata:
-            raise Exception('Something weird happened, did not split all sections correctly')
+            # First section has info we need to decode the rest
+            section_header, section_data, header_info = self._decode_section(sections[0], 0)
+            data[section_header] = section_data
+            endianness = self.byte_ordering[section_data['file_format']]
+            data_start_num = -1
 
-        # First section has info we need to decode the rest
-        section_header, section_data, header_info = decode_section(sections[0], 0)
-        data[section_header] = section_data
-        endianness = byte_ordering[section_data['FILE FORMAT']]
-        data_start_num = -1
+            # Now decode all sections
+            for sec_num, section in enumerate(sections[1:-1], start=1):
+                metadata = data['info'] if data['info'] else None
+                if 'Profiles' in data and data_start_num < 0:
+                   data_start_num = sec_num - 1
+                section_header, section_data, section_info = self._decode_section(
+                    section,
+                    sec_num,
+                    endianness=endianness,
+                    metadata=metadata,
+                    data_start_num=data_start_num
+                )
+                if section_header == 'Profiles':
+                    if section_header not in data:
+                        data[section_header] = []
+                    data[section_header].append(section_data)
+                else:
+                    data[section_header] = section_data
+                for k, v in section_info.items():
+                    if k not in data['info']:
+                         data['info'][k] = v
 
-        # Now decode all sections
-        for sec_num, section in enumerate(sections[1:-1], start=1):
-            metadata = data['INFO'] if data['INFO'] else None
-            if 'Profiles' in data and data_start_num < 0:
-               data_start_num = sec_num - 1
-            section_header, section_data, section_info = decode_section(section, sec_num, endianness=endianness, metadata=metadata, data_start_num=data_start_num)
-            if section_header == 'Profiles':
-                if 'Profiles' not in data:
-                    data['Profiles'] = []
-                data[section_header].append(section_data)
-            else:
-                data[section_header] = section_data
+            # Check length of 1D profile arrays
+            if 'Profiles' in data:
+                profiles = {}
+                for slice_num, prof in enumerate(data['Profiles']):
+                    for key in prof.keys():
+                        if key not in profiles:
+                            profiles[key] = []
+                        prof_data = copy.deepcopy(prof[key])
+                        if 'PPF Base Vectors' in data and 'info' in data and key in data['info'] and 'xbase' in data['info'][key]:
+                            if not isinstance(prof_data, np.ndarray):
+                                prof_data = np.full(data['PPF Base Vectors'][data['info'][key]['xbase']].size, np.nan)
+                            if prof_data.size != data['PPF Base Vectors'][data['info'][key]['xbase']].size:
+                                prof_data = np.full(data['PPF Base Vectors'][data['info'][key]['xbase']].size, np.nan)
+                        if len(profiles[key]) != slice_num:
+                            fill_data = np.full(prof_data.shape, np.nan)
+                            profiles[key].append(fill_data)
+                            logger.warning(f'Missing {key} data in time slice number {slice_num - 1:d}')
+                        profiles[key].append(prof_data)
+                # Merge all 1D profiles of like quantities together into 2D arrays
+                for key in list(profiles.keys()):
+                    profiles[key] = np.stack(profiles[key])
+                data['Profiles'] = profiles
 
-            for k, v in section_info.items():
-                if k not in data['INFO']:
-                     data['INFO'][k] = v
+            # Check length of 1D time arrays
+            if 'Traces' in data:
+                traces = {}
+                for key in data['Traces'].keys():
+                    if key not in traces:
+                        traces[key] = []
+                    trac_data = copy.deepcopy(data['Traces'][key])
+                    if 'PPF Base Vectors' in data and 'info' in data and key in data['info'] and 'xbase' in data['info'][key]:
+                        if not isinstance(trac_data, np.ndarray):
+                            trac_data = np.full(data['PPF Base Vectors'][data['info'][key]['xbase']].size, np.nan)
+                        if trac_data.size != data['PPF Base Vectors'][data['info'][key]['xbase']].size:
+                            trac_data = np.full(data['PPF Base Vectors'][data['info'][key]['xbase']].size, np.nan)
+                    traces[key] = trac_data
+                data['Traces'] = traces
 
-        # Check length of 1D profile arrays
-        if 'Profiles' in data:
-            profiles = collections.OrderedDict()
-            for slice_num, prof in enumerate(data['Profiles']):
-                for key in prof.keys():
-                    if key not in profiles:
-                        profiles[key] = []
-                    prof_data = copy.deepcopy(prof[key])
-                    if 'PPF Base Vectors' in data and 'INFO' in data and key in data['INFO'] and 'XBASE' in data['INFO'][key]:
-                        if not isinstance(prof_data, np.ndarray):
-                            prof_data = np.full(data['PPF Base Vectors'][data['INFO'][key]['XBASE']].size, np.nan)
-                        if prof_data.size != data['PPF Base Vectors'][data['INFO'][key]['XBASE']].size:
-                            prof_data = np.full(data['PPF Base Vectors'][data['INFO'][key]['XBASE']].size, np.nan)
-                    if len(profiles[key]) != slice_num:
-                        fill_data = np.full(prof_data.shape, np.nan)
-                        profiles[key].append(fill_data)
-                        print('Missing {!s} data in time slice number {:d}'.format(key, slice_num - 1))
-                    profiles[key].append(prof_data)
-            # Merge all 1D profiles of like quantities together into 2D arrays
-            for key in list(profiles.keys()):
-                profiles[key] = np.stack(profiles[key])
-            data['Profiles'] = profiles
+            data = self._remove_duplicate_times(data, keep='last')
+            data = self._standardize_data_representation(data, header_info, endianness)
 
-        # Check length of 1D time arrays
-        if 'Traces' in data:
-            traces = collections.OrderedDict()
-            for key in data['Traces'].keys():
-                if key not in traces:
-                    traces[key] = []
-                trac_data = copy.deepcopy(data['Traces'][key])
-                if 'PPF Base Vectors' in data and 'INFO' in data and key in data['INFO'] and 'XBASE' in data['INFO'][key]:
-                    if not isinstance(trac_data, np.ndarray):
-                        trac_data = np.full(data['PPF Base Vectors'][data['INFO'][key]['XBASE']].size, np.nan)
-                    if trac_data.size != data['PPF Base Vectors'][data['INFO'][key]['XBASE']].size:
-                        trac_data = np.full(data['PPF Base Vectors'][data['INFO'][key]['XBASE']].size, np.nan)
-                traces[key] = trac_data
-            data['Traces'] = traces
-
-        data = remove_duplicate_times(data, keep='last')
-        data = standardize_data_representation(data, header_info, endianness)
-        return data
+        return xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
 
 
     def _write_jintrac_binary_file(self, data, output_file='custom'):
+
         if not isinstance(data, (dict, collections.OrderedDict)):
-            raise TypeError("Invalid input data structure, must be a dictionary. Abort.")
-        elif "INFO" not in data or "SECTIONS" not in data:
-            raise TypeError("Input data dictionary not correctly formatted. Abort.")
+            raise TypeError('Invalid input data structure, must be a dictionary. Abort.')
+        elif 'info' not in data or 'sections' not in data:
+            raise TypeError('Input data dictionary not correctly formatted. Abort.')
 
-        dsizes = {'int':4, 'float':4, 'double':8, 'char':None}
-
-        di = data["INFO"]
-        ds = data["SECTIONS"]
+        di = data['info']
+        ds = data['sections']
         baseidx = ds.index('PPF Base Vectors') if 'PPF Base Vectors' in ds else 3
         ofname = 'custom.ex'
         if isinstance(output_file, str):
@@ -328,7 +345,7 @@ class jintrac_io(io):
             opath.parent.mkdir(parents=True)
 
         status = 1
-        bord = byte_ordering[data["FILE FORMAT"]] if "FILE FORMAT" in data else byte_ordering['b']
+        bord = self.byte_ordering[data.get('file_format', 'b')]
         with open(str(opath.absolute()), 'wb') as ofile:
             NL = '\n'.encode()
             for ii in range(1, len(ds) + 1):
@@ -339,62 +356,31 @@ class jintrac_io(io):
                     hstr2 = '*' + ds[ii-1]
                     ofile.write(hstr2.encode() + NL)
                     for key in data:
-                        if "SECNUM" in di[key] and di[key]["SECNUM"] == ii:
+                        if 'section_number' in di[key] and di[key]['section_number'] == ii:
                             nstr = '1'
                             rnum = 0
-                            if not re.match(r'^char$', di[key]["FORM"], flags=re.IGNORECASE):
-                                nstr = "%d" % (data[key].shape[1])
+                            if not re.match(r'^char$', di[key]['form'], flags=re.IGNORECASE):
+                                nstr = f'{data[key].shape[1]:d}'
                                 rnum = -1
-                            if "SEQ" in di[key]:
-                                rnum = 8
-                            elif "DTYPE" in di[key]:
-                                rnum = 7
-                            elif "DDA" in di[key]:
-                                rnum = 6
-                            elif "UID" in di[key]:
-                                rnum = 5
-                            elif "XBASE" in di[key]:
-                                rnum = 4
-                            elif "SCSTR" in di[key]:
-                                rnum = 3
-                            elif "DESC" in di[key]:
-                                rnum = 2
-                            elif "UNITS" in di[key]:
-                                rnum = 1
-                            rstr = '%d' % (rnum) if rnum >= 0 and not re.match(r'^Shot$', key, flags=re.IGNORECASE) else '0'
+                            for ii, key2 in enumerate(self.metadata_tags):
+                                if key2 in di[key]:
+                                    rnum = ii + 1
+                            rstr = f'{rnum:d}' if rnum >= 0 and not re.match(r'^Shot$', key, flags=re.IGNORECASE) else '0'
                             hdelim = ';'
-                            fstr = '#' + hdelim.join((di[key]["FORM"], '1', nstr, di[key]["LABEL"], rstr))
+                            fstr = '#' + hdelim.join((di[key]['form'], '1', nstr, di[key]['label'], rstr))
                             ofile.write(fstr.encode() + NL)
-                            if rnum >= 1:
-                                estr = di[key]["UNITS"] if isinstance(di[key]["UNITS"], str) else ''
-                                ofile.write(estr.encode() + NL)
-                            if rnum >= 2:
-                                estr = di[key]["DESC"] if isinstance(di[key]["DESC"], str) else ''
-                                ofile.write(estr.encode() + NL)
-                            if rnum >= 3:
-                                estr = di[key]["SCSTR"] if isinstance(di[key]["SCSTR"], str) else ''
-                                ofile.write(estr.encode() + NL)
-                            if rnum >= 4:
-                                estr = di[key]["XBASE"] if isinstance(di[key]["XBASE"], str) else ''
-                                ofile.write(estr.encode() + NL)
-                            if rnum >= 5:
-                                estr = di[key]["UID"] if isinstance(di[key]["UID"], str) else ''
-                                ofile.write(estr.encode() + NL)
-                            if rnum >= 6:
-                                estr = di[key]["DDA"] if isinstance(di[key]["DDA"], str) else ''
-                                ofile.write(estr.encode() + NL)
-                            if rnum >= 7:
-                                estr = di[key]["DTYPE"] if isinstance(di[key]["DTYPE"], str) else ''
-                                ofile.write(estr.encode() + NL)
-                            if rnum >= 8:
-                                estr = di[key]["SEQ"] if isinstance(di[key]["SEQ"], str) else ''
-                                ofile.write(estr.encode() + NL)
+                            for ii, key2 in enumerate(self.metadata_tags):
+                                if rnum > ii:
+                                    estr = di[key].get(key2, None)
+                                    if not isinstance(estr, str):
+                                        estr = ''
+                                    ofile.write(estr.encode() + NL)
                             if rnum == 0:
                                 ofile.write(data[key].encode() + NL)
                             else:
-                                scale = di[key]["SCALE"] if "SCALE" in di[key] else 1.0
-                                dtype = dtypes[di[key]["FORM"]]
-                                dsize = dsizes[di[key]["FORM"]]
+                                scale = di[key].get('scale', 1.0)
+                                dtype = self.dtypes[di[key]['form']]
+                                dsize = self.dsizes[di[key]['form']]
                                 for jj in range(data[key].shape[1]):
                                     dstr = b''
                                     if re.match(r'^[fd]$', dtype, flags=re.IGNORECASE):
@@ -404,69 +390,38 @@ class jintrac_io(io):
                                     ofile.write(dstr)
                                 ofile.write(NL)
 
-                elif "TVEC1" in data and isinstance(data["TVEC1"], np.ndarray):
-                    for tt in range(data["TVEC1"].shape[0]):
+                elif 'tvec1' in data and isinstance(data['tvec1'], np.ndarray):
+                    for tt in range(data['tvec1'].shape[0]):
                         hstr1 = '*'
                         ofile.write(hstr1.encode() + NL)
                         hstr2 = '*' + ds[ii-1]
                         ofile.write(hstr2.encode() + NL)
                         for key in data:
-                            if "SECNUM" in di[key] and di[key]["SECNUM"] == ii:
+                            if 'section_number' in di[key] and di[key]['section_number'] == ii:
                                 nstr = '1'
                                 rnum = 0
-                                if not re.match(r'^char$', di[key]["FORM"], flags=re.IGNORECASE):
-                                    nstr = "%d" % (data[key].shape[1])
+                                if not re.match(r'^char$', di[key]['form'], flags=re.IGNORECASE):
+                                    nstr = f'{data[key].shape[1]:d}'
                                     rnum = -1
-                                if "SEQ" in di[key]:
-                                    rnum = 8
-                                elif "DTYPE" in di[key]:
-                                    rnum = 7
-                                elif "DDA" in di[key]:
-                                    rnum = 6
-                                elif "UID" in di[key]:
-                                    rnum = 5
-                                elif "XBASE" in di[key]:
-                                    rnum = 4
-                                elif "SCSTR" in di[key]:
-                                    rnum = 3
-                                elif "DESC" in di[key]:
-                                    rnum = 2
-                                elif "UNITS" in di[key]:
-                                    rnum = 1
-                                rstr = '%d' % (rnum) if rnum >= 0 else '0'
+                                for ii, key2 in enumerate(self.metadata_tags):
+                                    if key2 in di[key]:
+                                        rnum = ii + 1
+                                rstr = f'{rnum:d}' if rnum >= 0 else '0'
                                 hdelim = ';'
-                                fstr = '#' + hdelim.join((di[key]["FORM"], '1', nstr, di[key]["LABEL"], rstr))
+                                fstr = '#' + hdelim.join((di[key]['form'], '1', nstr, di[key]['label'], rstr))
                                 ofile.write(fstr.encode() + NL)
-                                if rnum >= 1:
-                                    estr = di[key]["UNITS"] if isinstance(di[key]["UNITS"], str) else ''
-                                    ofile.write(estr.encode() + NL)
-                                if rnum >= 2:
-                                    estr = di[key]["DESC"] if isinstance(di[key]["DESC"], str) else ''
-                                    ofile.write(estr.encode() + NL)
-                                if rnum >= 3:
-                                    estr = di[key]["SCSTR"] if isinstance(di[key]["SCSTR"], str) else ''
-                                    ofile.write(estr.encode() + NL)
-                                if rnum >= 4:
-                                    estr = di[key]["XBASE"] if isinstance(di[key]["XBASE"], str) else ''
-                                    ofile.write(estr.encode() + NL)
-                                if rnum >= 5:
-                                    estr = di[key]["UID"] if isinstance(di[key]["UID"], str) else ''
-                                    ofile.write(estr.encode() + NL)
-                                if rnum >= 6:
-                                    estr = di[key]["DDA"] if isinstance(di[key]["DDA"], str) else ''
-                                    ofile.write(estr.encode() + NL)
-                                if rnum >= 7:
-                                    estr = di[key]["DTYPE"] if isinstance(di[key]["DTYPE"], str) else ''
-                                    ofile.write(estr.encode() + NL)
-                                if rnum >= 8:
-                                    estr = di[key]["SEQ"] if isinstance(di[key]["SEQ"], str) else ''
-                                    ofile.write(estr.encode() + NL)
+                                for ii, key2 in enumerate(self.metadata_tags):
+                                    if rnum > ii:
+                                        estr = di[key].get(key2, None)
+                                        if not isinstance(estr, str):
+                                            estr = ''
+                                        ofile.write(estr.encode() + NL)
                                 if rnum == 0:
                                     ofile.write(data[key].encode() + NL)
                                 else:
-                                    scale = di[key]["SCALE"] if "SCALE" in di[key] else 1.0
-                                    dtype = dtypes[di[key]["FORM"]]
-                                    dsize = dsizes[di[key]["FORM"]]
+                                    scale = di[key].get('scale', 1.0)
+                                    dtype = dtypes[di[key]['form']]
+                                    dsize = dsizes[di[key]['form']]
                                     for jj in range(data[key].shape[1]):
                                         dstr = b''
                                         if re.match(r'^[fd]$', dtype, flags=re.IGNORECASE):
@@ -474,13 +429,13 @@ class jintrac_io(io):
                                                 dstr = struct.pack(bord+dtype, float(data[key][tt, jj] / scale))
                                             else:
                                                 dstr = struct.pack(bord+dtype, float(data[key][-1, jj] / scale))
-                                                print("   Less time slices than expected in field: %10s" % (di[key]["LABEL"]))
+                                                logger.warning(f'   Less time slices than expected in field: {di[key]["label"]:10}')
                                         else:
                                             if data[key].shape[0] > tt:
                                                 dstr = struct.pack(bord+dtype, int(data[key][tt, jj] / scale))
                                             else:
                                                 dstr = struct.pack(bord+dtype, int(data[key][-1, jj] / scale))
-                                                print("   Less time slices than expected in field: %10s" % (di[key]["LABEL"]))
+                                                logger.warning(f'   Less time slices than expected in field: {di[key]["label"]:10}')
                                         ofile.write(dstr)
                                     ofile.write(NL)
 
@@ -496,10 +451,10 @@ class jintrac_io(io):
 
     def _remove_duplicate_times(self, data, keep='first'):
         time_vector = None
-        if 'Traces' in data and 'PPF Base Vectors' in data and 'TVEC1' in data['PPF Base Vectors']:
-            time_vector = data['PPF Base Vectors']['TVEC1'].flatten()
-        if 'Profiles' in data and 'TIME' in data['Profiles']:
-            time_vector = data['Profiles']['TIME'].flatten()
+        if 'Traces' in data and 'PPF Base Vectors' in data and 'tvec1' in data['PPF Base Vectors']:
+            time_vector = data['PPF Base Vectors']['tvec1'].flatten()
+        if 'Profiles' in data and 'time' in data['Profiles']:
+            time_vector = data['Profiles']['time'].flatten()
         if time_vector is not None:
             full_length = len(time_vector)
             unique_values, unique_indices = np.unique(time_vector, return_index=True)
@@ -508,7 +463,7 @@ class jintrac_io(io):
                     index_diff = np.hstack((np.diff(unique_indices), 1)).astype(np.int64)
                     unique_indices = unique_indices + index_diff - 1
                 if 'Traces' in data:
-                    data['PPF Base Vectors']['TVEC1'] = np.take(data['PPF Base Vectors']['TVEC1'], unique_indices, axis=0)
+                    data['PPF Base Vectors']['tvec1'] = np.take(data['PPF Base Vectors']['tvec1'], unique_indices, axis=0)
                     for key in data['Traces']:
                         data['Traces'][key] = np.take(data['Traces'][key], unique_indices, axis=0)
                 if 'Profiles' in data:
@@ -518,31 +473,31 @@ class jintrac_io(io):
 
 
     def _standardize_data_representation(self, data, header_info, endianness):
-        data['SECTIONS'] = [key for key in data.keys() if key != 'INFO']
-        for key in data['SECTIONS']:
+        data['sections'] = [key for key in data.keys() if key != 'info']
+        for key in data['sections']:
             dateval = None
             timeval = None
             if key == 'File Header':
-                dateval = data['File Header'].pop('DATE')
-                timeval = data['File Header'].pop('TIME')
+                dateval = data['File Header'].pop('date')
+                timeval = data['File Header'].pop('time')
             data.update(data.pop(key))
             if dateval is not None:
-                data['CREATION_DATE'] = dateval
+                data['creation_date'] = dateval
             if timeval is not None:
-                data['CREATION_TIME'] = timeval
-        for timename in ['TIME', 'TVEC1']:
+                data['creation_time'] = timeval
+        for timename in ['time', 'tvec1']:
             if timename in data:
-                data[timename] = data[timename][:, np.newaxis]
-        dateinf = header_info.pop('DATE')
-        timeinf = header_info.pop('TIME')
-        data['INFO'].update(header_info)
-        data['INFO']['FILE FORMAT']['FULLNAME'] = byte_orderingtag[endianness]
-        data['INFO']['CREATION_DATE'] = dateinf
-        data['INFO']['CREATION_TIME'] = timeinf
-        data['INFO']['INFO'] = {'DESC': 'Additional information on data fields'}
-        data['INFO']['SECTIONS'] = {'DESC': 'Labelled section and order within EX-FILE'}
+                data[timename] = np.expand_dims(data[timename], axis=-1)
+        dateinfo = header_info.pop('date')
+        timeinfo = header_info.pop('time')
+        data['info'].update(header_info)
+        data['info']['file_format']['fullname'] = self.byte_orderingtag[endianness]
+        data['info']['creation_date'] = dateinfo
+        data['info']['creation_time'] = timeinfo
+        data['info']['info'] = {'desc': 'Additional information on data fields'}
+        data['info']['sections'] = {'desc': 'Labelled section and order within EX-FILE'}
         for key, val in data.items():
-            if key not in ['INFO', 'SECTIONS']:
+            if key not in ['info', 'sections']:
                 if isinstance(val, np.ndarray) and val.ndim < 2:
                     data[key] = np.atleast_2d(val)
         return data
@@ -550,53 +505,54 @@ class jintrac_io(io):
 
     @classmethod
     def create_empty_structure(cls, database, shot, version_tag=None, extfile=False):
+
         # Required user input - forced crash if improper
-        if not isinstance(database,str):
+        if not isinstance(database, str):
             raise ValueError('Database field for ex-file generation must be a string')
-        if not isinstance(shot,(int,float,np.int8,np.int16,np.int32,np.float16,np.float32,np.float64)):
+        if not isinstance(shot, (int, float, np.int8, np.int16, np.int32, np.int64, np.float16, np.float32, np.float64)):
             raise ValueError('Shot number field for ex-file generation must be numeric')
         datablock_tag = 'Traces' if extfile else 'Profiles'
 
         # Initialize structure
         data = {}
-        data['INFO'] = {}
-        data['SECTIONS'] = ['File Header', 'General Info', 'PPF Attributes', 'PPF Base Vectors', datablock_tag]
+        data['info'] = {}
+        data['sections'] = ['File Header', 'General Info', 'PPF Attributes', 'PPF Base Vectors', datablock_tag]
 
         # Add standard descriptions of required metadata - covers until end of 'PPF Attributes' section
-        data['INFO']['INFO'] = {'DESC': 'Additional information on data fields'}
-        data['INFO']['SECTIONS'] = {'DESC': 'Labelled section and order within EX-FILE'}
-        data['INFO']['FILE FORMAT'] = {'FORM': 'char', 'FULLNAME': 'Big-endian', 'LABEL': 'File Format', 'SECNUM': 1}
-        data['INFO']['FILE DESCRIPTION'] = {'FORM': 'char', 'LABEL': 'File Description', 'SECNUM': 1}
-        data['INFO']['VERSION'] = {'FORM': 'char', 'LABEL': 'Version', 'SECNUM': 1}
-        data['INFO']['CREATION_DATE'] = {'FORM': 'char', 'LABEL': 'Date', 'SECNUM': 1}
-        data['INFO']['CREATION_TIME'] = {'FORM': 'char', 'LABEL': 'Time', 'SECNUM': 1}
-        data['INFO']['DATABASE NAME'] = {'FORM': 'char', 'LABEL': 'Database Name', 'SECNUM': 2}
-        data['INFO']['USER EX-FILE'] = {'FORM': 'char', 'LABEL': 'User EX-file', 'SECNUM': 2}
-        data['INFO']['USER PRE-MODEX EX-FILE'] = {'FORM': 'char', 'LABEL': 'User Pre-Modex EX-file', 'SECNUM': 2}
-        data['INFO']['SHOT'] = {'FORM': 'int', 'LABEL': 'Shot', 'SECNUM': 3}
-        data['INFO']['DDA NAME'] = {'FORM': 'char', 'LABEL': 'DDA Name', 'SECNUM': 3}
+        data['info']['info'] = {'desc': 'Additional information on data fields'}
+        data['info']['sections'] = {'desc': 'Labelled section and order within ex-file'}
+        data['info']['file_format'] = {'form': 'char', 'fullname': 'Big-endian', 'label': 'File Format', 'section_number': 1}
+        data['info']['file_description'] = {'form': 'char', 'label': 'File Description', 'section_number': 1}
+        data['info']['version'] = {'form': 'char', 'label': 'Version', 'section_number': 1}
+        data['info']['creation_date'] = {'form': 'char', 'label': 'Date', 'section_number': 1}
+        data['info']['creation_time'] = {'form': 'char', 'label': 'Time', 'section_number': 1}
+        data['info']['database_name'] = {'form': 'char', 'label': 'Database Name', 'section_number': 2}
+        data['info']['user_ex-file'] = {'form': 'char', 'label': 'User EX-file', 'section_number': 2}
+        data['info']['user_pre-modex_ex-file'] = {'form': 'char', 'label': 'User Pre-Modex EX-file', 'section_number': 2}
+        data['info']['shot'] = {'form': 'int', 'label': 'Shot', 'section_number': 3}
+        data['info']['dda_name'] = {'form': 'char', 'label': 'DDA Name', 'section_number': 3}
         if not extfile:
-            data['INFO']['XVEC1'] = {'UNITS': None, 'DESC': 'RHO normalised', 'SCSTR': '1.0', 'SCALE': 1.0, 'LABEL': 'XVEC1', 'FORM': 'float', 'SECNUM': 4}
-            data['INFO']['TVEC1'] = {'UNITS': 'secs', 'DESC': 'TIME', 'SCSTR': '1.0', 'SCALE': 1.0, 'LABEL': 'TVEC1', 'FORM': 'float', 'SECNUM': 5}
+            data['info']['xvec1'] = {'units': None, 'desc': 'RHO normalised', 'scstr': '1.0', 'scale': 1.0, 'label': 'XVEC1', 'form': 'float', 'section_number': 4}
+            data['info']['tvec1'] = {'units': 'secs', 'desc': 'TIME', 'scstr': '1.0', 'scale': 1.0, 'label': 'TVEC1', 'form': 'float', 'section_number': 5}
         else:
-            data['INFO']['TVEC1'] = {'UNITS': 'secs', 'DESC': 'TIME', 'SCSTR': '1.0', 'SCALE': 1.0, 'LABEL': 'TVEC1', 'FORM': 'float', 'SECNUM': 4}
+            data['info']['tvec1'] = {'units': 'secs', 'desc': 'TIME', 'scstr': '1.0', 'scale': 1.0, 'label': 'TVEC1', 'form': 'float', 'section_number': 4}
 
         # Add required metadata - covers until end of 'PPF Attributes' section
-        data['FILE FORMAT'] = 'b'
-        data['FILE DESCRIPTION'] = 'EX-FILE'
-        data['VERSION'] = version_tag if isinstance(version_tag,str) else '1.0 : JETTO Python tools'
-        data['CREATION_DATE'] = datetime.datetime.now().strftime("%d/%m/%Y")
-        data['CREATION_TIME'] = datetime.datetime.now().strftime("%H:%M:%S")
-        data['DATABASE NAME'] = database
-        data['USER EX-FILE'] = ''
-        data['USER PRE-MODEX EX-FILE'] = ''
-        data['SHOT'] = np.atleast_2d([int(shot)])
-        data['DDA NAME'] = 'EX'
+        data['file_format'] = 'b'
+        data['file_description'] = 'EX-FILE'
+        data['version'] = version_tag if isinstance(version_tag, str) else 'fusio-0.1'
+        data['creation_date'] = datetime.datetime.now().strftime("%d/%m/%Y")
+        data['creation_time'] = datetime.datetime.now().strftime("%H:%M:%S")
+        data['database_name'] = database
+        data['user_ex-file'] = ''
+        data['user_pre-modex_ex-file'] = ''
+        data['shot'] = np.atleast_2d([int(shot)])
+        data['dda_name'] = 'FUSIO'
         if not extfile:
-            data['XVEC1'] = np.atleast_2d([])
-            data['TVEC1'] = np.atleast_3d([])
+            data['xvec1'] = np.atleast_2d([])
+            data['tvec1'] = np.atleast_3d([])
         else:
-            data['TVEC1'] = np.atleast_2d([])
+            data['tvec1'] = np.atleast_2d([])
 
         return data
 
@@ -807,107 +763,120 @@ class jintrac_io(io):
     @classmethod
     def generate_entry_info(cls, fieldname, target='jsp'):
         lookup_jsp = {
-            'RA': (None, 'Minor radius, normalised', 'XVEC1', '1.0', 1.0),
-            'XRHO': (None, 'Normalised toroidal flux', 'XVEC1', '1.0', 1.0),
-            'PSI': (None, 'Normalised poloidal flux', 'XVEC1', '1.0', 1.0),
-            'SPSI': (None, 'Sqrt of normalised poloidal flux', 'XVEC1', '1.0', 1.0),
-            'R': ('m', 'Minor radius', 'XVEC1', '0.01', 0.01),
-            'RHO': ('m', 'JETTO rho coordinate', 'XVEC1', '0.01', 0.01),
-            'PR': ('Pa', 'Pressure (from equilibrium)', 'XVEC1', '1.0', 1.0),
-            'Q': (None, 'q (safety factor)', 'XVEC1', '1.0', 1.0),
-            'NE': ('m-3', 'Electron Density', 'XVEC1', '1000000.0', 1000000.0),
-            'TE': ('eV', 'Electron Temperature', 'XVEC1', '1.0', 1.0),
-            'TI': ('eV', 'Ion Temperature', 'XVEC1', '1.0', 1.0),
-            'ZEFF': (None, 'Z-effective', 'XVEC1', '1.0', 1.0),
-            'ANGF': ('s-1', 'Angular Frequency', 'XVEC1', '1.0', 1.0),
-            'NIMP': ('m-3', 'Impurity 1 Density', 'XVEC1', '1000000.0', 1000000.0),
-            'NIMP2': ('m-3', 'Impurity 2 Density', 'XVEC1', '1000000.0', 1000000.0),
-            'NIMP3': ('m-3', 'Impurity 3 Density', 'XVEC1', '1000000.0', 1000000.0),
-            'NIMP4': ('m-3', 'Impurity 4 Density', 'XVEC1', '1000000.0', 1000000.0),
-            'NIMP5': ('m-3', 'Impurity 5 Density', 'XVEC1', '1000000.0', 1000000.0),
-            'NIMP6': ('m-3', 'Impurity 6 Density', 'XVEC1', '1000000.0', 1000000.0),
-            'NIMP7': ('m-3', 'Impurity 7 Density', 'XVEC1', '1000000.0', 1000000.0),
-            'TRQI': ('N m-2', 'Intrinsic Torque', 'XVEC1', '0.1', 0.1),
-            'PRAD': ('W m-3', 'Radiation', 'XVEC1', '0.1', 0.1),
-            'QNBE': ('W m-3', 'Power Density Electrons', 'XVEC1', '0.1', 0.1),
-            'QNBI': ('W m-3', 'Power Density Ions', 'XVEC1', '0.1', 0.1),
-            'SB1': ('m-3 s-1', 'Particle Source 1', 'XVEC1', '1000000.0', 1000000.0),
-            'SB2': ('m-3 s-1', 'Particle Source 2', 'XVEC1', '1000000.0', 1000000.0),
-            'JZNB': ('A m-2', 'NB Driven Curr.Dens', 'XVEC1', '1.0E7', 10000000.0),
-            'NB': ('m-3', 'Fast Ion Density', 'XVEC1', '1000000.0', 1000000.0),
-            'WFNB': ('J m-3', 'Fast Ion Energy Density', 'XVEC1', '0.1', 0.1),
-            'TORQ': ('N m-2', 'Torque', 'XVEC1', '0.1', 0.1),
-            'QRFE': ('W m-3', 'Power Density Electrons', 'XVEC1', '0.1', 0.1),
-            'QRFI': ('W m-3', 'Power Density Ions', 'XVEC1', '0.1', 0.1),
-            'RF': ('m-3', 'Fast Ion Density', 'XVEC1', '1000000.0', 1000000.0),
-            'WFRF': ('J m-3', 'Fast Ion Energy Density', 'XVEC1', '0.1', 0.1),
-            'QECE': ('W m-3', 'Power Density Electrons', 'XVEC1', '0.1', 0.1),
-            'JZEC': ('A m-2', 'ECRH Driven Curr.Dens', 'XVEC1', '1.0E7', 10000000.0),
-            'QEBE': ('W m-3', 'Power Density Electrons', 'XVEC1', '0.1', 0.1),
-            'QEBI': ('W m-3', 'Power Density Ions', 'XVEC1', '0.1', 0.1),
-            'JZEB': ('A m-2', 'EBW Driven Curr.Dens', 'XVEC1', '1.0E7', 10000000.0)
+            'ra': (None, 'Minor radius, normalised', 'XVEC1', '1.0', 1.0),
+            'xrho': (None, 'Normalised toroidal flux', 'XVEC1', '1.0', 1.0),
+            'psi': (None, 'Normalised poloidal flux', 'XVEC1', '1.0', 1.0),
+            'spsi': (None, 'Sqrt of normalised poloidal flux', 'XVEC1', '1.0', 1.0),
+            'r': ('m', 'Minor radius', 'XVEC1', '0.01', 0.01),
+            'rho': ('m', 'JETTO rho coordinate', 'XVEC1', '0.01', 0.01),
+            'pr': ('Pa', 'Pressure (from equilibrium)', 'XVEC1', '1.0', 1.0),
+            'q': (None, 'q (safety factor)', 'XVEC1', '1.0', 1.0),
+            'ne': ('m-3', 'Electron Density', 'XVEC1', '1000000.0', 1000000.0),
+            'te': ('eV', 'Electron Temperature', 'XVEC1', '1.0', 1.0),
+            'ti': ('eV', 'Ion Temperature', 'XVEC1', '1.0', 1.0),
+            'zeff': (None, 'Z-effective', 'XVEC1', '1.0', 1.0),
+            'angf': ('s-1', 'Angular Frequency', 'XVEC1', '1.0', 1.0),
+            'nimp': ('m-3', 'Impurity 1 Density', 'XVEC1', '1000000.0', 1000000.0),
+            'nimp2': ('m-3', 'Impurity 2 Density', 'XVEC1', '1000000.0', 1000000.0),
+            'nimp3': ('m-3', 'Impurity 3 Density', 'XVEC1', '1000000.0', 1000000.0),
+            'nimp4': ('m-3', 'Impurity 4 Density', 'XVEC1', '1000000.0', 1000000.0),
+            'nimp5': ('m-3', 'Impurity 5 Density', 'XVEC1', '1000000.0', 1000000.0),
+            'nimp6': ('m-3', 'Impurity 6 Density', 'XVEC1', '1000000.0', 1000000.0),
+            'nimp7': ('m-3', 'Impurity 7 Density', 'XVEC1', '1000000.0', 1000000.0),
+            'trqi': ('N m-2', 'Intrinsic Torque', 'XVEC1', '0.1', 0.1),
+            'prad': ('W m-3', 'Radiation', 'XVEC1', '0.1', 0.1),
+            'qnbe': ('W m-3', 'Power Density Electrons', 'XVEC1', '0.1', 0.1),
+            'qnbi': ('W m-3', 'Power Density Ions', 'XVEC1', '0.1', 0.1),
+            'sb1': ('m-3 s-1', 'Particle Source 1', 'XVEC1', '1000000.0', 1000000.0),
+            'sb2': ('m-3 s-1', 'Particle Source 2', 'XVEC1', '1000000.0', 1000000.0),
+            'jznb': ('A m-2', 'NB Driven Curr.Dens', 'XVEC1', '1.0E7', 10000000.0),
+            'nb': ('m-3', 'Fast Ion Density', 'XVEC1', '1000000.0', 1000000.0),
+            'wfnb': ('J m-3', 'Fast Ion Energy Density', 'XVEC1', '0.1', 0.1),
+            'torq': ('N m-2', 'Torque', 'XVEC1', '0.1', 0.1),
+            'qrfe': ('W m-3', 'Power Density Electrons', 'XVEC1', '0.1', 0.1),
+            'qrfi': ('W m-3', 'Power Density Ions', 'XVEC1', '0.1', 0.1),
+            'rf': ('m-3', 'Fast Ion Density', 'XVEC1', '1000000.0', 1000000.0),
+            'wfrf': ('J m-3', 'Fast Ion Energy Density', 'XVEC1', '0.1', 0.1),
+            'qece': ('W m-3', 'Power Density Electrons', 'XVEC1', '0.1', 0.1),
+            'jzec': ('A m-2', 'ECRH Driven Curr.Dens', 'XVEC1', '1.0E7', 10000000.0),
+            'qebe': ('W m-3', 'Power Density Electrons', 'XVEC1', '0.1', 0.1),
+            'qebi': ('W m-3', 'Power Density Ions', 'XVEC1', '0.1', 0.1),
+            'jzeb': ('A m-2', 'EBW Driven Curr.Dens', 'XVEC1', '1.0E7', 10000000.0)
         }
         lookup_jst = {
-            'CUR': ('A', 'Plasma Current', 'TVEC1', '1.0', 1.0)
+            'cur': ('A', 'Plasma Current', 'TVEC1', '1.0', 1.0)
         }
         lookup = lookup_jsp
         if target == 'jst':
             lookup = lookup_jst
         entry = None
         if fieldname in lookup:
-            entry = {'UNITS': None, 'DESC': '', 'SCSTR': '', 'XBASE': '', 'UID': '', 'DDA': '', 'DTYPE': '', 'SEQ': '0', 'SCALE': 1.0, 'LABEL': '', 'FORM': 'float', 'SECNUM': 5}
+            entry = {
+                'units': None,
+                'desc': '',
+                'scstr': '',
+                'xbase': '',
+                'uid': '',
+                'dda': '',
+                'dtype': '',
+                'seq': '0',
+                'scale': 1.0,
+                'label': '',
+                'form': 'float',
+                'section_number': 5
+            }
             unit, desc, xbase, scstr, sc = lookup[fieldname]
-            entry['UNITS'] = unit
-            entry['DESC'] = desc
-            entry['SCSTR'] = scstr
-            entry['XBASE'] = xbase
-            entry['SCALE'] = sc
-            entry['LABEL'] = fieldname
+            entry['units'] = unit
+            entry['desc'] = desc
+            entry['scstr'] = scstr
+            entry['xbase'] = xbase
+            entry['scale'] = sc
+            entry['label'] = fieldname
         return entry
 
 
     @classmethod
     def convert_jsp_to_exfile(cls, outname, runfolder='./', filename='jetto.jsp', outdir='./'):
         lookup = {
-            'XA': 'RA',
-            'XRHO': 'XRHO',
-            'XPSI': 'PSI',
-            'XPSQ': 'SPSI',
-            'R': 'R',
-            'RHO': 'RHO',
-            'PR': 'PR',
-            'Q': 'Q',
-            'NE': 'NE',
-            'TE': 'TE',
-            'TI': 'TI',
-            'ZEFF': 'ZEFF',
-            'ANGF': 'ANGF',
-            'NIM1': 'NIMP',
-            'NIM2': 'NIMP2',
-            'NIM3': 'NIMP3',
-            'NIM4': 'NIMP4',
-            'NIM5': 'NIMP5',
-            'NIM6': 'NIMP6',
-            'NIM7': 'NIMP7',
-            'TRQI': 'TRQI',
-            'QRAD': 'PRAD',
-            'QNBE': 'QNBE',
-            'QNBI': 'QNBI',
-            'SBD1': 'SB1',
-            'SBD2': 'SB2',
-            'JZNB': 'JZNB',
-            'DNBD': 'NB',
-            'WNBD': 'WFNB',
-            'TORQ': 'TORQ',
-            'QRFE': 'QRFE',
-            'QRFI': 'QRFI',
-            'DRFD': 'RF',
-            'WRFD': 'WFRF',
-            'QECE': 'QECE',
-            'JZEC': 'JZEC',
-            'QEBE': 'QEBE',
-            'QEBI': 'QEBI',
-            'JZEB': 'JZEB'
+            'xa': 'ra',
+            'xrho': 'xrho',
+            'xpsi': 'psi',
+            'xpsq': 'spsi',
+            'r': 'r',
+            'rho': 'rho',
+            'pr': 'pr',
+            'q': 'q',
+            'ne': 'ne',
+            'te': 'te',
+            'ti': 'ti',
+            'zeff': 'zeff',
+            'angf': 'angf',
+            'nim1': 'nimp',
+            'nim2': 'nimp2',
+            'nim3': 'nimp3',
+            'nim4': 'nimp4',
+            'nim5': 'nimp5',
+            'nim6': 'nimp6',
+            'nim7': 'nimp7',
+            'trqi': 'trqi',
+            'qrad': 'prad',
+            'qnbe': 'qnbe',
+            'qnbi': 'qnbi',
+            'sbd1': 'sb1',
+            'sbd2': 'sb2',
+            'jznb': 'jznb',
+            'dnbd': 'nb',
+            'wnbd': 'wfnb',
+            'torq': 'torq',
+            'qrfe': 'qrfe',
+            'qrfi': 'qrfi',
+            'drfd': 'rf',
+            'wrfd': 'wfrf',
+            'qece': 'qece',
+            'jzec': 'jzec',
+            'qebe': 'qebe',
+            'qebi': 'qebi',
+            'jzeb': 'jzeb'
         }
         status = 1
         idir = Path(runfolder)
@@ -915,15 +884,15 @@ class jintrac_io(io):
             iname = idir / filename
             idata = read_binary_file(str(iname.resolve()))
             if idata is not None:
-                odata = create_exfile_structure(idata['DDA NAME'], int(idata['SHOT']))
-                odata['XVEC1'] = copy.deepcopy(idata['XVEC1'])
-                odata['TVEC1'] = copy.deepcopy(idata['TIME'])
+                odata = create_exfile_structure(idata['dda_name'], int(idata['shot']))
+                odata['xvec1'] = copy.deepcopy(idata['xvec1'])
+                odata['tvec1'] = copy.deepcopy(idata['time'])
                 for var, exvar in lookup.items():
                     if var in idata and np.abs(np.sum(idata[var])) > 1.0e-10:
                         info = generate_entry_info(exvar)
-                        info['DDA'] = 'JSP'
-                        info['DTYPE'] = var
-                        odata['INFO'][exvar] = info
+                        info['dda'] = 'JSP'
+                        info['dtype'] = var
+                        odata['info'][exvar] = info
                         odata[exvar] = copy.deepcopy(idata[var])
                 odir = Path(outdir)
                 if not odir.is_dir():
