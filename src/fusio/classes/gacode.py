@@ -185,6 +185,7 @@ class gacode_io(io):
 
         if isinstance(path, (str, Path)):
             ipath = Path(path)
+            lines = []
             if ipath.is_file():
                 titles_single = self.titles_singleInt + self.titles_singleStr + self.titles_singleFloat
                 with open(ipath, 'r') as f:
