@@ -6,6 +6,7 @@ import numpy as np
 import xarray as xr
 from .io import io
 from ..utils.json_tools import serialize, deserialize
+from ..utils.plasma_tools import define_ion_species
 
 logger = logging.getLogger('fusio')
 
@@ -325,6 +326,25 @@ class torax_io(io):
             ],
         },
     }
+    allowed_radiation_species = [
+        'H',
+        'D',
+        'T',
+        'He3',
+        'He4',
+        'Li',
+        'Be',
+        'C',
+        'N',
+        'O',
+        'N',
+        'O',
+        'Ne',
+        'Ar',
+        'Kr',
+        'Xe',
+        'W',
+    ]
 
 
     def __init__(self, *args, **kwargs):
@@ -805,21 +825,46 @@ class torax_io(io):
                     data_vars['runtime_params.plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(density, axis=1))
                 if 'z' in data and 'mass' in data and 'ni' in data and 'ne' in data:
                     nfilt = (~np.isclose(data['z'], 1.0))
-                    zeff = np.ones_like(data['ne'].to_numpy())
+                    zeff = np.ones_like(data['ne'].to_numpy().flatten())
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
-                        attrs['runtime_params.plasma_composition.impurity'] = 'C'
-                        zeff = np.zeros_like(data['ne'].to_numpy())
-                        nzave = np.zeros_like(data['ne'].to_numpy())
+                        impcomp = {}
+                        zeff = np.zeros_like(data['ne'].to_numpy().flatten())
+                        nsum = np.zeros_like(data['ne'].to_numpy().flatten())
                         for ii in range(len(data['name'])):
                             sdata = data.isel(name=ii)
-                            if sdata['name'] in namelist:
-                                nzave += sdata['ni'].to_numpy().flatten() * sdata['z'].to_numpy().flatten() / data['ne'].to_numpy().flatten()
-                            else:
-                                zeff += sdata['ni'].to_numpy().flatten() * sdata['z'].to_numpy().flatten() ** 2.0 / data['ne'].to_numpy().flatten()
-                        zeff += nzave * 6.0
+                            if sdata['name'] in namelist and 'therm' in str(sdata['type'].to_numpy()):
+                                sname = str(sdata['name'].to_numpy())
+                                if sname not in newobj.allowed_radiation_species:
+                                    sn, sa, sz = define_ion_species(short_name=sname)
+                                    if sz > 60.0:
+                                        sname = 'W'
+                                    if sz > 48.0:
+                                        sname = 'Xe'
+                                    if sz > 30.0:
+                                        sname = 'Kr'
+                                    if sz > 14.0:
+                                        sname = 'Ar'
+                                    if sz > 6.0:
+                                        sname = 'Ne'
+                                    if sz > 1.0:
+                                        sname = 'C'
+                                    if sn == 'He':
+                                        sname = 'He4'
+                                impcomp[sname] = sdata['ni'].to_numpy().flatten()
+                                nsum += sdata['ni'].to_numpy().flatten()
+                            zeff += sdata['ni'].to_numpy().flatten() * sdata['z'].to_numpy().flatten() ** 2.0 / data['ne'].to_numpy().flatten()
+                        total = 0.0
+                        for key in impcomp:
+                            impcomp[key] = float(np.mean(impcomp[key] / nsum))
+                            total += impcomp[key]
+                        for key in impcomp:
+                            impcomp[key] = impcomp[key] / total
                         if 'z_eff' in data:
                             zeff = data['z_eff'].to_numpy().flatten()
+                        if not impcomp:
+                            impcomp['Ne'] = 1.0
+                        attrs['runtime_params.plasma_composition.impurity'] = impcomp
                     data_vars['runtime_params.plasma_composition.Zeff'] = (['time', 'rho'], np.expand_dims(zeff, axis=0))
                 if 'current' in data:
                     data_vars['runtime_params.profile_conditions.Ip_tot'] = (['time'], np.expand_dims(data['current'].mean(), axis=0))
