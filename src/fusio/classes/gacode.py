@@ -262,7 +262,7 @@ class gacode_io(io):
             for key, val in profiles.items():
                 if key in ['rho', 'polflux', 'rmin']:
                     coords[key] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
-                elif key in ['ni', 'ti']:
+                elif key in ['ni', 'ti', 'vtor', 'vpol']:
                     data_vars[key] = ([ncoord, rcoord, scoord], np.expand_dims(val, axis=0))
                 elif key in ['w0']:
                     data_vars['omega0'] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
