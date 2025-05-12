@@ -508,7 +508,30 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_default_transport(self):
+    def add_qualikiz_transport(self):
+        newattrs = {}
+        newattrs['transport.transport_model'] = 'qualikiz'
+        newattrs['transport.maxruns'] = 10
+        newattrs['transport.numprocs'] = 2
+        newattrs['transport.smoothing_sigma'] = 0.1
+        newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('runtime_params.profile_conditions.set_pedestal', False))
+        newattrs['transport.coll_mult'] = 1.0
+        newattrs['transport.DVeff'] = False
+        newattrs['transport.An_min'] = 0.05
+        newattrs['transport.avoid_big_negative_s'] = True
+        newattrs['transport.smag_alpha_correction'] = True
+        newattrs['transport.q_sawtooth_proxy'] = True
+        self.update_input_attrs(newattrs)
+
+
+    def set_qualikiz_model_path(self, path):
+        newattrs = {}
+        if self.input.attrs.get('transport.transport_model', '') == 'qualikiz':
+            newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'
+        self.update_input_attrs(newattrs)
+
+
+    def add_qlknn_transport(self):
         newattrs = {}
         newattrs['transport.transport_model'] = 'qlknn'
         newattrs['transport.chimin'] = 0.05
@@ -783,6 +806,7 @@ class torax_io(io):
         if not use_psi:
             datadict.pop('runtime_params.profile_conditions.psi', None)
         datadict.pop('runtime_params.profile_conditions.q', None)
+        datadict.pop('TORAX_QLK_EXEC_PATH', None)
         return self._unflatten(datadict)
 
 
