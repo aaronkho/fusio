@@ -185,6 +185,7 @@ class gacode_io(io):
 
         if isinstance(path, (str, Path)):
             ipath = Path(path)
+            lines = []
             if ipath.is_file():
                 titles_single = self.titles_singleInt + self.titles_singleStr + self.titles_singleFloat
                 with open(ipath, 'r') as f:
@@ -261,7 +262,7 @@ class gacode_io(io):
             for key, val in profiles.items():
                 if key in ['rho', 'polflux', 'rmin']:
                     coords[key] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
-                elif key in ['ni', 'ti']:
+                elif key in ['ni', 'ti', 'vtor', 'vpol']:
                     data_vars[key] = ([ncoord, rcoord, scoord], np.expand_dims(val, axis=0))
                 elif key in ['w0']:
                     data_vars['omega0'] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
@@ -338,9 +339,10 @@ class gacode_io(io):
             with open(opath, 'w') as f:
                 f.writelines(lines)
             logger.info(f'Saved {self.format} data into {opath.resolve()}')
-
+            #else:
+            #    logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
         else:
-            logger.error(f'Attempting to write empty {self.format} class instance... Failed!')
+            logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
     @classmethod
@@ -382,11 +384,12 @@ class gacode_io(io):
                 data_vars['ze'] = (['n'], [-1.0])
                 if 'Phib' in data:
                     data_vars['torfluxa'] = (['n'], data['Phib'].to_numpy().flatten())
-                'rcentr'
+                if 'Rmaj' in data:
+                    data_vars['rcentr'] = (['n'], data['Rmaj'].to_numpy().flatten())
                 if 'B0' in data:
                     data_vars['bcentr'] = (['n'], data['B0'].to_numpy().flatten())
                 if 'Ip_total' in data:
-                    data_vars['current'] = (['n'], data['Ip_total'].to_numpy().flatten())
+                    data_vars['current'] = (['n'], 1.0e-6 * data['Ip_total'].to_numpy().flatten())
                 if 'q_face' in data:
                     q = data['q_face'].to_numpy().flatten()
                     data_vars['q'] = (['n', 'rho'], np.expand_dims(q[:-1] + 0.5 * np.diff(q), axis=0))
@@ -449,7 +452,10 @@ class gacode_io(io):
                     data_vars['mass'] = (['n', 'name'], np.expand_dims(masses, axis=0))
                     data_vars['z'] = (['n', 'name'], np.expand_dims(zs, axis=0))
                 if 'temp_ion' in data:
-                    data_vars['ti'] = (['n', 'rho'], np.expand_dims(data['temp_ion'].to_numpy().flatten(), axis=0))
+                    ti = np.expand_dims(data['temp_ion'].to_numpy().flatten(), axis=-1)
+                    if 'name' in coords and len(coords['name']) > 1:
+                        ti = np.repeat(ti, len(coords['name']), axis=-1)
+                    data_vars['ti'] = (['n', 'rho', 'name'], np.expand_dims(ti, axis=0))
                 if 'ne' in data:
                     nref = data['nref'].to_numpy().flatten() if 'nref' in data else np.array([1.0e20])
                     data_vars['ne'] = (['n', 'rho'], np.expand_dims(1.0e-19 * data['ne'].to_numpy().flatten() * nref, axis=0))
@@ -464,11 +470,11 @@ class gacode_io(io):
                     data_vars['qrfi'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['generic_ion_el_heat_source_ion'].to_numpy().flatten(), axis=0))
                     #data_vars['qbeami'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['generic_ion_el_heat_source_ion'].to_numpy().flatten(), axis=0))
                 if 'cyclotron_radiation_heat_sink_el' in data:
-                    data_vars['qsync'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['cyclotron_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qsync'] = (['n', 'rho'], np.expand_dims(-1.0e-6 * data['cyclotron_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
                 if 'bremsstrahlung_heat_sink_el' in data:
-                    data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['bremsstrahlung_heat_sink_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(-1.0e-6 * data['bremsstrahlung_heat_sink_el'].to_numpy().flatten(), axis=0))
                 if 'impurity_radiation_heat_sink_el' in data:
-                    data_vars['qline'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['impurity_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
+                    data_vars['qline'] = (['n', 'rho'], np.expand_dims(-1.0e-6 * data['impurity_radiation_heat_sink_el'].to_numpy().flatten(), axis=0))
                 if 'fusion_heat_source_el' in data:
                     data_vars['qfuse'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['fusion_heat_source_el'].to_numpy().flatten(), axis=0))
                 if 'fusion_heat_source_ion' in data:

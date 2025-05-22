@@ -6,6 +6,7 @@ import numpy as np
 import xarray as xr
 from .io import io
 from ..utils.json_tools import serialize, deserialize
+from ..utils.plasma_tools import define_ion_species
 
 logger = logging.getLogger('fusio')
 
@@ -325,6 +326,25 @@ class torax_io(io):
             ],
         },
     }
+    allowed_radiation_species = [
+        'H',
+        'D',
+        'T',
+        'He3',
+        'He4',
+        'Li',
+        'Be',
+        'C',
+        'N',
+        'O',
+        'N',
+        'O',
+        'Ne',
+        'Ar',
+        'Kr',
+        'Xe',
+        'W',
+    ]
 
 
     def __init__(self, *args, **kwargs):
@@ -400,6 +420,16 @@ class torax_io(io):
             if ipath.exists():
                 dt = xr.open_datatree(ipath)
                 ds = xr.combine_by_coords([dt[key].to_dataset() for key in dt.groups], compat="override")
+                newattrs = {}
+                for attr in ds.attrs:
+                    if isinstance(ds.attrs[attr], str):
+                        if ds.attrs[attr].startswith('dict'):
+                            newattrs[attr] = json.loads(ds.attrs[attr][4:])
+                        if ds.attrs[attr] == 'true':
+                            newattrs[attr] = True
+                        if ds.attrs[attr] == 'false':
+                            newattrs[attr] = False
+                ds.attrs.update(newattrs)
         return ds
 
 
@@ -408,11 +438,19 @@ class torax_io(io):
             opath = Path(path)
             if overwrite or not opath.exists():
                 if isinstance(data, (xr.Dataset, xr.DataTree)):
-                    data.to_netcdf(dump_path)
+                    newattrs = {}
+                    for attr in data.attrs:
+                        if isinstance(data.attrs[attr], dict):
+                            newattrs[attr] = 'dict' + json.dumps(data.attrs[attr])
+                        if isinstance(data.attrs[attr], bool):
+                            newattrs[attr] = str(data.attrs[attr])
+                    data.attrs.update(newattrs)
+                    data.to_netcdf(opath)
+                    logger.info(f'Saved {self.format} data into {opath.resolve()}')
             else:
-                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting dump...')
+                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
         else:
-            logger.warning(f'Invalid path argument given to {self.format} write function! Aborting dump...')
+            logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
     def add_output_dir(self, outdir):
@@ -424,11 +462,10 @@ class torax_io(io):
 
     def add_geometry(self, geotype, geofile, geodir=None):
         newattrs = {}
-        #if 'runtime_params.profile_conditions.psi' in self._input:
-            #del self._input['runtime_params.profile_conditions.psi']
         newattrs['use_psi'] = False
+        #newattrs['runtime_params.profile_conditions.initial_psi_from_j'] = True
+        #newattrs['runtime_params.profile_conditions.initial_j_is_total_current'] = True
         newattrs['geometry.geometry_type'] = f'{geotype}'
-        newattrs['geometry.n_rho'] = 25
         newattrs['geometry.hires_fac'] = 4
         newattrs['geometry.geometry_file'] = f'{geofile}'
         if geodir is not None:
@@ -436,7 +473,7 @@ class torax_io(io):
         newattrs['geometry.Ip_from_parameters'] = bool(self.input.attrs.get('runtime_params.profile_conditions.Ip_tot', False))
         if geotype == 'eqdsk':
             newattrs['geometry.n_surfaces'] = 100
-            newattrs['geometry.last_surface_factor'] = 0.995
+            newattrs['geometry.last_surface_factor'] = 0.99
         self.update_input_attrs(newattrs)
 
 
@@ -451,6 +488,8 @@ class torax_io(io):
         newattrs['pedestal.neped_is_fGW'] = False
         newattrs['pedestal.ion_electron_temperature_ratio'] = {0.0: float(tpedratio)}
         newattrs['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
+        newattrs['runtime_params.numerics.largeValue_T'] = 2.0e10
+        newattrs['runtime_params.numerics.largeValue_n'] = 2.0e8
         self.update_input_attrs(newattrs)
 
 
@@ -469,7 +508,30 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_default_transport(self):
+    def add_qualikiz_transport(self):
+        newattrs = {}
+        newattrs['transport.transport_model'] = 'qualikiz'
+        newattrs['transport.maxruns'] = 10
+        newattrs['transport.numprocs'] = 2
+        newattrs['transport.smoothing_sigma'] = 0.1
+        newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('runtime_params.profile_conditions.set_pedestal', False))
+        newattrs['transport.coll_mult'] = 1.0
+        newattrs['transport.DVeff'] = False
+        newattrs['transport.An_min'] = 0.05
+        newattrs['transport.avoid_big_negative_s'] = True
+        newattrs['transport.smag_alpha_correction'] = True
+        newattrs['transport.q_sawtooth_proxy'] = True
+        self.update_input_attrs(newattrs)
+
+
+    def set_qualikiz_model_path(self, path):
+        newattrs = {}
+        if self.input.attrs.get('transport.transport_model', '') == 'qualikiz':
+            newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'
+        self.update_input_attrs(newattrs)
+
+
+    def add_qlknn_transport(self):
         newattrs = {}
         newattrs['transport.transport_model'] = 'qlknn'
         newattrs['transport.chimin'] = 0.05
@@ -526,34 +588,32 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.qei_source.mode'] = 'MODEL_BASED'
         newattrs['sources.qei_source.Qei_mult'] = 1.0
-        if newattrs:
-            self.delete_input_attrs(['sources.qei_source.prescribed_values'])
         self.update_input_attrs(newattrs)
 
 
     def reset_ohmic_source(self):
         newattrs = {}
         newattrs['sources.ohmic_heat_source.mode'] = 'MODEL_BASED'
-        if newattrs:
-            self.delete_input_attrs(['sources.ohmic_heat_source.prescribed_values'])
         self.update_input_attrs(newattrs)
 
 
     def reset_fusion_source(self):
         newattrs = {}
         newattrs['sources.fusion_heat_source.mode'] = 'MODEL_BASED'
-        if newattrs:
-            self.delete_input_attrs(['sources.fusion_heat_source.prescribed_values'])
         self.update_input_attrs(newattrs)
 
 
     def reset_gas_puff_source(self):
         newattrs = {}
+        newattrs['sources.gas_puff_source.mode'] = 'ZERO'
+        self.update_input_attrs(newattrs)
+
+
+    def set_gas_puff_source(self, length, total):
+        newattrs = {}
         newattrs['sources.gas_puff_source.mode'] = 'MODEL_BASED'
-        newattrs['sources.gas_puff_source.puff_decay_length'] = {0.0: 0.05}
-        newattrs['sources.gas_puff_source.S_puff_tot'] = {0.0: 1.0e22}
-        if newattrs:
-            self.delete_input_attrs(['sources.gas_puff_source.prescribed_values'])
+        newattrs['sources.gas_puff_source.puff_decay_length'] = {0.0: length}
+        newattrs['sources.gas_puff_source.S_puff_tot'] = {0.0: total}
         self.update_input_attrs(newattrs)
 
 
@@ -561,8 +621,6 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.j_bootstrap.mode'] = 'MODEL_BASED'
         newattrs['sources.j_bootstrap.bootstrap_mult'] = 1.0
-        if newattrs:
-            self.delete_input_attrs(['sources.j_bootstrap.prescribed_values'])
         self.update_input_attrs(newattrs)
 
 
@@ -570,8 +628,6 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.bremsstrahlung_heat_sink.mode'] = 'MODEL_BASED'
         newattrs['sources.bremsstrahlung_heat_sink.use_relativistic_correction'] = True
-        if newattrs:
-            self.delete_input_attrs(['sources.bremsstrahlung_heat_sink.prescribed_values'])
         self.update_input_attrs(newattrs)
 
 
@@ -580,14 +636,8 @@ class torax_io(io):
         newattrs['sources.impurity_radiation_heat_sink.mode'] = 'MODEL_BASED'
         newattrs['sources.impurity_radiation_heat_sink.model_function_name'] = 'impurity_radiation_mavrin_fit'
         newattrs['sources.impurity_radiation_heat_sink.radiation_multiplier'] = 1.0
+        # Mavrin polynomial model includes Bremsstrahlung so zero that out as well
         newattrs['sources.bremsstrahlung_heat_sink.mode'] = 'ZERO'
-        if newattrs:
-            # Mavrin polynomial model includes Bremsstrahlung so zero that out as well
-            self.delete_input_attrs([
-                'sources.impurity_radiation_heat_sink.prescribed_values',
-                'sources.bremsstrahlung_heat_sink.prescribed_values',
-                'sources.bremsstrahlung_heat_sink.use_relativistic_correction',
-            ])
         self.update_input_attrs(newattrs)
 
 
@@ -595,24 +645,53 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.cyclotron_radiation_heat_sink.mode'] = 'MODEL_BASED'
         newattrs['sources.cyclotron_radiation_heat_sink.wall_reflection_coeff'] = 0.9
-        if newattrs:
-            self.delete_input_attrs(['sources.cyclotron_radiation_heat_sink.prescribed_values'])
         self.update_input_attrs(newattrs)
 
 
     def reset_generic_heat_source(self):
         newattrs = {}
+        newattrs['sources.generic_ion_el_heat_source.mode'] = 'ZERO'
+        self.update_input_attrs(newattrs)
+
+
+    def reset_generic_particle_source(self):
+        newattrs = {}
+        newattrs['sources.generic_particle_source.mode'] = 'ZERO'
+        self.update_input_attrs(newattrs)
+
+
+    def reset_generic_current_source(self):
+        newattrs = {}
+        newattrs['sources.generic_current_source.mode'] = 'ZERO'
+        self.update_input_attrs(newattrs)
+
+
+    def set_gaussian_generic_heat_source(self, mu, sigma, total, efrac=0.5):
+        newattrs = {}
         newattrs['sources.generic_ion_el_heat_source.mode'] = 'MODEL_BASED'
-        newattrs['sources.generic_ion_el_heat_source.rsource'] = {0.0: 0.0}
-        newattrs['sources.generic_ion_el_heat_source.w'] = {0.0: 0.1}
-        newattrs['sources.generic_ion_el_heat_source.Ptot'] = {0.0: 0.0}
-        newattrs['sources.generic_ion_el_heat_source.el_heat_fraction'] = {0.0: 0.5}
-        if newattrs:
-            self.delete_input_attrs([
-                'sources.generic_ion_el_heat_source.prescribed_values',
-                'sources.generic_ion_el_heat_source.prescribed_values_el',
-                'sources.generic_ion_el_heat_source.prescribed_values_ion',
-            ])
+        newattrs['sources.generic_ion_el_heat_source.rsource'] = {0.0: mu}
+        newattrs['sources.generic_ion_el_heat_source.w'] = {0.0: sigma}
+        newattrs['sources.generic_ion_el_heat_source.Ptot'] = {0.0: total}
+        newattrs['sources.generic_ion_el_heat_source.el_heat_fraction'] = {0.0: efrac}
+        self.update_input_attrs(newattrs)
+
+
+    def set_gaussian_generic_particle_source(self, mu, sigma, total):
+        newattrs = {}
+        newattrs['sources.generic_particle_source.mode'] = 'MODEL_BASED'
+        newattrs['sources.generic_particle_source.deposition_location'] = {0.0: mu}
+        newattrs['sources.generic_particle_source.particle_width'] = {0.0: sigma}
+        newattrs['sources.generic_particle_source.S_tot'] = {0.0: total}
+        self.update_input_attrs(newattrs)
+
+
+    def set_gaussian_generic_current_source(self, mu, sigma, total):
+        newattrs = {}
+        newattrs['sources.generic_current_source.mode'] = 'MODEL_BASED'
+        newattrs['sources.generic_current_source.rext'] = {0.0: mu}
+        newattrs['sources.generic_current_source.wext'] = {0.0: sigma}
+        newattrs['sources.generic_current_source.Iext'] = {0.0: 1.0e-6 * total}
+        newattrs['sources.generic_current_source.use_absolute_current'] = True
         self.update_input_attrs(newattrs)
 
 
@@ -649,6 +728,7 @@ class torax_io(io):
 
     def set_numerics(self, t_initial, t_final, eqs=['te', 'ti', 'ne', 'j'], dtmult=None):
         newattrs = {}
+        newattrs['geometry.n_rho'] = 25
         newattrs['runtime_params.numerics.t_initial'] = float(t_initial)
         newattrs['runtime_params.numerics.t_final'] = float(t_final)
         newattrs['runtime_params.numerics.exact_t_final'] = True
@@ -683,19 +763,50 @@ class torax_io(io):
                     for ii in range(len(time)):
                         time_dependent_var[float(time[ii])] = float(ds[key].isel(time=ii).to_numpy().flatten())
                 datadict[key] = time_dependent_var
-        if 'sources.generic_ion_el_heat_source.prescribed_values_el' in datadict and 'sources.generic_ion_el_heat_source.prescribed_values_ion' in datadict:
+        srctags = [
+            'sources.qei_source',
+            'sources.ohmic_heat_source',
+            'sources.fusion_heat_source',
+            'sources.gas_puff_source',
+            'sources.j_ohmic',
+            'sources.j_bootstrap',
+            'sources.bremsstrahlung_heat_sink',
+            'sources.impurity_radiation_heat_sink',
+            'sources.cyclotron_radiation_heat_sink',
+            'sources.generic_ion_el_heat_source',
+            'sources.generic_particle_source',
+            'sources.generic_current_source',
+        ]
+        for srctag in srctags:
+            if datadict.get(f'{srctag}.mode', 'MODEL_BASED') != 'PRESCRIBED':
+                src = datadict.pop(f'{srctag}.prescribed_values', None)
+                if srctag in ['sources.j_ohmic', 'sources.j_bootstrap']:
+                    tag = 'sources.generic_current_source.prescribed_values'
+                    if isinstance(src, dict) and tag in datadict:
+                        newsource = {t: (copy.deepcopy(datadict[tag][t][0]), datadict[tag][t][1] - src[t][1]) for t in datadict[tag] if t in src}
+                        datadict[tag] = newsource
+                if srctag in ['sources.bremsstrahlung_heat_sink']:
+                    datadict.pop('sources.bremsstrahlung_heat_sink.use_relativistic_correction', None)
+                if srctag in ['sources.generic_ion_el_heat_source']:
+                    datadict.pop(f'{srctag}.prescribed_values_el', None)
+                    datadict.pop(f'{srctag}.prescribed_values_ion', None)
+        if (
+            datadict.get('sources.generic_ion_el_heat_source.mode', 'MODEL_BASED') == 'PRESCRIBED' and
+            'sources.generic_ion_el_heat_source.prescribed_values_el' in datadict and
+            'sources.generic_ion_el_heat_source.prescribed_values_ion' in datadict
+        ):
             e_source = datadict.pop('sources.generic_ion_el_heat_source.prescribed_values_el')
             i_source = datadict.pop('sources.generic_ion_el_heat_source.prescribed_values_ion')
-            time = [t for t in e_source]
-            source = {t: (e_source[t][0], e_source[t][1] + i_source[t][1]) for t in time}
-            fraction = {t: float((e_source[t][1] / (e_source[t][1] + i_source[t][1]))[0]) for t in time}
+            source = {t: (copy.deepcopy(e_source[t][0]), e_source[t][1] + i_source[t][1]) for t in e_source}
+            fraction = {t: float((e_source[t][1] / (e_source[t][1] + i_source[t][1]))[0]) for t in e_source}
             datadict['sources.generic_ion_el_heat_source.prescribed_values'] = source
             datadict['sources.generic_ion_el_heat_source.el_heat_fraction'] = fraction
             #datadict['sources.generic_ion_el_heat_source.prescribed_values'] = ((e_source, i_source), {'time_interpolation_mode': 'PIECEWISE_LINEAR', 'rho_interpolation_mode': 'PIECEWISE_LINEAR'})
-        if 'use_psi' in datadict:
-            use_psi = datadict.pop('use_psi')
-            if not use_psi:
-                datadict.pop('runtime_params.profile_conditions.psi', None)
+        use_psi = datadict.pop('use_psi', True)
+        if not use_psi:
+            datadict.pop('runtime_params.profile_conditions.psi', None)
+        datadict.pop('runtime_params.profile_conditions.q', None)
+        datadict.pop('TORAX_QLK_EXEC_PATH', None)
         return self._unflatten(datadict)
 
 
@@ -738,19 +849,46 @@ class torax_io(io):
                     data_vars['runtime_params.plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(density, axis=1))
                 if 'z' in data and 'mass' in data and 'ni' in data and 'ne' in data:
                     nfilt = (~np.isclose(data['z'], 1.0))
-                    zeff = np.ones_like(data['ne'].to_numpy())
+                    zeff = np.ones_like(data['ne'].to_numpy().flatten())
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
-                        attrs['runtime_params.plasma_composition.impurity'] = 'Ne'
-                        zeff = np.zeros_like(data['ne'].to_numpy())
-                        nzave = np.zeros_like(data['ne'].to_numpy())
+                        impcomp = {}
+                        zeff = np.zeros_like(data['ne'].to_numpy().flatten())
+                        nsum = np.zeros_like(data['ne'].to_numpy().flatten())
                         for ii in range(len(data['name'])):
                             sdata = data.isel(name=ii)
-                            if sdata['name'] in namelist:
-                                nzave += sdata['ni'].to_numpy().flatten() * sdata['z'].to_numpy().flatten() / data['ne'].to_numpy().flatten()
-                            else:
-                                zeff += sdata['ni'].to_numpy().flatten() * sdata['z'].to_numpy().flatten() ** 2.0 / data['ne'].to_numpy().flatten()
-                        zeff += nzave * 10.0
+                            if sdata['name'] in namelist and 'therm' in str(sdata['type'].to_numpy()):
+                                sname = str(sdata['name'].to_numpy())
+                                if sname not in newobj.allowed_radiation_species:
+                                    sn, sa, sz = define_ion_species(short_name=sname)
+                                    if sz > 60.0:
+                                        sname = 'W'
+                                    if sz > 48.0:
+                                        sname = 'Xe'
+                                    if sz > 30.0:
+                                        sname = 'Kr'
+                                    if sz > 14.0:
+                                        sname = 'Ar'
+                                    if sz > 6.0:
+                                        sname = 'Ne'
+                                    if sz > 1.0:
+                                        sname = 'C'
+                                    if sn == 'He':
+                                        sname = 'He4'
+                                impcomp[sname] = sdata['ni'].to_numpy().flatten()
+                                nsum += sdata['ni'].to_numpy().flatten()
+                            zeff += sdata['ni'].to_numpy().flatten() * sdata['z'].to_numpy().flatten() ** 2.0 / data['ne'].to_numpy().flatten()
+                        total = 0.0
+                        for key in impcomp:
+                            impcomp[key] = float(np.mean(impcomp[key] / nsum))
+                            total += impcomp[key]
+                        for key in impcomp:
+                            impcomp[key] = impcomp[key] / total
+                        if 'z_eff' in data:
+                            zeff = data['z_eff'].to_numpy().flatten()
+                        if not impcomp:
+                            impcomp['Ne'] = 1.0
+                        attrs['runtime_params.plasma_composition.impurity'] = impcomp
                     data_vars['runtime_params.plasma_composition.Zeff'] = (['time', 'rho'], np.expand_dims(zeff, axis=0))
                 if 'current' in data:
                     data_vars['runtime_params.profile_conditions.Ip_tot'] = (['time'], np.expand_dims(data['current'].mean(), axis=0))
@@ -769,7 +907,10 @@ class torax_io(io):
                         tfuel = data['ti'].sel(name=namelist).mean('name')
                     data_vars['runtime_params.profile_conditions.Ti'] = (['time', 'rho'], np.expand_dims(tfuel.to_numpy().flatten(), axis=0))
                 if 'polflux' in data:
+                    attrs['use_psi'] = True
                     data_vars['runtime_params.profile_conditions.psi'] = (['time', 'rho'], np.expand_dims(data['polflux'].to_numpy().flatten(), axis=0))
+                if 'q' in data:
+                    data_vars['runtime_params.profile_conditions.q'] = (['time', 'rho'], np.expand_dims(data['q'].to_numpy().flatten(), axis=0))
                 # Place the sources
                 external_el_heat_source = None
                 external_ion_heat_source = None
@@ -824,9 +965,14 @@ class torax_io(io):
                 if 'jbs' in data and data['jbs'].sum() != 0.0:
                     attrs['sources.j_bootstrap.mode'] = 'PRESCRIBED'
                     data_vars['sources.j_bootstrap.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['jbs'].to_numpy().flatten(), axis=0))
+                    if external_current_source is None:
+                        external_current_source = np.zeros_like(data['jbs'].to_numpy().flatten())
+                    external_current_source += 1.0e6 * data['jbs'].to_numpy().flatten()
                 #if 'jbstor' in data and data['jbstor'].sum() != 0.0:
                 #    pass
                 if 'johm' in data and data['johm'].sum() != 0.0:
+                    #attrs['sources.j_ohmic.mode'] = 'PRESCRIBED'
+                    data_vars['sources.j_ohmic.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['johm'].to_numpy().flatten(), axis=0))
                     if external_current_source is None:
                         external_current_source = np.zeros_like(data['johm'].to_numpy().flatten())
                     external_current_source += 1.0e6 * data['johm'].to_numpy().flatten()
@@ -849,14 +995,9 @@ class torax_io(io):
                 #if 'qmom' in data and data['qmom'].sum() != 0.0:
                 #    pass
                 if external_el_heat_source is not None:
-                    #total_heat_source = copy.deepcopy(external_el_heat_source)
-                    #if external_ion_heat_source is not None:
-                    #    total_heat_source += external_ion_heat_source
-                    #el_heat_fraction = (external_el_heat_source / total_heat_source).mean()
                     attrs['sources.generic_ion_el_heat_source.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_ion_el_heat_source.prescribed_values_el'] = (['time', 'rho'], np.expand_dims(external_ion_heat_source, axis=0))
                     data_vars['sources.generic_ion_el_heat_source.prescribed_values_ion'] = (['time', 'rho'], np.expand_dims(external_el_heat_source, axis=0))
-                    #data_vars['sources.generic_ion_el_heat_source.el_heat_fraction'] = (['time'], np.expand_dims([el_heat_fraction], axis=0))
                 if external_particle_source is not None:
                     attrs['sources.generic_particle_source.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_particle_source.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_particle_source, axis=0))
