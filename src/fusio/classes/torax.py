@@ -706,9 +706,9 @@ class torax_io(io):
         newattrs['sources.impurity_radiation.mode'] = 'MODEL_BASED'
         newattrs['sources.impurity_radiation.model_name'] = 'mavrin_fit'
         newattrs['sources.impurity_radiation.radiation_multiplier'] = 1.0
-        # Mavrin polynomial model includes Bremsstrahlung so zero that out as well
-        newattrs['sources.bremsstrahlung.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        # Mavrin polynomial model includes Bremsstrahlung so zero that out as well
+        self.reset_bremsstrahlung_source()
 
 
     def set_synchrotron_source(self):
@@ -847,8 +847,6 @@ class torax_io(io):
             'sources.ohmic',
             'sources.fusion',
             'sources.gas_puff',
-            #'sources.j_ohmic',
-            #'sources.j_bootstrap',
             'sources.bremsstrahlung',
             'sources.impurity_radiation',
             'sources.cyclotron_radiation',
@@ -859,11 +857,6 @@ class torax_io(io):
         for srctag in srctags:
             if datadict.get(f'{srctag}.mode', 'MODEL_BASED') != 'PRESCRIBED':
                 src = datadict.pop(f'{srctag}.prescribed_values', None)
-                #if srctag in ['sources.j_ohmic', 'sources.j_bootstrap']:
-                #    tag = 'sources.generic_current.prescribed_values'
-                #    if isinstance(src, dict) and tag in datadict:
-                #        newsource = {t: (copy.deepcopy(datadict[tag][t][0]), datadict[tag][t][1] - src[t][1]) for t in datadict[tag] if t in src}
-                #        datadict[tag] = newsource
                 if srctag in ['sources.bremsstrahlung']:
                     datadict.pop('sources.bremsstrahlung.use_relativistic_correction', None)
                 if srctag in ['sources.generic_heat']:
@@ -908,7 +901,6 @@ class torax_io(io):
                 data = data.sel(n=n)
                 time = data.get('time', 0.0)
                 attrs['numerics.t_initial'] = float(time)
-                #attrs['numerics.nref'] = 1.0e20
                 coords['time'] = np.array([time])
                 coords['rho'] = data['rho'].to_numpy().flatten()
                 if 'z' in data and 'name' in data and 'type' in data and 'ni' in data:
@@ -974,7 +966,6 @@ class torax_io(io):
                 if 'current' in data:
                     data_vars['profile_conditions.Ip'] = (['time'], np.expand_dims(data['current'].mean(), axis=0))
                 if 'ne' in data:
-                    #nref = attrs.get('runtime_params.numerics.nref', 1.0e20)
                     data_vars['profile_conditions.n_e'] = (['time', 'rho'], np.expand_dims(1.0e19 * data['ne'].to_numpy().flatten(), axis=0))
                     attrs['profile_conditions.normalize_n_e_to_nbar'] = False
                     attrs['profile_conditions.n_e_nbar_is_fGW'] = False
@@ -1044,8 +1035,6 @@ class torax_io(io):
                 #if 'qcxi' in data and data['qcxi'].sum() != 0.0:
                 #    pass
                 if 'jbs' in data and data['jbs'].sum() != 0.0:
-                    #attrs['sources.j_bootstrap.mode'] = 'PRESCRIBED'
-                    #data_vars['sources.j_bootstrap.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['jbs'].to_numpy().flatten(), axis=0))
                     data_vars['profile_conditions.j_bootstrap'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['jbs'].to_numpy().flatten(), axis=0))
                     if external_current_source is None:
                         external_current_source = np.zeros_like(data['jbs'].to_numpy().flatten())
@@ -1053,7 +1042,6 @@ class torax_io(io):
                 #if 'jbstor' in data and data['jbstor'].sum() != 0.0:
                 #    pass
                 if 'johm' in data and data['johm'].sum() != 0.0:
-                    #attrs['sources.j_ohmic.mode'] = 'PRESCRIBED'
                     data_vars['profile_conditions.j_ohmic'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['johm'].to_numpy().flatten(), axis=0))
                     if external_current_source is None:
                         external_current_source = np.zeros_like(data['johm'].to_numpy().flatten())
