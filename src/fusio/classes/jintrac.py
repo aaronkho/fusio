@@ -10,6 +10,7 @@ from itertools import tee
 from pathlib import Path
 import logging
 import numpy as np
+import xarray as xr
 from .io import io
 
 logger = logging.getLogger('fusio')
