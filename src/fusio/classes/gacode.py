@@ -576,3 +576,25 @@ class gacode_io(io):
                 #'qmom'
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
+
+
+    @classmethod
+    def from_astra(cls, obj, side='output', window=None):
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            if 'xrho' in data.coords:
+                data = data.isel(time=-1)
+                zeros = np.zeros_like(data.coords['xrho'].to_numpy().flatten())
+                coords = {}
+                data_vars = {}
+                attrs = {}
+                name = []
+                coords['n'] = [0]
+                coords['rho'] = data.coords['xrho'].to_numpy().flatten()
+                data_vars['nexp'] = (['n'], [len(coords['rho'])])
+                if 'te' in data:
+                    data_vars['te'] = (['n', 'rho'], np.expand_dims(data['te'].to_numpy().flatten(), axis=0))
+                if 'ti' in data:
+                    data_vars['ti'] = (['n', 'rho'], np.expand_dims(data['ti'].to_numpy().flatten(), axis=0))
+        return newobj
