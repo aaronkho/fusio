@@ -725,18 +725,43 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.generic_heat.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_heat.prescribed_values',
+            'sources.generic_heat.gaussian_location',
+            'sources.generic_heat.gaussian_width',
+            'sources.generic_heat.P_total',
+            'sources.generic_heat.electron_heat_fraction',
+            'sources.generic_heat.absorption_fraction',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def reset_generic_particle_source(self):
         newattrs = {}
         newattrs['sources.generic_particle.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_particle.prescribed_values',
+            'sources.generic_particle.deposition_location',
+            'sources.generic_particle.particle_width',
+            'sources.generic_particle.S_total',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def reset_generic_current_source(self):
         newattrs = {}
         newattrs['sources.generic_current.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_current.prescribed_values',
+            'sources.generic_current.gaussian_location',
+            'sources.generic_current.gaussian_width',
+            'sources.generic_current.I_generic',
+            'sources.generic_current.fraction_of_total_current',
+            'sources.generic_current.use_absolute_current',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def set_gaussian_generic_heat_source(self, mu, sigma, total, efrac=0.5, afrac=1.0):
@@ -748,6 +773,10 @@ class torax_io(io):
         newattrs['sources.generic_heat.electron_heat_fraction'] = {0.0: efrac}
         newattrs['sources.generic_heat.absorption_fraction'] = {0.0: afrac}
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_heat.prescribed_values',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def set_gaussian_generic_particle_source(self, mu, sigma, total):
@@ -757,6 +786,10 @@ class torax_io(io):
         newattrs['sources.generic_particle.particle_width'] = {0.0: sigma}
         newattrs['sources.generic_particle.S_total'] = {0.0: total}
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_particle.prescribed_values',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def set_gaussian_generic_current_source(self, mu, sigma, total):
@@ -768,6 +801,10 @@ class torax_io(io):
         newattrs['sources.generic_current.fraction_of_total_current'] = {0.0: 0.0}
         newattrs['sources.generic_current.use_absolute_current'] = True
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_current.prescribed_values',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def add_linear_stepper(self):
@@ -964,7 +1001,7 @@ class torax_io(io):
                         attrs['plasma_composition.impurity'] = impcomp
                     data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], np.expand_dims(zeff, axis=0))
                 if 'current' in data:
-                    data_vars['profile_conditions.Ip'] = (['time'], np.expand_dims(data['current'].mean(), axis=0))
+                    data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * np.expand_dims(data['current'].mean(), axis=0))
                 if 'ne' in data:
                     data_vars['profile_conditions.n_e'] = (['time', 'rho'], np.expand_dims(1.0e19 * data['ne'].to_numpy().flatten(), axis=0))
                     attrs['profile_conditions.normalize_n_e_to_nbar'] = False
@@ -1065,13 +1102,16 @@ class torax_io(io):
                 #if 'qmom' in data and data['qmom'].sum() != 0.0:
                 #    pass
                 if external_el_heat_source is not None:
+                    attrs['use_generic_heat'] = True
                     attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], np.expand_dims(external_ion_heat_source, axis=0))
                     data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], np.expand_dims(external_el_heat_source, axis=0))
                 if external_particle_source is not None:
+                    attrs['use_generic_particle'] = True
                     attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_particle_source, axis=0))
                 if external_current_source is not None:
+                    attrs['use_generic_current'] = True
                     attrs['sources.generic_current.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_current_source, axis=0))
                     attrs['sources.generic_current.use_absolute_current'] = True
