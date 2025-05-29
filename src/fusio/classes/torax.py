@@ -914,6 +914,15 @@ class torax_io(io):
         use_psi = datadict.pop('use_psi', True)
         if not use_psi:
             datadict.pop('profile_conditions.psi', None)
+        use_generic_heat = datadict.pop('use_generic_heat', True)
+        if not use_generic_heat:
+            self.reset_generic_heat_source()
+        use_generic_particle = datadict.pop('use_generic_particle', True)
+        if not use_generic_particle:
+            self.reset_generic_particle_source()
+        use_generic_current = datadict.pop('use_generic_current', True)
+        if not use_generic_current:
+            self.reset_generic_current_source()
         datadict.pop('profile_conditions.q', None)
         datadict.pop('profile_conditions.j_ohmic', None)
         datadict.pop('profile_conditions.j_bootstrap', None)
