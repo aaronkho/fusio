@@ -524,8 +524,8 @@ class torax_io(io):
         newattrs['pedestal.T_i_T_e_ratio'] = {0.0: float(tpedratio)}
         newattrs['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
         newattrs['transport.smooth_everywhere'] = False
-        newattrs['numerics.adaptive_T_source_prefactor'] = 2.0e10
-        newattrs['numerics.adaptive_n_source_prefactor'] = 2.0e8
+        newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
+        newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
         self.update_input_attrs(newattrs)
 
 
@@ -540,8 +540,8 @@ class torax_io(io):
         newattrs['pedestal.T_i_ped'] = {0.0: float(tped) / tref}
         newattrs['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
         newattrs['transport.smooth_everywhere'] = False
-        newattrs['numerics.adaptive_T_source_prefactor'] = 2.0e10
-        newattrs['numerics.adaptive_n_source_prefactor'] = 2.0e8
+        newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
+        newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
         self.update_input_attrs(newattrs)
 
 
