@@ -466,6 +466,8 @@ class torax_io(io):
                             newattrs[attr] = True
                         if ds.attrs[attr] == 'false':
                             newattrs[attr] = False
+                        if attr == 'config':
+                            newattrs[attr] = json.loads(ds.attrs[attr])
                 ds.attrs.update(newattrs)
         return ds
 
