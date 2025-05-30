@@ -565,7 +565,7 @@ class torax_io(io):
         newattrs = {}
         newattrs['transport.model_name'] = 'qualikiz'
         newattrs['transport.n_max_runs'] = 10
-        newattrs['transport.n_processes'] = 2
+        newattrs['transport.n_processes'] = 60
         newattrs['transport.collisionality_multiplier'] = 1.0
         newattrs['transport.DV_effective'] = False
         newattrs['transport.An_min'] = 0.05
@@ -807,7 +807,22 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def add_linear_stepper(self):
+    def add_fixed_linear_solver(self, dt_fixed=None, single=False):
+        newattrs = {}
+        newattrs['solver.solver_type'] = 'linear'
+        newattrs['solver.theta_implicit'] = 1.0
+        newattrs['solver.use_predictor_corrector'] = True
+        newattrs['solver.n_corrector_steps'] = 10
+        newattrs['solver.use_pereverzev'] = True
+        newattrs['solver.chi_pereverzev'] = 20.0
+        newattrs['solver.D_pereverzev'] = 10.0
+        newattrs['time_step_calculator.calculator_type'] = 'fixed'
+        newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
+        newattrs['numerics.fixed_dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
+        self.update_input_attrs(newattrs)
+
+
+    def add_adaptive_linear_solver(self, dt_mult=None, single=False):
         newattrs = {}
         newattrs['solver.solver_type'] = 'linear'
         newattrs['solver.theta_implicit'] = 1.0
@@ -817,11 +832,12 @@ class torax_io(io):
         newattrs['solver.chi_pereverzev'] = 20.0
         newattrs['solver.D_pereverzev'] = 10.0
         newattrs['time_step_calculator.calculator_type'] = 'chi'
-        newattrs['time_step_calculator.tolerance'] = 1.0e-7
+        newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
+        newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dtmult, (float, int)) else 50.0
         self.update_input_attrs(newattrs)
 
 
-    def add_newton_raphson_stepper(self):
+    def add_fixed_newton_raphson_solver(self, dt_fixed=None, single=False):
         newattrs = {}
         newattrs['solver.solver_type'] = 'newton_raphson'
         newattrs['solver.theta_implicit'] = 1.0
@@ -832,17 +848,40 @@ class torax_io(io):
         newattrs['solver.D_pereverzev'] = 10.0
         newattrs['solver.log_iterations'] = False
         newattrs['solver.initial_guess_mode'] = 1  # 0 = x_old, 1 = linear
-        newattrs['solver.residual_tol'] = 1.0e-5
-        newattrs['solver.residual_coarse_tol'] = 1.0e-2
+        newattrs['solver.residual_tol'] = 1.0e-5 if not single else 1.0e-3
+        newattrs['solver.residual_coarse_tol'] = 1.0e-2 if not single else 1.0e-1
+        newattrs['solver.delta_reduction_factor'] = 0.5
+        newattrs['solver.n_max_iterations'] = 30
+        newattrs['solver.tau_min'] = 0.01
+        newattrs['time_step_calculator.calculator_type'] = 'fixed'
+        newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
+        newattrs['numerics.fixed_dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
+        self.update_input_attrs(newattrs)
+
+
+    def add_adaptive_newton_raphson_solver(self, dt_mult=None, single=False):
+        newattrs = {}
+        newattrs['solver.solver_type'] = 'newton_raphson'
+        newattrs['solver.theta_implicit'] = 1.0
+        newattrs['solver.use_predictor_corrector'] = True
+        newattrs['solver.n_corrector_steps'] = 10
+        newattrs['solver.use_pereverzev'] = True
+        newattrs['solver.chi_pereverzev'] = 20.0
+        newattrs['solver.D_pereverzev'] = 10.0
+        newattrs['solver.log_iterations'] = False
+        newattrs['solver.initial_guess_mode'] = 1  # 0 = x_old, 1 = linear
+        newattrs['solver.residual_tol'] = 1.0e-5 if not single else 1.0e-3
+        newattrs['solver.residual_coarse_tol'] = 1.0e-2 if not single else 1.0e-1
         newattrs['solver.delta_reduction_factor'] = 0.5
         newattrs['solver.n_max_iterations'] = 30
         newattrs['solver.tau_min'] = 0.01
         newattrs['time_step_calculator.calculator_type'] = 'chi'
-        newattrs['time_step_calculator.tolerance'] = 1.0e-7
+        newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
+        newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
         self.update_input_attrs(newattrs)
 
 
-    def set_numerics(self, t_initial, t_final, eqs=['te', 'ti', 'ne', 'j'], dtmult=None):
+    def set_numerics(self, t_initial, t_final, eqs=['te', 'ti', 'ne', 'j']):
         newattrs = {}
         newattrs['geometry.n_rho'] = 25
         newattrs['numerics.t_initial'] = float(t_initial)
@@ -850,7 +889,6 @@ class torax_io(io):
         newattrs['numerics.exact_t_final'] = True
         newattrs['numerics.max_dt'] = 1.0e-1
         newattrs['numerics.min_dt'] = 1.0e-8
-        newattrs['numerics.chi_timestep_prefactor'] = float(dtmult) if isinstance(dtmult, (float, int)) else 50.0
         newattrs['numerics.evolve_electron_heat'] = (isinstance(eqs, (list, tuple)) and 'te' in eqs)
         newattrs['numerics.evolve_ion_heat'] = (isinstance(eqs, (list, tuple)) and 'ti' in eqs)
         newattrs['numerics.evolve_density'] = (isinstance(eqs, (list, tuple)) and 'ne' in eqs)
