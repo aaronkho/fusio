@@ -401,10 +401,10 @@ class gacode_io(io):
                     data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.zeros_like(zeros), axis=0))
                 if 'elongation' in data:
                     data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data['elongation'].to_numpy().flatten(), axis=0))
-                #if 'delta_face' in data:
-                #    delta = data['delta_face'].to_numpy().flatten()
-                #    data_vars['delta'] = (['n', 'rho'], np.expand_dims(delta[:-1] + 0.5 * np.diff(delta), axis=0))
-                data['delta'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                if 'delta' in data:
+                    delta = data['delta'].to_numpy().flatten()
+                    delta = np.concatenate([np.array([delta[0]]), delta[:-1] + 0.5 * np.diff(delta), np.array([delta[-1]])], axis=0)
+                    data_vars['delta'] = (['n', 'rho'], np.expand_dims(delta, axis=0))
                 data['zeta'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
                 data['shape_cos0'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
                 data['shape_cos1'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
