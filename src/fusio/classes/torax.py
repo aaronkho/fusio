@@ -547,6 +547,30 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def add_pedestal_exponential_transport(self, chiscale, chidecay, dscale, ddecay):
+        newattrs = {}
+        wrho_array = self.input.attrs.get('pedestal.rho_norm_ped_top', None)
+        if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            prefix = f'transport.transport_models.{nmodels:d}'
+            newattrs[f'{prefix}.rho_min'] = wrho_array
+            wrho_list = []
+            for time, wrho in wrho_array.items():
+                wrho_list.append(wrho)
+            wrho = np.mean(wrho_list)
+            xrho = np.linspace(wrho, 1.0, 25)
+            factor = np.abs((xrho - wrho) / (1.0 - wrho))
+            chirho = chiscale * np.exp(-factor / chidecay)
+            drho = dscale * np.exp(-factor / ddecay)
+            newattrs[f'{prefix}.model_name'] = 'constant'
+            newattrs[f'{prefix}.chi_i'] = {rho: chi for rho, chi in zip(xrho, chirho)}
+            newattrs[f'{prefix}.chi_e'] = {rho: chi for rho, chi in zip(xrho, chirho)}
+            newattrs[f'{prefix}.D_e'] = {rho: d for rho, d in zip(xrho, drho)}
+            newattrs[f'{prefix}.V_e'] = {rho: 0.0 for rho, d in zip(xrho, drho)}
+            newattrs['n_combined_models'] = nmodels + 1
+        self.update_input_attrs(newattrs)
+
+
     def add_neoclassical_transport(self):
         newattrs = {}
         newattrs['neoclassical.conductivity.model_name'] = 'sauter'
@@ -563,17 +587,9 @@ class torax_io(io):
             self.input['sources.generic_current.prescribed_values'] = self.input['sources.generic_current.prescribed_values'] - self.input['profile_conditions.j_bootstrap']
 
 
-    def add_qualikiz_transport(self):
+    def add_combined_transport(self):
         newattrs = {}
-        newattrs['transport.model_name'] = 'qualikiz'
-        newattrs['transport.n_max_runs'] = 10
-        newattrs['transport.n_processes'] = 60
-        newattrs['transport.collisionality_multiplier'] = 1.0
-        newattrs['transport.DV_effective'] = False
-        newattrs['transport.An_min'] = 0.05
-        newattrs['transport.avoid_big_negative_s'] = True
-        newattrs['transport.smag_alpha_correction'] = True
-        newattrs['transport.q_sawtooth_proxy'] = True
+        newattrs['transport.model_name'] = 'combined'
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -582,33 +598,84 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
+        #newattrs['transport.predict_pedestal'] = (self.input.attrs.get('pedestal.set_pedestal', False))
+        if 'transport.apply_inner_patch' not in self.input.attrs:
+            newattrs['transport.apply_inner_patch'] = {0.0: False}
+        if 'transport.apply_outer_patch' not in self.input.attrs:
+            newattrs['transport.apply_outer_patch'] = {0.0: False}
+        newattrs['n_combined_models'] = self.input.attrs.get('n_combined_models', 0)
+        self.update_input_attrs(newattrs)
+
+
+    def add_qualikiz_transport(self):
+        newattrs = {}
+        prefix = 'transport'
+        if self.input.attrs.get('transport.model_name', '') == 'combined':
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            prefix = f'transport.transport_models.{nmodels:d}'
+            if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
+                newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
+            newattrs['n_combined_models'] = nmodels + 1
+        newattrs[f'{prefix}.model_name'] = 'qualikiz'
+        newattrs[f'{prefix}.n_max_runs'] = 10
+        newattrs[f'{prefix}.n_processes'] = 60
+        newattrs[f'{prefix}.collisionality_multiplier'] = 1.0
+        newattrs[f'{prefix}.DV_effective'] = False
+        newattrs[f'{prefix}.An_min'] = 0.05
+        newattrs[f'{prefix}.avoid_big_negative_s'] = True
+        newattrs[f'{prefix}.smag_alpha_correction'] = True
+        newattrs[f'{prefix}.q_sawtooth_proxy'] = True
+        newattrs['transport.chi_min'] = 0.05
+        newattrs['transport.chi_max'] = 100.0
+        newattrs['transport.D_e_min'] = 0.05
+        newattrs['transport.D_e_max'] = 100.0
+        newattrs['transport.V_e_min'] = -50.0
+        newattrs['transport.V_e_max'] = 50.0
+        newattrs['transport.smoothing_width'] = 0.1
+        newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
+        if 'transport.apply_inner_patch' not in self.input.attrs:
+            newattrs['transport.apply_inner_patch'] = {0.0: False}
+        if 'transport.apply_outer_patch' not in self.input.attrs:
+            newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_attrs(newattrs)
 
 
     def set_qualikiz_model_path(self, path):
         newattrs = {}
-        if self.input.attrs.get('transport.model_name', '') == 'qualikiz':
-            newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'
+        if self.input.attrs.get('transport.model_name', '') == 'combined':
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            for n in range(nmodels):
+                if self.input.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qualikiz':
+                    newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
+        elif self.input.attrs.get('transport.model_name', '') == 'qualikiz':
+            newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
         self.update_input_attrs(newattrs)
 
 
     def add_qlknn_transport(self):
         newattrs = {}
-        newattrs['transport.model_name'] = 'qlknn'
-        newattrs['transport.model_path'] = ''
-        newattrs['transport.include_ITG'] = True
-        newattrs['transport.include_TEM'] = True
-        newattrs['transport.include_ETG'] = True
-        newattrs['transport.ITG_flux_ratio_correction'] = 1.0
-        newattrs['transport.ETG_correction_factor'] = 1.0
-        newattrs['transport.clip_inputs'] = False
-        newattrs['transport.clip_margin'] = 0.95
-        newattrs['transport.collisionality_multiplier'] = 1.0
-        newattrs['transport.DV_effective'] = True
-        newattrs['transport.An_min'] = 0.05
-        newattrs['transport.avoid_big_negative_s'] = True
-        newattrs['transport.smag_alpha_correction'] = True
-        newattrs['transport.q_sawtooth_proxy'] = True
+        prefix = 'transport'
+        if self.input.attrs.get('transport.model_name', '') == 'combined':
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            prefix = f'transport.transport_models.{nmodels:d}'
+            if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
+                newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
+            newattrs['n_combined_models'] = nmodels + 1
+        newattrs[f'{prefix}.model_name'] = 'qlknn'
+        newattrs[f'{prefix}.model_path'] = ''
+        newattrs[f'{prefix}.include_ITG'] = True
+        newattrs[f'{prefix}.include_TEM'] = True
+        newattrs[f'{prefix}.include_ETG'] = True
+        newattrs[f'{prefix}.ITG_flux_ratio_correction'] = 1.0
+        newattrs[f'{prefix}.ETG_correction_factor'] = 1.0 / 3.0
+        newattrs[f'{prefix}.clip_inputs'] = False
+        newattrs[f'{prefix}.clip_margin'] = 0.95
+        newattrs[f'{prefix}.collisionality_multiplier'] = 1.0
+        newattrs[f'{prefix}.DV_effective'] = True
+        newattrs[f'{prefix}.An_min'] = 0.05
+        newattrs[f'{prefix}.avoid_big_negative_s'] = True
+        newattrs[f'{prefix}.smag_alpha_correction'] = True
+        newattrs[f'{prefix}.q_sawtooth_proxy'] = True
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -617,11 +684,20 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.0
         newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
+        if 'transport.apply_inner_patch' not in self.input.attrs:
+            newattrs['transport.apply_inner_patch'] = {0.0: False}
+        if 'transport.apply_outer_patch' not in self.input.attrs:
+            newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_attrs(newattrs)
 
 
     def set_qlknn_model_path(self, path):
         newattrs = {}
+        if self.input.attrs.get('transport.model_name', '') == 'combined':
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            for n in range(nmodels):
+                if self.input.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qlknn':
+                    newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
         if self.input.attrs.get('transport.model_name', '') == 'qlknn':
             newattrs['transport.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
@@ -720,6 +796,25 @@ class torax_io(io):
         newattrs['sources.cyclotron_radiation.beta_min'] = 0.5
         newattrs['sources.cyclotron_radiation.beta_max'] = 8.0
         newattrs['sources.cyclotron_radiation.beta_grid_size'] = 32
+        self.update_input_attrs(newattrs)
+
+
+    def add_toricnn_icrh_source(self, freq, mfrac, total, iwall=1.24, owall=2.43):
+        newattrs = {}
+        newattrs['sources.icrh.mode'] = 'MODEL_BASED'
+        newattrs['sources.icrh.model_path'] = ''
+        newattrs['sources.icrh.wall_inner'] = iwall
+        newattrs['sources.icrh.wall_outer'] = owall
+        newattrs['sources.icrh.frequency'] = {0.0: freq}
+        newattrs['sources.icrh.minority_concentration'] = {0.0: mfrac}
+        newattrs['sources.icrh.P_total'] = {0.0: total}
+        self.update_input_attrs(newattrs)
+
+
+    def set_toricnn_model_path(self, path):
+        newattrs = {}
+        if self.input.attrs.get('sources.icrh.mode', 'ZERO') == 'MODEL_BASED':
+            newattrs['sources.icrh.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
 
@@ -919,6 +1014,14 @@ class torax_io(io):
                     for ii in range(len(time)):
                         time_dependent_var[float(time[ii])] = float(ds[key].isel(time=ii).to_numpy().flatten())
                 datadict[key] = time_dependent_var
+        nmodels = datadict.pop('n_combined_models', 0)
+        if datadict.get('transport.model_name', '') == 'combined':
+            datadict['transport.transport_models'] = []
+            for nn in range(nmodels):
+                modeldict = {key.replace(f'transport.transport_models.{nn:d}.', ''): val for key, val in datadict.items() if key.startswith(f'transport.transport_models.{nn:d}.')}
+                for key in modeldict:
+                    datadict.pop(f'transport.transport_models.{nn:d}.{key}', None)
+                datadict['transport.transport_models'].append(self._unflatten(modeldict))
         srctags = [
             'sources.ei_exchange',
             'sources.ohmic',
