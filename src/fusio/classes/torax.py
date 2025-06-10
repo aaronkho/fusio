@@ -466,6 +466,8 @@ class torax_io(io):
                             newattrs[attr] = True
                         if ds.attrs[attr] == 'false':
                             newattrs[attr] = False
+                        if attr == 'config':
+                            newattrs[attr] = json.loads(ds.attrs[attr])
                 ds.attrs.update(newattrs)
         return ds
 
@@ -524,8 +526,8 @@ class torax_io(io):
         newattrs['pedestal.T_i_T_e_ratio'] = {0.0: float(tpedratio)}
         newattrs['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
         newattrs['transport.smooth_everywhere'] = False
-        newattrs['numerics.adaptive_T_source_prefactor'] = 2.0e10
-        newattrs['numerics.adaptive_n_source_prefactor'] = 2.0e8
+        newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
+        newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
         self.update_input_attrs(newattrs)
 
 
@@ -540,8 +542,32 @@ class torax_io(io):
         newattrs['pedestal.T_i_ped'] = {0.0: float(tped) / tref}
         newattrs['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
         newattrs['transport.smooth_everywhere'] = False
-        newattrs['numerics.adaptive_T_source_prefactor'] = 2.0e10
-        newattrs['numerics.adaptive_n_source_prefactor'] = 2.0e8
+        newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
+        newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
+        self.update_input_attrs(newattrs)
+
+
+    def add_pedestal_exponential_transport(self, chiscale, chidecay, dscale, ddecay):
+        newattrs = {}
+        wrho_array = self.input.attrs.get('pedestal.rho_norm_ped_top', None)
+        if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            prefix = f'transport.transport_models.{nmodels:d}'
+            newattrs[f'{prefix}.rho_min'] = wrho_array
+            wrho_list = []
+            for time, wrho in wrho_array.items():
+                wrho_list.append(wrho)
+            wrho = np.mean(wrho_list)
+            xrho = np.linspace(wrho, 1.0, 25)
+            factor = np.abs((xrho - wrho) / (1.0 - wrho))
+            chirho = chiscale * np.exp(-factor / chidecay)
+            drho = dscale * np.exp(-factor / ddecay)
+            newattrs[f'{prefix}.model_name'] = 'constant'
+            newattrs[f'{prefix}.chi_i'] = {rho: chi for rho, chi in zip(xrho, chirho)}
+            newattrs[f'{prefix}.chi_e'] = {rho: chi for rho, chi in zip(xrho, chirho)}
+            newattrs[f'{prefix}.D_e'] = {rho: d for rho, d in zip(xrho, drho)}
+            newattrs[f'{prefix}.V_e'] = {rho: 0.0 for rho, d in zip(xrho, drho)}
+            newattrs['n_combined_models'] = nmodels + 1
         self.update_input_attrs(newattrs)
 
 
@@ -561,17 +587,9 @@ class torax_io(io):
             self.input['sources.generic_current.prescribed_values'] = self.input['sources.generic_current.prescribed_values'] - self.input['profile_conditions.j_bootstrap']
 
 
-    def add_qualikiz_transport(self):
+    def add_combined_transport(self):
         newattrs = {}
-        newattrs['transport.model_name'] = 'qualikiz'
-        newattrs['transport.n_max_runs'] = 10
-        newattrs['transport.n_processes'] = 2
-        newattrs['transport.collisionality_multiplier'] = 1.0
-        newattrs['transport.DV_effective'] = False
-        newattrs['transport.An_min'] = 0.05
-        newattrs['transport.avoid_big_negative_s'] = True
-        newattrs['transport.smag_alpha_correction'] = True
-        newattrs['transport.q_sawtooth_proxy'] = True
+        newattrs['transport.model_name'] = 'combined'
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -580,33 +598,84 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
+        #newattrs['transport.predict_pedestal'] = (self.input.attrs.get('pedestal.set_pedestal', False))
+        if 'transport.apply_inner_patch' not in self.input.attrs:
+            newattrs['transport.apply_inner_patch'] = {0.0: False}
+        if 'transport.apply_outer_patch' not in self.input.attrs:
+            newattrs['transport.apply_outer_patch'] = {0.0: False}
+        newattrs['n_combined_models'] = self.input.attrs.get('n_combined_models', 0)
+        self.update_input_attrs(newattrs)
+
+
+    def add_qualikiz_transport(self):
+        newattrs = {}
+        prefix = 'transport'
+        if self.input.attrs.get('transport.model_name', '') == 'combined':
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            prefix = f'transport.transport_models.{nmodels:d}'
+            if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
+                newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
+            newattrs['n_combined_models'] = nmodels + 1
+        newattrs[f'{prefix}.model_name'] = 'qualikiz'
+        newattrs[f'{prefix}.n_max_runs'] = 10
+        newattrs[f'{prefix}.n_processes'] = 60
+        newattrs[f'{prefix}.collisionality_multiplier'] = 1.0
+        newattrs[f'{prefix}.DV_effective'] = False
+        newattrs[f'{prefix}.An_min'] = 0.05
+        newattrs[f'{prefix}.avoid_big_negative_s'] = True
+        newattrs[f'{prefix}.smag_alpha_correction'] = True
+        newattrs[f'{prefix}.q_sawtooth_proxy'] = True
+        newattrs['transport.chi_min'] = 0.05
+        newattrs['transport.chi_max'] = 100.0
+        newattrs['transport.D_e_min'] = 0.05
+        newattrs['transport.D_e_max'] = 100.0
+        newattrs['transport.V_e_min'] = -50.0
+        newattrs['transport.V_e_max'] = 50.0
+        newattrs['transport.smoothing_width'] = 0.1
+        newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
+        if 'transport.apply_inner_patch' not in self.input.attrs:
+            newattrs['transport.apply_inner_patch'] = {0.0: False}
+        if 'transport.apply_outer_patch' not in self.input.attrs:
+            newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_attrs(newattrs)
 
 
     def set_qualikiz_model_path(self, path):
         newattrs = {}
-        if self.input.attrs.get('transport.model_name', '') == 'qualikiz':
-            newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'
+        if self.input.attrs.get('transport.model_name', '') == 'combined':
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            for n in range(nmodels):
+                if self.input.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qualikiz':
+                    newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
+        elif self.input.attrs.get('transport.model_name', '') == 'qualikiz':
+            newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
         self.update_input_attrs(newattrs)
 
 
     def add_qlknn_transport(self):
         newattrs = {}
-        newattrs['transport.model_name'] = 'qlknn'
-        newattrs['transport.model_path'] = ''
-        newattrs['transport.include_ITG'] = True
-        newattrs['transport.include_TEM'] = True
-        newattrs['transport.include_ETG'] = True
-        newattrs['transport.ITG_flux_ratio_correction'] = 1.0
-        newattrs['transport.ETG_correction_factor'] = 1.0
-        newattrs['transport.clip_inputs'] = False
-        newattrs['transport.clip_margin'] = 0.95
-        newattrs['transport.collisionality_multiplier'] = 1.0
-        newattrs['transport.DV_effective'] = True
-        newattrs['transport.An_min'] = 0.05
-        newattrs['transport.avoid_big_negative_s'] = True
-        newattrs['transport.smag_alpha_correction'] = True
-        newattrs['transport.q_sawtooth_proxy'] = True
+        prefix = 'transport'
+        if self.input.attrs.get('transport.model_name', '') == 'combined':
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            prefix = f'transport.transport_models.{nmodels:d}'
+            if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
+                newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
+            newattrs['n_combined_models'] = nmodels + 1
+        newattrs[f'{prefix}.model_name'] = 'qlknn'
+        newattrs[f'{prefix}.model_path'] = ''
+        newattrs[f'{prefix}.include_ITG'] = True
+        newattrs[f'{prefix}.include_TEM'] = True
+        newattrs[f'{prefix}.include_ETG'] = True
+        newattrs[f'{prefix}.ITG_flux_ratio_correction'] = 1.0
+        newattrs[f'{prefix}.ETG_correction_factor'] = 1.0 / 3.0
+        newattrs[f'{prefix}.clip_inputs'] = False
+        newattrs[f'{prefix}.clip_margin'] = 0.95
+        newattrs[f'{prefix}.collisionality_multiplier'] = 1.0
+        newattrs[f'{prefix}.DV_effective'] = True
+        newattrs[f'{prefix}.An_min'] = 0.05
+        newattrs[f'{prefix}.avoid_big_negative_s'] = True
+        newattrs[f'{prefix}.smag_alpha_correction'] = True
+        newattrs[f'{prefix}.q_sawtooth_proxy'] = True
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -615,11 +684,20 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.0
         newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
+        if 'transport.apply_inner_patch' not in self.input.attrs:
+            newattrs['transport.apply_inner_patch'] = {0.0: False}
+        if 'transport.apply_outer_patch' not in self.input.attrs:
+            newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_attrs(newattrs)
 
 
     def set_qlknn_model_path(self, path):
         newattrs = {}
+        if self.input.attrs.get('transport.model_name', '') == 'combined':
+            nmodels = self.input.attrs.get('n_combined_models', 0)
+            for n in range(nmodels):
+                if self.input.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qlknn':
+                    newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
         if self.input.attrs.get('transport.model_name', '') == 'qlknn':
             newattrs['transport.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
@@ -721,22 +799,66 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def add_toricnn_icrh_source(self, freq, mfrac, total, iwall=1.24, owall=2.43):
+        newattrs = {}
+        newattrs['sources.icrh.mode'] = 'MODEL_BASED'
+        newattrs['sources.icrh.model_path'] = ''
+        newattrs['sources.icrh.wall_inner'] = iwall
+        newattrs['sources.icrh.wall_outer'] = owall
+        newattrs['sources.icrh.frequency'] = {0.0: freq}
+        newattrs['sources.icrh.minority_concentration'] = {0.0: mfrac}
+        newattrs['sources.icrh.P_total'] = {0.0: total}
+        self.update_input_attrs(newattrs)
+
+
+    def set_toricnn_model_path(self, path):
+        newattrs = {}
+        if self.input.attrs.get('sources.icrh.mode', 'ZERO') == 'MODEL_BASED':
+            newattrs['sources.icrh.model_path'] = f'{path}'
+        self.update_input_attrs(newattrs)
+
+
     def reset_generic_heat_source(self):
         newattrs = {}
         newattrs['sources.generic_heat.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_heat.prescribed_values',
+            'sources.generic_heat.gaussian_location',
+            'sources.generic_heat.gaussian_width',
+            'sources.generic_heat.P_total',
+            'sources.generic_heat.electron_heat_fraction',
+            'sources.generic_heat.absorption_fraction',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def reset_generic_particle_source(self):
         newattrs = {}
         newattrs['sources.generic_particle.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_particle.prescribed_values',
+            'sources.generic_particle.deposition_location',
+            'sources.generic_particle.particle_width',
+            'sources.generic_particle.S_total',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def reset_generic_current_source(self):
         newattrs = {}
         newattrs['sources.generic_current.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_current.prescribed_values',
+            'sources.generic_current.gaussian_location',
+            'sources.generic_current.gaussian_width',
+            'sources.generic_current.I_generic',
+            'sources.generic_current.fraction_of_total_current',
+            'sources.generic_current.use_absolute_current',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def set_gaussian_generic_heat_source(self, mu, sigma, total, efrac=0.5, afrac=1.0):
@@ -748,6 +870,10 @@ class torax_io(io):
         newattrs['sources.generic_heat.electron_heat_fraction'] = {0.0: efrac}
         newattrs['sources.generic_heat.absorption_fraction'] = {0.0: afrac}
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_heat.prescribed_values',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def set_gaussian_generic_particle_source(self, mu, sigma, total):
@@ -757,6 +883,10 @@ class torax_io(io):
         newattrs['sources.generic_particle.particle_width'] = {0.0: sigma}
         newattrs['sources.generic_particle.S_total'] = {0.0: total}
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_particle.prescribed_values',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
     def set_gaussian_generic_current_source(self, mu, sigma, total):
@@ -768,9 +898,28 @@ class torax_io(io):
         newattrs['sources.generic_current.fraction_of_total_current'] = {0.0: 0.0}
         newattrs['sources.generic_current.use_absolute_current'] = True
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.generic_current.prescribed_values',
+        ]
+        self.delete_input_attrs(delattrs)
 
 
-    def add_linear_stepper(self):
+    def add_fixed_linear_solver(self, dt_fixed=None, single=False):
+        newattrs = {}
+        newattrs['solver.solver_type'] = 'linear'
+        newattrs['solver.theta_implicit'] = 1.0
+        newattrs['solver.use_predictor_corrector'] = True
+        newattrs['solver.n_corrector_steps'] = 10
+        newattrs['solver.use_pereverzev'] = True
+        newattrs['solver.chi_pereverzev'] = 20.0
+        newattrs['solver.D_pereverzev'] = 10.0
+        newattrs['time_step_calculator.calculator_type'] = 'fixed'
+        newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
+        newattrs['numerics.fixed_dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
+        self.update_input_attrs(newattrs)
+
+
+    def add_adaptive_linear_solver(self, dt_mult=None, single=False):
         newattrs = {}
         newattrs['solver.solver_type'] = 'linear'
         newattrs['solver.theta_implicit'] = 1.0
@@ -780,11 +929,12 @@ class torax_io(io):
         newattrs['solver.chi_pereverzev'] = 20.0
         newattrs['solver.D_pereverzev'] = 10.0
         newattrs['time_step_calculator.calculator_type'] = 'chi'
-        newattrs['time_step_calculator.tolerance'] = 1.0e-7
+        newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
+        newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
         self.update_input_attrs(newattrs)
 
 
-    def add_newton_raphson_stepper(self):
+    def add_fixed_newton_raphson_solver(self, dt_fixed=None, single=False):
         newattrs = {}
         newattrs['solver.solver_type'] = 'newton_raphson'
         newattrs['solver.theta_implicit'] = 1.0
@@ -795,17 +945,40 @@ class torax_io(io):
         newattrs['solver.D_pereverzev'] = 10.0
         newattrs['solver.log_iterations'] = False
         newattrs['solver.initial_guess_mode'] = 1  # 0 = x_old, 1 = linear
-        newattrs['solver.residual_tol'] = 1.0e-5
-        newattrs['solver.residual_coarse_tol'] = 1.0e-2
+        newattrs['solver.residual_tol'] = 1.0e-5 if not single else 1.0e-3
+        newattrs['solver.residual_coarse_tol'] = 1.0e-2 if not single else 1.0e-1
+        newattrs['solver.delta_reduction_factor'] = 0.5
+        newattrs['solver.n_max_iterations'] = 30
+        newattrs['solver.tau_min'] = 0.01
+        newattrs['time_step_calculator.calculator_type'] = 'fixed'
+        newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
+        newattrs['numerics.fixed_dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
+        self.update_input_attrs(newattrs)
+
+
+    def add_adaptive_newton_raphson_solver(self, dt_mult=None, single=False):
+        newattrs = {}
+        newattrs['solver.solver_type'] = 'newton_raphson'
+        newattrs['solver.theta_implicit'] = 1.0
+        newattrs['solver.use_predictor_corrector'] = True
+        newattrs['solver.n_corrector_steps'] = 10
+        newattrs['solver.use_pereverzev'] = True
+        newattrs['solver.chi_pereverzev'] = 20.0
+        newattrs['solver.D_pereverzev'] = 10.0
+        newattrs['solver.log_iterations'] = False
+        newattrs['solver.initial_guess_mode'] = 1  # 0 = x_old, 1 = linear
+        newattrs['solver.residual_tol'] = 1.0e-5 if not single else 1.0e-3
+        newattrs['solver.residual_coarse_tol'] = 1.0e-2 if not single else 1.0e-1
         newattrs['solver.delta_reduction_factor'] = 0.5
         newattrs['solver.n_max_iterations'] = 30
         newattrs['solver.tau_min'] = 0.01
         newattrs['time_step_calculator.calculator_type'] = 'chi'
-        newattrs['time_step_calculator.tolerance'] = 1.0e-7
+        newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
+        newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
         self.update_input_attrs(newattrs)
 
 
-    def set_numerics(self, t_initial, t_final, eqs=['te', 'ti', 'ne', 'j'], dtmult=None):
+    def set_numerics(self, t_initial, t_final, eqs=['te', 'ti', 'ne', 'j']):
         newattrs = {}
         newattrs['geometry.n_rho'] = 25
         newattrs['numerics.t_initial'] = float(t_initial)
@@ -813,7 +986,6 @@ class torax_io(io):
         newattrs['numerics.exact_t_final'] = True
         newattrs['numerics.max_dt'] = 1.0e-1
         newattrs['numerics.min_dt'] = 1.0e-8
-        newattrs['numerics.chi_timestep_prefactor'] = float(dtmult) if isinstance(dtmult, (float, int)) else 50.0
         newattrs['numerics.evolve_electron_heat'] = (isinstance(eqs, (list, tuple)) and 'te' in eqs)
         newattrs['numerics.evolve_ion_heat'] = (isinstance(eqs, (list, tuple)) and 'ti' in eqs)
         newattrs['numerics.evolve_density'] = (isinstance(eqs, (list, tuple)) and 'ne' in eqs)
@@ -842,6 +1014,14 @@ class torax_io(io):
                     for ii in range(len(time)):
                         time_dependent_var[float(time[ii])] = float(ds[key].isel(time=ii).to_numpy().flatten())
                 datadict[key] = time_dependent_var
+        nmodels = datadict.pop('n_combined_models', 0)
+        if datadict.get('transport.model_name', '') == 'combined':
+            datadict['transport.transport_models'] = []
+            for nn in range(nmodels):
+                modeldict = {key.replace(f'transport.transport_models.{nn:d}.', ''): val for key, val in datadict.items() if key.startswith(f'transport.transport_models.{nn:d}.')}
+                for key in modeldict:
+                    datadict.pop(f'transport.transport_models.{nn:d}.{key}', None)
+                datadict['transport.transport_models'].append(self._unflatten(modeldict))
         srctags = [
             'sources.ei_exchange',
             'sources.ohmic',
@@ -877,6 +1057,15 @@ class torax_io(io):
         use_psi = datadict.pop('use_psi', True)
         if not use_psi:
             datadict.pop('profile_conditions.psi', None)
+        use_generic_heat = datadict.pop('use_generic_heat', True)
+        if not use_generic_heat:
+            self.reset_generic_heat_source()
+        use_generic_particle = datadict.pop('use_generic_particle', True)
+        if not use_generic_particle:
+            self.reset_generic_particle_source()
+        use_generic_current = datadict.pop('use_generic_current', True)
+        if not use_generic_current:
+            self.reset_generic_current_source()
         datadict.pop('profile_conditions.q', None)
         datadict.pop('profile_conditions.j_ohmic', None)
         datadict.pop('profile_conditions.j_bootstrap', None)
@@ -964,7 +1153,7 @@ class torax_io(io):
                         attrs['plasma_composition.impurity'] = impcomp
                     data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], np.expand_dims(zeff, axis=0))
                 if 'current' in data:
-                    data_vars['profile_conditions.Ip'] = (['time'], np.expand_dims(data['current'].mean(), axis=0))
+                    data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * np.expand_dims(data['current'].mean(), axis=0))
                 if 'ne' in data:
                     data_vars['profile_conditions.n_e'] = (['time', 'rho'], np.expand_dims(1.0e19 * data['ne'].to_numpy().flatten(), axis=0))
                     attrs['profile_conditions.normalize_n_e_to_nbar'] = False
@@ -1065,13 +1254,16 @@ class torax_io(io):
                 #if 'qmom' in data and data['qmom'].sum() != 0.0:
                 #    pass
                 if external_el_heat_source is not None:
+                    attrs['use_generic_heat'] = True
                     attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], np.expand_dims(external_ion_heat_source, axis=0))
                     data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], np.expand_dims(external_el_heat_source, axis=0))
                 if external_particle_source is not None:
+                    attrs['use_generic_particle'] = True
                     attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_particle_source, axis=0))
                 if external_current_source is not None:
+                    attrs['use_generic_current'] = True
                     attrs['sources.generic_current.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_current_source, axis=0))
                     attrs['sources.generic_current.use_absolute_current'] = True
