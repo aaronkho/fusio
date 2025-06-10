@@ -930,7 +930,7 @@ class torax_io(io):
         newattrs['solver.D_pereverzev'] = 10.0
         newattrs['time_step_calculator.calculator_type'] = 'chi'
         newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
-        newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dtmult, (float, int)) else 50.0
+        newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
         self.update_input_attrs(newattrs)
 
 
