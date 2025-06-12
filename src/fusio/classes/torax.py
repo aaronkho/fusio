@@ -994,6 +994,51 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def print_summary(self):
+        if self.has_output:
+            fields = {
+                'Bt': ('B_0', 1.0, 'T'),
+                'Ip': ('Ip', 1.0e-6, 'MA'),
+                'q95': ('q95', 1.0, ''),
+                'R': ('R_major', 1.0, 'm'),
+                'a': ('a_minor', 1.0, 'm'),
+                'Q': ('Q_fusion', 1.0, ''),
+                'Pfus': ('P_alpha_total', 5.0e-6, 'MW'),
+                'Pin': ('P_external_injected', 1.0e-6, 'MW'),
+                'H98y2': ('H98', 1.0, ''),
+                'H89p': ('H89P', 1.0, ''),
+                '<ne>': ('n_e_volume_avg', 1.0e-20, '10^20 m^-3'),
+                '<Te>': ('T_e_volume_avg', 1.0, 'keV'),
+                '<Ti>': ('T_i_volume_avg', 1.0, 'keV'),
+                'betaN': ('beta_N', 1.0, ''),
+                'Prad': ('P_radiation_e', 1.0e-6, 'MW'),
+                'Psol': ('P_SOL_total', 1.0e-6, 'MW'),
+                'fG': ('fgw_n_e_volume_avg', 1.0, ''),
+                'We': ('W_thermal_e', 1.0e-6, 'MJ'),
+                'Wi': ('W_thermal_i', 1.0e-6, 'MJ'),
+                'W_thr': ('W_thermal_total', 1.0e-6, 'MJ'),
+                'tauE': ('tau_E', 1.0, ''),
+            }
+            radial_fields = {
+                #'p_vol': ('pressure_thermal_total', -1, 1.0e-3, 'kPa'),
+                'nu_ne': ('n_e', 0, 'n_e_volume_avg', ''),
+                'nu_Te': ('T_e', 0, 'T_e_volume_avg', ''),
+                'nu_Ti': ('T_i', 0, 'T_i_volume_avg', ''),
+            }
+            data = self.output.isel(time=-1)
+            for key, specs in fields.items():
+                var, scale, units = specs
+                val = scale * data[var]
+                print(f'{key:10}: {val:.2f} {units}')
+            for key, specs in radial_fields.items():
+                var, idx, scale, units = specs
+                if isinstance(scale, str):
+                    val = data.isel(rho_norm=idx)[var] / data[scale]
+                else:
+                    val = data.isel(rho_norm=idx)[var] / scale
+                print(f'{key:10}: {val:.2f} {units}')
+
+
     def to_dict(self):
         datadict = {}
         ds = self.input
