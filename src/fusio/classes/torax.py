@@ -613,6 +613,7 @@ class torax_io(io):
         if self.input.attrs.get('transport.model_name', '') == 'combined':
             nmodels = self.input.attrs.get('n_combined_models', 0)
             prefix = f'transport.transport_models.{nmodels:d}'
+            #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
                 newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
             newattrs['n_combined_models'] = nmodels + 1
@@ -658,6 +659,7 @@ class torax_io(io):
         if self.input.attrs.get('transport.model_name', '') == 'combined':
             nmodels = self.input.attrs.get('n_combined_models', 0)
             prefix = f'transport.transport_models.{nmodels:d}'
+            #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
                 newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
             newattrs['n_combined_models'] = nmodels + 1
@@ -722,6 +724,31 @@ class torax_io(io):
         newattrs['transport.chi_i_outer'] = {0.0: float(chii)}
         newattrs['transport.chi_e_outer'] = {0.0: float(chie)}
         newattrs['transport.rho_outer'] = float(rho)
+        self.update_input_attrs(newattrs)
+
+
+    def reset_mhd_sawtooth_trigger(self):
+        delattrs = [
+            'mhd.sawtooth.crash_step_duration',
+            'mhd.sawtooth.trigger_model.model_name',
+            'mhd.sawtooth.trigger_model.minimum_radius',
+            'mhd.sawtooth.trigger_model.s_critical',
+            'mhd.sawtooth.redistribution_model.model_name',
+            'mhd.sawtooth.redistribution_model.flattening_factor',
+            'mhd.sawtooth.redistribution_model.mixing_radius_multiplier',
+        ]
+        self.delete_input_attrs(delattrs)
+
+
+    def set_mhd_sawtooth_trigger(self, rmin, scrit):
+        newattrs = {}
+        newattrs['mhd.sawtooth.crash_step_duration'] = 1.0e-3
+        newattrs['mhd.sawtooth.trigger_model.model_name'] = 'simple'
+        newattrs['mhd.sawtooth.trigger_model.minimum_radius'] = {0.0: float(rmin)}
+        newattrs['mhd.sawtooth.trigger_model.s_critical'] = {0.0: float(scrit)}
+        newattrs['mhd.sawtooth.redistribution_model.model_name'] = 'simple'
+        newattrs['mhd.sawtooth.redistribution_model.flattening_factor'] = {0.0: 1.01}
+        newattrs['mhd.sawtooth.redistribution_model.mixing_radius_multiplier'] = {0.0: 1.1}
         self.update_input_attrs(newattrs)
 
 
