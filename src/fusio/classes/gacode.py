@@ -553,8 +553,7 @@ class gacode_io(io):
                     data_vars['jrf'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
                 #    data_vars['jnb'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
                 if 'pressure_thermal_total' in data and 'rho_norm' in data and 'rho_face_norm' in data:
-                    ptot = np.interp(data['rho_norm'].to_numpy().flatten(), data['rho_face_norm'].to_numpy().flatten(), data['pressure_thermal_total'].to_numpy().flatten())
-                    data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ptot, axis=0))
+                    data_vars['ptot'] = (['n', 'rho'], np.expand_dims(data['pressure_thermal_total'].to_numpy().flatten(), axis=0))
                 if 's_gas_puff' in data:
                     dvec = data['s_gas_puff'].to_numpy().flatten()
                     dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
