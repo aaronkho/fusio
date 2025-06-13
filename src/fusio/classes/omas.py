@@ -171,11 +171,11 @@ class omas_io(io):
                                     if isinstance(val, list):
                                         cs_data_vars[tag] = (['time_cs', 'rho_cs'], np.expand_dims(np.atleast_1d(val), axis=0))
                                 if 'ion_cs' in cs_coords:
-                                    ions = csp.pop('ions', [])
+                                    ions = csp.pop('ion', [])
                                     iondict = {}
                                     for kk, ion in enumerate(ions):
                                         for key, val in ion.items():
-                                            tag = f'core_sources.{srctag}.profiles_1d.ions.{key}'
+                                            tag = f'core_sources.{srctag}.profiles_1d.ion.{key}'
                                             if isinstance(val, list):
                                                 iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(val)], axis=-1) if tag in iondict else np.atleast_2d(val)
                                     for tag, val in iondict.items():
@@ -222,32 +222,86 @@ class omas_io(io):
                     if len(cs_dsvec) > 0:
                         dsvec.append(xr.merge(cs_dsvec))
 
-                #if 'core_transport' in data:
-                #    #data['core_transport']['model'][0]['profiles_1d'][0]['ion'][0]['energy']
-                #    ct_coords = {}
-                #    ct_attrs = {}
-                #    if 'time' in data['core_transport']:
-                #        ct_coords['time_ct'] = np.atleast_1d(data['core_transport'].pop('time'))
-                #    models = data['core_transport'].pop('model', [])
-                #    ct_dsvec = []
-                #    for ii, model in enumerate(models):
-                #        modtag = model['code'].lower() if 'code' in model else f'model_index_{ii}'
-                #        if 'code' in model:
-                #            ct_attrs[f'core_transport.{modtag.lower()}.code'] = model.pop('code')
-                #        profs = model.pop('profiles_1d', [])
-                #        if len(profs) > 0:
-                #            if 'rho_tor_norm' in profs[0].get('grid_d', {}):
-                #                ct_coords['rho_d_ct'] = np.atleast_1d(profs[0]['grid_d']['rho_tor_norm'])
-                #            if 'rho_tor_norm' in profs[0].get('grid_v', {}):
-                #                ct_coords['rho_v_ct'] = np.atleast_1d(profs[0]['grid_v']['rho_tor_norm'])
-                #            if 'rho_tor_norm' in profs[0].get('grid_flux', {}):
-                #                ct_coords['rho_flux_ct'] = np.atleast_1d(profs[0]['grid_flux']['rho_tor_norm'])
-                #        if 'time_ct' in ct_coords and ('rho_d_ct' in ct_coords or 'rho_v_ct' in ct_coords or 'rho_flux_ct' in ct_coords):
-                #            timevec = ct_coords['time_ct'].copy()
-                #            ctp_dsvec = []
-                #            for jj, ctp in enumerate(profs):
-                #                ct_data_vars = {}
-                #                ct_coords['time_ct'] = np.atleast_1d([timevec[ii]]) if len(timevec) else np.atleast_1d([ctp['time']])
+                if 'core_transport' in data:
+                    #data['core_transport']['model'][0]['profiles_1d'][0]['ion'][0]['energy']
+                    ct_coords = {}
+                    if 'time' in data['core_transport']:
+                        ct_coords['time_ct'] = np.atleast_1d(data['core_transport'].pop('time'))
+                    models = data['core_transport'].pop('model', [])
+                    ct_dsvec = []
+                    for ii, model in enumerate(models):
+                        ctm_coords = {}
+                        ctm_attrs = {}
+                        ctm_coords['time_ct'] = ct_coords['time_ct'].copy()
+                        modtag = f'model_index_{ii}'
+                        if 'code' in model:
+                            model_name = model.pop('code').get('name', '')
+                            modtag = model_name.lower()
+                            ctm_attrs[f'core_transport.{modtag}.code.name'] = model_name
+                        profs = model.pop('profiles_1d', [])
+                        if len(profs) > 0:
+                            if 'rho_tor_norm' in profs[0].get('grid_d', {}):
+                                ctm_coords[f'rho_d_{ii}_ct'] = np.atleast_1d(profs[0]['grid_d']['rho_tor_norm'])
+                            if 'rho_tor_norm' in profs[0].get('grid_v', {}):
+                                ctm_coords[f'rho_v_{ii}_ct'] = np.atleast_1d(profs[0]['grid_v']['rho_tor_norm'])
+                            if 'rho_tor_norm' in profs[0].get('grid_flux', {}):
+                                ctm_coords[f'rho_flux_{ii}_ct'] = np.atleast_1d(profs[0]['grid_flux']['rho_tor_norm'])
+                        if 'ion' in profs[0] and len(profs[0]['ion']) > 0:
+                            ctm_coords[f'ion_{ii}_ct'] = [jj for jj in range(len(profs[0]['ion']))]
+                        if 'neutral' in profs[0] and len(profs[0]['neutral']) > 0:
+                            ctm_coords[f'neutral_{ii}_ct'] = [jj for jj in range(len(profs[0]['neutral']))]
+                        ctm_ds = xr.Dataset(coords=ctm_coords, attrs=ctm_attrs) if ctm_coords else None
+                        if 'time_ct' in ctm_coords and (f'rho_d_{ii}_ct' in ctm_coords or f'rho_v_{ii}_ct' in ctm_coords or 'rho_flux_{ii}_ct' in ctm_coords):
+                            timevec = ctm_coords.pop('time_ct', [])
+                            ctp_dsvec = []
+                            for jj, ctp in enumerate(profs):
+                                ctm_data_vars = {}
+                                ctm_coords['time_ct'] = np.atleast_1d([timevec[jj]]) if len(timevec) > jj else np.atleast_1d([ctp['time']])
+                                if f'ion_{ii}_ct' in ctm_coords:
+                                    ions = ctp.pop('ion', [])
+                                    iondict = {}
+                                    for kk, ion in enumerate(ions):
+                                        for var, obj in ion.items():
+                                            for key, val in obj.items():
+                                                tag = f'core_transport.{modtag}.profiles_1d.ion.{var}.{key}'
+                                                if isinstance(val, list):
+                                                    iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(val)], axis=0) if tag in iondict else np.atleast_2d(val)
+                                    for tag in iondict:
+                                        while iondict[tag].shape[0] < len(ctm_coords[f'ion_{ii}_ct']):
+                                            iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(iondict[tag][-1, :])], axis=0)
+                                    for tag, val in iondict.items():
+                                        ctm_data_vars[tag] = (['time_ct', f'ion_{ii}_ct', f'rho_{key}_{ii}_ct'], np.expand_dims(val, axis=0))
+                                if f'neutral_{ii}_ct' in ctm_coords:
+                                    neutrals = ctp.pop('neutral', [])
+                                    neutdict = {}
+                                    for kk, neut in enumerate(neutrals):
+                                        for var, obj in neut.items():
+                                            for key, val in obj.items():
+                                                tag = f'core_transport.{modtag}.profiles_1d.neutral.{var}.{key}'
+                                                if isinstance(val, list):
+                                                    neutdict[tag] = np.concatenate([neutdict[tag], np.atleast_2d(val)], axis=0) if tag in neutdict else np.atleast_2d(val)
+                                    for tag in neutdict:
+                                        while neutdict[tag].shape[0] < len(ctm_coords[f'neutral_{ii}_ct']):
+                                            neutdict[tag] = np.concatenate([neutdict[tag], np.atleast_2d(neutdict[tag][-1, :])], axis=0)
+                                    for tag, val in neutdict.items():
+                                        ctm_data_vars[tag] = (['time_ct', f'neutral_{ii}_ct', f'rho_{key}_{ii}_ct'], np.expand_dims(val, axis=0))
+                                elec = ctp.pop('electrons', {})
+                                for var, obj in elec.items():
+                                    for key, val in obj.items():
+                                        tag = f'core_transport.{modtag}.profiles_1d.electrons.{var}.{key}'
+                                        if isinstance(val, list):
+                                            ctm_data_vars[tag] = (['time_ct', f'rho_{key}_{ii}_ct'], np.expand_dims(np.atleast_1d(val), axis=0))
+                                if ctm_data_vars:
+                                   ctp_dsvec.append(xr.Dataset(coords=ctm_coords, data_vars=ctm_data_vars, attrs=ctm_attrs))
+                            if len(ctp_dsvec) > 0:
+                                ctm_ds = xr.merge(ctp_dsvec)
+                        if ctm_ds is not None:
+                            ct_dsvec.append(ctm_ds)
+                    if len(ct_dsvec) > 0:
+                        ct_ds = xr.Dataset()
+                        for ctm_ds in ct_dsvec:
+                            ct_ds = ct_ds.assign_coords(ctm_ds.coords).assign(ctm_ds.data_vars).assign_attrs(**ctm_ds.attrs)
+                        dsvec.append(ct_ds)
 
                 if 'equilibrium' in data:
                     eq_coords = {}
