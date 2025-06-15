@@ -59,6 +59,13 @@ class io():
     def is_empty(self):
         return (self._tree['input'].is_empty and self._tree['output'].is_empty)
 
+    def update_input_data_vars(self, data):
+        if isinstance(data, dict):
+            self.input = self._tree['input'].to_dataset().assign(data)
+
+    def delete_input_data_vars(self, data):
+        self.input = self._tree['input'].to_dataset().drop_vars([key for key in data], errors='ignore')
+
     def update_input_attrs(self, data):
         if isinstance(data, dict):
             self._tree['input'].attrs.update(data)
