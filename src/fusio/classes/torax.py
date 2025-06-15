@@ -492,13 +492,6 @@ class torax_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
-    #def add_output_dir(self, outdir):
-    #    newattrs = {}
-    #    if isinstance(outdir, (str, Path)):
-    #        newattrs['runtime_params.output_dir'] = f'{outdir}'
-    #    self.update_input_attrs(newattrs)
-
-
     def add_geometry(self, geotype, geofile, geodir=None):
         newattrs = {}
         newattrs['use_psi'] = False
@@ -517,14 +510,17 @@ class torax_io(io):
 
 
     def add_pedestal_by_pressure(self, pped, nped, tpedratio, wrho):
+        time = self.input.get('time').to_numpy().flatten()
+        newvars = {}
+        newvars['pedestal.P_ped'] = (['time'], np.zeros_like(time) + pped)
+        newvars['pedestal.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
+        newvars['pedestal.T_i_T_e_ratio'] = (['time'], np.zeros_like(time) + tpedratio)
+        newvars['pedestal.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
+        self.update_input_data_vars(newvars)
         newattrs = {}
         newattrs['pedestal.set_pedestal'] = True
         newattrs['pedestal.model_name'] = 'set_P_ped_n_ped'
-        newattrs['pedestal.P_ped'] = {0.0: float(pped)}
-        newattrs['pedestal.n_e_ped'] = {0.0: float(nped)}
         newattrs['pedestal.n_e_ped_is_fGW'] = False
-        newattrs['pedestal.T_i_T_e_ratio'] = {0.0: float(tpedratio)}
-        newattrs['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
         newattrs['transport.smooth_everywhere'] = False
         newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
         newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
@@ -532,15 +528,18 @@ class torax_io(io):
 
 
     def add_pedestal_by_temperature(self, nped, tped, wrho):
-        newattrs = {}
+        time = self.input.get('time').to_numpy().flatten()
         tref = 1.0e3
+        newvars = {}
+        newvars['pedestal.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
+        newvars['pedestal.T_e_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
+        newvars['pedestal.T_i_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
+        newvars['pedestal.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
+        self.update_input_data_vars(newvars)
+        newattrs = {}
         newattrs['pedestal.set_pedestal'] = True
         newattrs['pedestal.model_name'] = 'set_T_ped_n_ped'
-        newattrs['pedestal.n_e_ped'] = {0.0: float(nped)}
         newattrs['pedestal.n_e_ped_is_fGW'] = False
-        newattrs['pedestal.T_e_ped'] = {0.0: float(tped) / tref}
-        newattrs['pedestal.T_i_ped'] = {0.0: float(tped) / tref}
-        newattrs['pedestal.rho_norm_ped_top'] = {0.0: float(wrho)}
         newattrs['transport.smooth_everywhere'] = False
         newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
         newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
@@ -548,6 +547,7 @@ class torax_io(io):
 
 
     def add_pedestal_exponential_transport(self, chiscale, chidecay, dscale, ddecay):
+        #newvars = {}
         newattrs = {}
         wrho_array = self.input.attrs.get('pedestal.rho_norm_ped_top', None)
         if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
@@ -563,11 +563,13 @@ class torax_io(io):
             chirho = chiscale * np.exp(-factor / chidecay)
             drho = dscale * np.exp(-factor / ddecay)
             newattrs[f'{prefix}.model_name'] = 'constant'
+            # Improper form given base xarray structure, but necessary for now due to disjointed rho grid
             newattrs[f'{prefix}.chi_i'] = {rho: chi for rho, chi in zip(xrho, chirho)}
             newattrs[f'{prefix}.chi_e'] = {rho: chi for rho, chi in zip(xrho, chirho)}
             newattrs[f'{prefix}.D_e'] = {rho: d for rho, d in zip(xrho, drho)}
             newattrs[f'{prefix}.V_e'] = {rho: 0.0 for rho, d in zip(xrho, drho)}
             newattrs['n_combined_models'] = nmodels + 1
+        #self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
 
@@ -599,10 +601,10 @@ class torax_io(io):
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
         #newattrs['transport.predict_pedestal'] = (self.input.attrs.get('pedestal.set_pedestal', False))
-        if 'transport.apply_inner_patch' not in self.input.attrs:
-            newattrs['transport.apply_inner_patch'] = {0.0: False}
-        if 'transport.apply_outer_patch' not in self.input.attrs:
-            newattrs['transport.apply_outer_patch'] = {0.0: False}
+        #if 'transport.apply_inner_patch' not in self.input.attrs:
+        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
+        #if 'transport.apply_outer_patch' not in self.input.attrs:
+        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         newattrs['n_combined_models'] = self.input.attrs.get('n_combined_models', 0)
         self.update_input_attrs(newattrs)
 
@@ -616,9 +618,10 @@ class torax_io(io):
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
                 newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
+            newattrs[f'{prefix}.rho_min'] = 0.45
             newattrs['n_combined_models'] = nmodels + 1
         newattrs[f'{prefix}.model_name'] = 'qualikiz'
-        newattrs[f'{prefix}.n_max_runs'] = 10
+        newattrs[f'{prefix}.n_max_runs'] = 1
         newattrs[f'{prefix}.n_processes'] = 60
         newattrs[f'{prefix}.collisionality_multiplier'] = 1.0
         newattrs[f'{prefix}.DV_effective'] = False
@@ -634,10 +637,10 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
-        if 'transport.apply_inner_patch' not in self.input.attrs:
-            newattrs['transport.apply_inner_patch'] = {0.0: False}
-        if 'transport.apply_outer_patch' not in self.input.attrs:
-            newattrs['transport.apply_outer_patch'] = {0.0: False}
+        #if 'transport.apply_inner_patch' not in self.input.attrs:
+        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
+        #if 'transport.apply_outer_patch' not in self.input.attrs:
+        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_attrs(newattrs)
 
 
@@ -686,10 +689,10 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.0
         newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
-        if 'transport.apply_inner_patch' not in self.input.attrs:
-            newattrs['transport.apply_inner_patch'] = {0.0: False}
-        if 'transport.apply_outer_patch' not in self.input.attrs:
-            newattrs['transport.apply_outer_patch'] = {0.0: False}
+        #if 'transport.apply_inner_patch' not in self.input.attrs:
+        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
+        #if 'transport.apply_outer_patch' not in self.input.attrs:
+        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_attrs(newattrs)
 
 
@@ -705,50 +708,72 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_transport_inner_patch(self, de, ve, chii, chie, rho):
+    def add_transport_inner_patch(self, de, ve, chii, chie, rho, tstart=None, tend=None):
+        time = self.input.get('time').to_numpy().flatten()
+        trigger = np.isfinite(time)
+        if isinstance(tstart, (float, int)):
+            trigger &= (time >= tstart)
+        if isinstance(tend, (float, int)):
+            trigger &= (time <= tend)
+        newvars = {}
+        newvars['transport.apply_inner_patch'] = (['time'], trigger)
+        newvars['transport.D_e_inner'] = (['time'], np.zeros_like(time) + de)
+        newvars['transport.V_e_inner'] = (['time'], np.zeros_like(time) + ve)
+        newvars['transport.chi_i_inner'] = (['time'], np.zeros_like(time) + chii)
+        newvars['transport.chi_e_inner'] = (['time'], np.zeros_like(time) + chie)
+        self.update_input_data_vars(newvars)
         newattrs = {}
-        newattrs['transport.apply_inner_patch'] = {0.0: True}
-        newattrs['transport.D_e_inner'] = {0.0: float(de)}
-        newattrs['transport.V_e_inner'] = {0.0: float(ve)}
-        newattrs['transport.chi_i_inner'] = {0.0: float(chii)}
-        newattrs['transport.chi_e_inner'] = {0.0: float(chie)}
         newattrs['transport.rho_inner'] = float(rho)
         self.update_input_attrs(newattrs)
 
 
-    def add_transport_outer_patch(self, de, ve, chii, chie, rho):
+    def add_transport_outer_patch(self, de, ve, chii, chie, rho, tstart=None, tend=None):
+        time = self.input.get('time').to_numpy().flatten()
+        trigger = np.isfinite(time)
+        if isinstance(tstart, (float, int)):
+            trigger &= (time >= tstart)
+        if isinstance(tend, (float, int)):
+            trigger &= (time <= tend)
+        newvars = {}
+        newvars['transport.apply_outer_patch'] = (['time'], trigger)
+        newvars['transport.D_e_outer'] = (['time'], np.zeros_like(time) + de)
+        newvars['transport.V_e_outer'] = (['time'], np.zeros_like(time) + ve)
+        newvars['transport.chi_i_outer'] = (['time'], np.zeros_like(time) + chii)
+        newvars['transport.chi_e_outer'] = (['time'], np.zeros_like(time) + chie)
+        self.update_input_data_vars(newvars)
         newattrs = {}
-        newattrs['transport.apply_outer_patch'] = {0.0: True}
-        newattrs['transport.D_e_outer'] = {0.0: float(de)}
-        newattrs['transport.V_e_outer'] = {0.0: float(ve)}
-        newattrs['transport.chi_i_outer'] = {0.0: float(chii)}
-        newattrs['transport.chi_e_outer'] = {0.0: float(chie)}
         newattrs['transport.rho_outer'] = float(rho)
         self.update_input_attrs(newattrs)
 
 
     def reset_mhd_sawtooth_trigger(self):
+        delvars = [
+            'mhd.sawtooth.trigger_model.minimum_radius',
+            'mhd.sawtooth.trigger_model.s_critical',
+            'mhd.sawtooth.redistribution_model.flattening_factor',
+            'mhd.sawtooth.redistribution_model.mixing_radius_multiplier',
+        ]
+        self.delete_input_data_vars(delvars)
         delattrs = [
             'mhd.sawtooth.crash_step_duration',
             'mhd.sawtooth.trigger_model.model_name',
-            'mhd.sawtooth.trigger_model.minimum_radius',
-            'mhd.sawtooth.trigger_model.s_critical',
             'mhd.sawtooth.redistribution_model.model_name',
-            'mhd.sawtooth.redistribution_model.flattening_factor',
-            'mhd.sawtooth.redistribution_model.mixing_radius_multiplier',
         ]
         self.delete_input_attrs(delattrs)
 
 
-    def set_mhd_sawtooth_trigger(self, rmin, scrit):
+    def set_mhd_sawtooth_trigger(self, rmin, scrit, flat=1.01, rmult=1.1, deltat=1.0e-3):
+        time = self.input.get('time').to_numpy().flatten()
+        newvars = {}
+        newvars['mhd.sawtooth.trigger_model.minimum_radius'] = (['time'], np.zeros_like(time) + rmin)
+        newvars['mhd.sawtooth.trigger_model.s_critical'] = (['time'], np.zeros_like(time) + scrit)
+        newvars['mhd.sawtooth.redistribution_model.flattening_factor'] = (['time'], np.zeros_like(time) + flat)
+        newvars['mhd.sawtooth.redistribution_model.mixing_radius_multiplier'] = (['time'], np.zeros_like(time) + rmult)
+        self.update_input_data_vars(newvars)
         newattrs = {}
-        newattrs['mhd.sawtooth.crash_step_duration'] = 1.0e-3
+        newattrs['mhd.sawtooth.crash_step_duration'] = float(deltat)
         newattrs['mhd.sawtooth.trigger_model.model_name'] = 'simple'
-        newattrs['mhd.sawtooth.trigger_model.minimum_radius'] = {0.0: float(rmin)}
-        newattrs['mhd.sawtooth.trigger_model.s_critical'] = {0.0: float(scrit)}
         newattrs['mhd.sawtooth.redistribution_model.model_name'] = 'simple'
-        newattrs['mhd.sawtooth.redistribution_model.flattening_factor'] = {0.0: 1.01}
-        newattrs['mhd.sawtooth.redistribution_model.mixing_radius_multiplier'] = {0.0: 1.1}
         self.update_input_attrs(newattrs)
 
 
@@ -775,13 +800,21 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.gas_puff.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delvars = [
+            'sources.gas_puff.puff_decay_length',
+            'sources.gas_puff.S_total',
+        ]
+        self.delete_input_data_vars(delvars)
 
 
     def set_gas_puff_source(self, length, total):
+        time = self.input.get('time').to_numpy().flatten()
+        newvars = {}
+        newvars['sources.gas_puff.puff_decay_length'] = (['time'], np.zeros_like(time) + length)
+        newvars['sources.gas_puff.S_total'] = (['time'], np.zeros_like(time) + total)
+        self.update_input_data_vars(newvars)
         newattrs = {}
         newattrs['sources.gas_puff.mode'] = 'MODEL_BASED'
-        newattrs['sources.gas_puff.puff_decay_length'] = {0.0: length}
-        newattrs['sources.gas_puff.S_total'] = {0.0: total}
         self.update_input_attrs(newattrs)
 
 
@@ -827,14 +860,17 @@ class torax_io(io):
 
 
     def add_toricnn_icrh_source(self, freq, mfrac, total, iwall=1.24, owall=2.43):
+        time = self.input.get('time').to_numpy().flatten()
+        newvars = {}
+        newvars['sources.icrh.frequency'] = (['time'], np.zeros_like(time) + freq)
+        newvars['sources.icrh.minority_concentration'] = (['time'], np.zeros_like(time) + mfrac)
+        newvars['sources.icrh.P_total'] = (['time'], np.zeros_like(time) + total)
+        self.update_input_data_vars(newvars)
         newattrs = {}
         newattrs['sources.icrh.mode'] = 'MODEL_BASED'
         newattrs['sources.icrh.model_path'] = ''
         newattrs['sources.icrh.wall_inner'] = iwall
         newattrs['sources.icrh.wall_outer'] = owall
-        newattrs['sources.icrh.frequency'] = {0.0: freq}
-        newattrs['sources.icrh.minority_concentration'] = {0.0: mfrac}
-        newattrs['sources.icrh.P_total'] = {0.0: total}
         self.update_input_attrs(newattrs)
 
 
@@ -849,8 +885,13 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.generic_heat.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
-        delattrs = [
+        delvars = [
             'sources.generic_heat.prescribed_values',
+            'sources.generic_heat.prescribed_values_el',
+            'sources.generic_heat.prescribed_values_ion',
+        ]
+        self.delete_input_data_vars(delvars)
+        delattrs = [
             'sources.generic_heat.gaussian_location',
             'sources.generic_heat.gaussian_width',
             'sources.generic_heat.P_total',
@@ -864,8 +905,11 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.generic_particle.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
-        delattrs = [
+        delvars = [
             'sources.generic_particle.prescribed_values',
+        ]
+        self.delete_input_data_vars(delvars)
+        delattrs = [
             'sources.generic_particle.deposition_location',
             'sources.generic_particle.particle_width',
             'sources.generic_particle.S_total',
@@ -877,8 +921,11 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.generic_current.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
-        delattrs = [
+        delvars = [
             'sources.generic_current.prescribed_values',
+        ]
+        self.delete_input_data_vars(delvars)
+        delattrs = [
             'sources.generic_current.gaussian_location',
             'sources.generic_current.gaussian_width',
             'sources.generic_current.I_generic',
@@ -889,46 +936,84 @@ class torax_io(io):
 
 
     def set_gaussian_generic_heat_source(self, mu, sigma, total, efrac=0.5, afrac=1.0):
+        self.reset_generic_heat_source()
+        time = self.input.get('time').to_numpy().flatten()
+        newvars = {}
+        newvars['sources.generic_heat.gaussian_location'] = (['time'], np.zeros_like(time) + mu)
+        newvars['sources.generic_heat.gaussian_width'] = (['time'], np.zeros_like(time) + sigma)
+        newvars['sources.generic_heat.P_total'] = (['time'], np.zeros_like(time) + total)
+        newvars['sources.generic_heat.electron_heat_fraction'] = (['time'], np.zeros_like(time) + efrac)
+        newvars['sources.generic_heat.absorption_fraction'] = (['time'], np.zeros_like(time) + afrac)
+        self.update_input_data_vars(newvars)
         newattrs = {}
         newattrs['sources.generic_heat.mode'] = 'MODEL_BASED'
-        newattrs['sources.generic_heat.gaussian_location'] = {0.0: mu}
-        newattrs['sources.generic_heat.gaussian_width'] = {0.0: sigma}
-        newattrs['sources.generic_heat.P_total'] = {0.0: total}
-        newattrs['sources.generic_heat.electron_heat_fraction'] = {0.0: efrac}
-        newattrs['sources.generic_heat.absorption_fraction'] = {0.0: afrac}
         self.update_input_attrs(newattrs)
-        delattrs = [
-            'sources.generic_heat.prescribed_values',
-        ]
-        self.delete_input_attrs(delattrs)
 
 
     def set_gaussian_generic_particle_source(self, mu, sigma, total):
+        self.reset_generic_particle_source()
+        time = self.input.get('time').to_numpy().flatten()
+        newvars = {}
+        newvars['sources.generic_particle.deposition_location'] = (['time'], np.zeros_like(time) + mu)
+        newvars['sources.generic_particle.particle_width'] = (['time'], np.zeros_like(time) + sigma)
+        newvars['sources.generic_particle.S_total'] = (['time'], np.zeros_like(time) + total)
+        self.update_input_data_vars(newvars)
         newattrs = {}
         newattrs['sources.generic_particle.mode'] = 'MODEL_BASED'
-        newattrs['sources.generic_particle.deposition_location'] = {0.0: mu}
-        newattrs['sources.generic_particle.particle_width'] = {0.0: sigma}
-        newattrs['sources.generic_particle.S_total'] = {0.0: total}
         self.update_input_attrs(newattrs)
-        delattrs = [
-            'sources.generic_particle.prescribed_values',
-        ]
-        self.delete_input_attrs(delattrs)
 
 
     def set_gaussian_generic_current_source(self, mu, sigma, total):
+        self.reset_generic_current_source()
+        time = self.input.get('time').to_numpy().flatten()
         newattrs = {}
         newattrs['sources.generic_current.mode'] = 'MODEL_BASED'
-        newattrs['sources.generic_current.gaussian_location'] = {0.0: mu}
-        newattrs['sources.generic_current.gaussian_width'] = {0.0: sigma}
-        newattrs['sources.generic_current.I_generic'] = {0.0: total}
-        newattrs['sources.generic_current.fraction_of_total_current'] = {0.0: 0.0}
+        newattrs['sources.generic_current.gaussian_location'] = (['time'], np.zeros_like(time) + mu)
+        newattrs['sources.generic_current.gaussian_width'] = (['time'], np.zeros_like(time) + sigma)
+        newattrs['sources.generic_current.I_generic'] = (['time'], np.zeros_like(time) + total)
+        newattrs['sources.generic_current.fraction_of_total_current'] = (['time'], np.ones_like(time))
         newattrs['sources.generic_current.use_absolute_current'] = True
         self.update_input_attrs(newattrs)
-        delattrs = [
-            'sources.generic_current.prescribed_values',
-        ]
-        self.delete_input_attrs(delattrs)
+
+
+    def set_prescribed_generic_heat_source(self, rho, eheat, iheat):
+        self.reset_generic_heat_source()
+        time = self.input.get('time').to_numpy().flatten()
+        newrho = self.input.get('rho').to_numpy().flatten()
+        neweheat = np.interp(newrho, rho, eheat)
+        newiheat = np.interp(newrho, rho, iheat)
+        newattrs = {}
+        newattrs['sources.generic_heat.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], np.repeat(np.atleast_2d(neweheat), len(time), axis=0))
+        newvars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], np.repeat(np.atleast_2d(newiheat), len(time), axis=0))
+        self.update_input_data_vars(newvars)
+
+
+    def set_prescribed_generic_particle_source(self, rho, particle):
+        self.reset_generic_particle_source()
+        time = self.input.get('time').to_numpy().flatten()
+        newrho = self.input.get('rho').to_numpy().flatten()
+        newparticle = np.interp(newrho, rho, particle)
+        newattrs = {}
+        newattrs['sources.generic_particle.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newparticle), len(time), axis=0))
+        self.update_input_data_vars(newvars)
+
+
+    def set_prescribed_generic_current_source(self, rho, current):
+        self.reset_generic_current_source()
+        newrho = self.input.get('rho').to_numpy().flatten()
+        newcurrent = np.interp(newrho, rho, current)
+        newattrs = {}
+        newattrs['sources.generic_current.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.generic_current.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newcurrent), len(time), axis=0))
+        self.update_input_data_vars(newvars)
 
 
     def add_fixed_linear_solver(self, dt_fixed=None, single=False):
@@ -1115,17 +1200,23 @@ class torax_io(io):
                     datadict.pop(f'{srctag}.prescribed_values_el', None)
                     datadict.pop(f'{srctag}.prescribed_values_ion', None)
         if (
-            datadict.get('sources.generic_heat.mode', 'MODEL') == 'PRESCRIBED' and
+            datadict.get('sources.generic_heat.mode', 'MODEL_BASED') == 'PRESCRIBED' and
             'sources.generic_heat.prescribed_values_el' in datadict and
             'sources.generic_heat.prescribed_values_ion' in datadict
         ):
             e_source = datadict.pop('sources.generic_heat.prescribed_values_el')
             i_source = datadict.pop('sources.generic_heat.prescribed_values_ion')
-            source = {t: (copy.deepcopy(e_source[t][0]), e_source[t][1] + i_source[t][1]) for t in e_source}
-            fraction = {t: float((e_source[t][1] / (e_source[t][1] + i_source[t][1]))[0]) for t in e_source}
-            datadict['sources.generic_heat.prescribed_values'] = source
-            datadict['sources.generic_heat.electron_heat_fraction'] = fraction
-            #datadict['sources.generic_heat.prescribed_values'] = ((e_source, i_source), {'time_interpolation_mode': 'PIECEWISE_LINEAR', 'rho_interpolation_mode': 'PIECEWISE_LINEAR'})
+            datadict['sources.generic_heat.prescribed_values'] = (i_source, e_source)
+        if (
+            datadict.get('sources.generic_particle.mode', 'MODEL_BASED') == 'PRESCRIBED' and
+            'sources.generic_particle.prescribed_values' in datadict
+        ):
+            datadict['sources.generic_particle.prescribed_values'] = (datadict.pop('sources.generic_particle.prescribed_values'), )
+        if (
+            datadict.get('sources.generic_current.mode', 'MODEL_BASED') == 'PRESCRIBED' and
+            'sources.generic_current.prescribed_values' in datadict
+        ):
+            datadict['sources.generic_current.prescribed_values'] = (datadict.pop('sources.generic_current.prescribed_values'), )
         use_psi = datadict.pop('use_psi', True)
         if not use_psi:
             datadict.pop('profile_conditions.psi', None)
@@ -1250,80 +1341,80 @@ class torax_io(io):
                 external_particle_source = None
                 external_current_source = None
                 fusion_source = None
-                if 'qohme' in data and data['qohme'].sum() != 0.0:
+                if 'qohme' in data and np.abs(data['qohme']).sum() != 0.0:
                     attrs['sources.ohmic.mode'] = 'PRESCRIBED'
                     data_vars['sources.ohmic.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qohme'].to_numpy().flatten(), axis=0))
-                if 'qbeame' in data and data['qbeame'].sum() != 0.0:
+                if 'qbeame' in data and np.abs(data['qbeame']).sum() != 0.0:
                     if external_el_heat_source is None:
                         external_el_heat_source = np.zeros_like(data['qbeame'].to_numpy().flatten())
                     external_el_heat_source += 1.0e6 * data['qbeame'].to_numpy().flatten()
-                if 'qbeami' in data and data['qbeami'].sum() != 0.0:
+                if 'qbeami' in data and np.abs(data['qbeami']).sum() != 0.0:
                     if external_ion_heat_source is None:
                         external_ion_heat_source = np.zeros_like(data['qbeami'].to_numpy().flatten())
                     external_ion_heat_source += 1.0e6 * data['qbeami'].to_numpy().flatten()
-                if 'qrfe' in data and data['qrfe'].sum() != 0.0:
+                if 'qrfe' in data and np.abs(data['qrfe']).sum() != 0.0:
                     if external_el_heat_source is None:
                         external_el_heat_source = np.zeros_like(data['qrfe'].to_numpy().flatten())
                     external_el_heat_source += 1.0e6 * data['qrfe'].to_numpy().flatten()
-                if 'qrfi' in data and data['qrfi'].sum() != 0.0:
+                if 'qrfi' in data and np.abs(data['qrfi']).sum() != 0.0:
                     if external_ion_heat_source is None:
                         external_ion_heat_source = np.zeros_like(data['qrfi'].to_numpy().flatten())
                     external_ion_heat_source += 1.0e6 * data['qrfi'].to_numpy().flatten()
-                if 'qsync' in data and data['qsync'].sum() != 0.0:
+                if 'qsync' in data and np.abs(data['qsync']).sum() != 0.0:
                     attrs['sources.cyclotron_radiation.mode'] = 'PRESCRIBED'
                     data_vars['sources.cyclotron_radiation.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qsync'].to_numpy().flatten(), axis=0))
-                if 'qbrem' in data and data['qbrem'].sum() != 0.0:
+                if 'qbrem' in data and np.abs(data['qbrem']).sum() != 0.0:
                     attrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
                     data_vars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qbrem'].to_numpy().flatten(), axis=0))
-                if 'qline' in data and data['qline'].sum() != 0.0:
+                if 'qline' in data and np.abs(data['qline']).sum() != 0.0:
                     attrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
                     data_vars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qline'].to_numpy().flatten(), axis=0))
-                if 'qfuse' in data and data['qfuse'].sum() != 0.0:
+                if 'qfuse' in data and np.abs(data['qfuse']).sum() != 0.0:
                     if fusion_source is None:
                         fusion_source = np.zeros_like(data['qfuse'].to_numpy().flatten())
                     fusion_source += 1.0e6 * data['qfuse'].to_numpy().flatten()
-                if 'qfusi' in data and data['qfusi'].sum() != 0.0:
+                if 'qfusi' in data and np.abs(data['qfusi']).sum() != 0.0:
                     if fusion_source is None:
                         fusion_source = np.zeros_like(data['qfuse'].to_numpy().flatten())
                     fusion_source += 1.0e6 * data['qfuse'].to_numpy().flatten()
-                if 'qei' in data and data['qei'].sum() != 0.0:
+                if 'qei' in data and np.abs(data['qei']).sum() != 0.0:
                     attrs['sources.ei_exchange.mode'] = 'PRESCRIBED'
                     data_vars['sources.ei_exchange.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qei'].to_numpy().flatten(), axis=0))
-                #if 'qione' in data and data['qione'].sum() != 0.0:
+                #if 'qione' in data and np.abs(data['qione']).sum() != 0.0:
                 #    pass
-                #if 'qioni' in data and data['qioni'].sum() != 0.0:
+                #if 'qioni' in data and np.abs(data['qioni']).sum() != 0.0:
                 #    pass
-                #if 'qcxi' in data and data['qcxi'].sum() != 0.0:
+                #if 'qcxi' in data and np.abs(data['qcxi']).sum() != 0.0:
                 #    pass
-                if 'jbs' in data and data['jbs'].sum() != 0.0:
+                if 'jbs' in data and np.abs(data['jbs']).sum() != 0.0:
                     data_vars['profile_conditions.j_bootstrap'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['jbs'].to_numpy().flatten(), axis=0))
                     if external_current_source is None:
                         external_current_source = np.zeros_like(data['jbs'].to_numpy().flatten())
                     external_current_source += 1.0e6 * data['jbs'].to_numpy().flatten()
                 #if 'jbstor' in data and data['jbstor'].sum() != 0.0:
                 #    pass
-                if 'johm' in data and data['johm'].sum() != 0.0:
+                if 'johm' in data and np.abs(data['johm']).sum() != 0.0:
                     data_vars['profile_conditions.j_ohmic'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['johm'].to_numpy().flatten(), axis=0))
                     if external_current_source is None:
                         external_current_source = np.zeros_like(data['johm'].to_numpy().flatten())
                     external_current_source += 1.0e6 * data['johm'].to_numpy().flatten()
-                if 'jrf' in data and data['jrf'].sum() != 0.0:
+                if 'jrf' in data and np.abs(data['jrf']).sum() != 0.0:
                     if external_current_source is None:
                         external_current_source = np.zeros_like(data['jrf'].to_numpy().flatten())
                     external_current_source += 1.0e6 * data['jrf'].to_numpy().flatten()
-                if 'jnb' in data and data['jnb'].sum() != 0.0:
+                if 'jnb' in data and np.abs(data['jnb']).sum() != 0.0:
                     if external_current_source is None:
                         external_current_source = np.zeros_like(data['jnb'].to_numpy().flatten())
                     external_current_source += 1.0e6 * data['jnb'].to_numpy().flatten()
-                if 'qpar_beam' in data and data['qpar_beam'].sum() != 0.0:
+                if 'qpar_beam' in data and np.abs(data['qpar_beam']).sum() != 0.0:
                     if external_particle_source is None:
                         external_particle_source = np.zeros_like(data['qpar_beam'].to_numpy().flatten())
                     external_particle_source += data['qpar_beam'].to_numpy().flatten()
-                if 'qpar_wall' in data and data['qpar_wall'].sum() != 0.0:
+                if 'qpar_wall' in data and np.abs(data['qpar_wall']).sum() != 0.0:
                     if external_particle_source is None:
                         external_particle_source = np.zeros_like(data['qpar_wall'].to_numpy().flatten())
                     external_particle_source += data['qpar_wall'].to_numpy().flatten()
-                #if 'qmom' in data and data['qmom'].sum() != 0.0:
+                #if 'qmom' in data and np.abs(data['qmom']).sum() != 0.0:
                 #    pass
                 if external_el_heat_source is not None:
                     attrs['use_generic_heat'] = True
@@ -1340,4 +1431,114 @@ class torax_io(io):
                     data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_current_source, axis=0))
                     attrs['sources.generic_current.use_absolute_current'] = True
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+        return newobj
+
+
+    @classmethod
+    def from_omas(cls, obj, side='output', n=0):
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            dsvec = []
+            if 'time_cp' in data.coords and 'rho_cp' in data.coords:
+                coords = {}
+                data_vars = {}
+                attrs = {}
+                coords['time'] = data.get('time_cp').to_numpy().flatten()
+                coords['rho'] = data.get('rho_cp').to_numpy().flatten()
+                if 'ion_cp' in data:
+                    #sn, sa, sz = define_ion_species(short_name=sname)
+                    coords['main_ion'] = data.get('ion_cp').to_numpy().flatten()
+                attrs['numerics.t_initial'] = coords['time'][0]
+                omas_tag = 'core_profiles.profiles_1d.ion.density'
+                if omas_tag in data:
+                    data_vars['profile_conditions.n_i'] = (['time', 'main_ion', 'rho'], data[omas_tag].to_numpy())
+                omas_tag = 'core_profiles.global_quantities.ip'
+                if omas_tag in data:
+                    data_vars['profile_conditions.Ip'] = (['time'], data[omas_tag].to_numpy())
+                omas_tag = 'core_profiles.profiles_1d.electrons.density'
+                if omas_tag in data:
+                    data_vars['profile_conditions.n_e'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                    attrs['profile_conditions.normalize_n_e_to_nbar'] = False
+                    attrs['profile_conditions.n_e_nbar_is_fGW'] = False
+                omas_tag = 'core_profiles.profiles_1d.electrons.temperature'
+                if omas_tag in data:
+                    data_vars['profile_conditions.T_e'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                omas_tag = 'core_profiles.profiles_1d.ion.temperature'
+                if omas_tag in data:
+                    data_vars['profile_conditions.T_i'] = (['time', 'rho'], data[omas_tag].mean('main_ion').to_numpy())
+                omas_tag = 'core_profiles.profiles_1d.grid.psi'
+                if omas_tag in data:
+                    data_vars['profile_conditions.psi'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                omas_tag = 'core_profiles.profiles_1d.q'
+                if omas_tag in data:
+                    data_vars['profile_conditions.q'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                omas_tag = 'core_profiles.global_quantities.v_loop'
+                if omas_tag in data:
+                    data_vars['profile_conditions.v_loop_lcfs'] = (['time'], data[omas_tag].to_numpy())
+                    attrs['profile_conditions.use_v_loop_lcfs_boundary_condition'] = False
+                #core_profiles.profiles_1d.conductivity_parallel              (time_cp, rho_cp)
+                #core_profiles.profiles_1d.current_parallel_inside            (time_cp, rho_cp)
+                #core_profiles.profiles_1d.j_tor                              (time_cp, rho_cp)
+                #core_profiles.profiles_1d.j_total                            (time_cp, rho_cp)
+                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs))
+            if 'time_cs' in data.coords and 'rho_cs' in data.coords:
+                coords = {}
+                data_vars = {}
+                attrs = {}
+                coords['time'] = data.get('time_cs').to_numpy().flatten()
+                coords['rho'] = data.get('rho_cs').to_numpy().flatten()
+                # Place the sources
+                external_el_heat_source = None
+                external_ion_heat_source = None
+                external_particle_source = None
+                external_current_source = None
+                fusion_source = None
+                omas_tag = 'core_sources.ohmic.profiles_1d.electrons.energy'
+                omas_tag = 'core_sources.line_radiation.profiles_1d.electrons.energy'
+                omas_tag = 'core_sources.bremsstrahlung.profiles_1d.electrons.energy'
+                omas_tag = 'core_sources.ic.profiles_1d.electrons.energy'
+                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
+                    if external_el_heat_source is None:
+                        external_el_heat_source = np.zeros_like(data[omas_tag].to_numpy())
+                    external_el_heat_source += 1.0e6 * data[omas_tag].to_numpy()
+                omas_tag = 'core_sources.ic.profiles_1d.total_ion_energy'
+                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
+                    if external_ion_heat_source is None:
+                        external_ion_heat_source = np.zeros_like(data[omas_tag].to_numpy())
+                    external_ion_heat_source += 1.0e6 * data[omas_tag].to_numpy()
+                omas_tag = 'core_sources.ic.global_quantities.power'
+                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
+                    data_vars['sources.icrh.P_total'] = (['time'], data[omas_tag].to_numpy().flatten())
+                omas_tag = 'core_sources.fusion.profiles_1d.electrons.energy'
+                if external_el_heat_source is not None:
+                    attrs['use_generic_heat'] = True
+                    attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
+                    data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], external_ion_heat_source)
+                    data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], external_el_heat_source)
+                if external_particle_source is not None:
+                    attrs['use_generic_particle'] = True
+                    attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
+                    data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], external_particle_source)
+                if external_current_source is not None:
+                    attrs['use_generic_current'] = True
+                    attrs['sources.generic_current.mode'] = 'PRESCRIBED'
+                    data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], external_current_source)
+                    attrs['sources.generic_current.use_absolute_current'] = True
+                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs))
+            if 'time_eq' in data.coords and 'rho_eq' in data.coords:
+                coords = {}
+                data_vars = {}
+                attrs = {}
+                coords['time'] = data.get('time_eq').to_numpy().flatten()
+                coords['rho'] = data.get('rho_eq').to_numpy().flatten()
+                omas_tag = 'equilibrium.time_slice.profiles_1d.psi'
+                if omas_tag in data:
+                    data_vars['profile_conditions.psi'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                omas_tag = 'equilibrium.time_slice.profiles_1d.q'
+                if omas_tag in data:
+                    data_vars['profile_conditions.q'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs))
+            if len(dsvec) > 0:
+                newobj.input = xr.merge(dsvec)
         return newobj
