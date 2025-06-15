@@ -618,7 +618,7 @@ class torax_io(io):
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
                 newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
-            newattrs[f'{prefix}.rho_min'] = 0.45
+            #newattrs[f'{prefix}.rho_min'] = 0.45
             newattrs['n_combined_models'] = nmodels + 1
         newattrs[f'{prefix}.model_name'] = 'qualikiz'
         newattrs[f'{prefix}.n_max_runs'] = 1
