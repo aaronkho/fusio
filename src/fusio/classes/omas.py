@@ -154,7 +154,7 @@ class omas_io(io):
                         if 'code' in src:
                             cs_attrs[f'core_sources.{srctag}.code.name'] = src.pop('code').get('name', '')
                         cs_ds = xr.Dataset(coords=cs_coords, attrs=cs_attrs) if cs_coords else None
-                        if 'time_cs' in cs_coords and 'rho_cs' in cs_coords:
+                        if cs_ds is not None and 'time_cs' in cs_coords and 'rho_cs' in cs_coords:
                             timevec = cs_coords.pop('time_cs', [])
                             csp_dsvec = []
                             for jj, csp in enumerate(profs):
@@ -191,7 +191,7 @@ class omas_io(io):
                                 cs_ds = cs_ds.assign_coords(csp_ds.coords).assign(csp_ds.data_vars).assign_attrs(**csp_ds.attrs)
                             if len(timevec) > 0:
                                 cs_coords['time_cs'] = timevec
-                        if 'time_cs' in cs_coords:
+                        if cs_ds is not None and 'time_cs' in cs_coords:
                             globs = src.pop('global_quantities', [])
                             timevec = cs_coords.pop('time_cs', [])
                             csg_dsvec = []
@@ -199,19 +199,19 @@ class omas_io(io):
                                 cs_data_vars = {}
                                 cs_coords['time_cs'] = np.atleast_1d([timevec[jj]]) if len(timevec) > jj else np.atleast_1d([float(csg['time'])])
                                 if 'ion_cs' in cs_coords:
-                                    ions = csg.pop('ions', [])
+                                    ions = csg.pop('ion', [])
                                     iondict = {}
                                     for kk, ion in enumerate(ions):
                                         for key, val in ion.items():
-                                            tag = f'core_sources.{srctag}.global_quantities.ions.{key}'
+                                            tag = f'core_sources.{srctag}.global_quantities.ion.{key}'
                                             if isinstance(val, list):
                                                 iondict[tag] = np.concatenate([iondict[tag], np.atleast_1d(val)], axis=-1) if tag in iondict else np.atleast_1d(val)
                                     for tag, val in iondict.items():
                                         cs_data_vars[tag] = (['time_cs', 'ion_cs'], val)
                                 for key, val in csg.items():
                                     tag = f'core_sources.{srctag}.global_quantities.{key}'
-                                    if isinstance(val, list):
-                                        cs_data_vars[tag] = (['time_cs'], np.atleast_1d(val))
+                                    if key != 'time' and isinstance(val, (float, int)):
+                                        cs_data_vars[tag] = (['time_cs'], np.atleast_1d([val]))
                                 if cs_data_vars:
                                     csg_dsvec.append(xr.Dataset(coords=cs_coords, data_vars=cs_data_vars))
                             if len(csg_dsvec) > 0:
@@ -223,7 +223,6 @@ class omas_io(io):
                         dsvec.append(xr.merge(cs_dsvec))
 
                 if 'core_transport' in data:
-                    #data['core_transport']['model'][0]['profiles_1d'][0]['ion'][0]['energy']
                     ct_coords = {}
                     if 'time' in data['core_transport']:
                         ct_coords['time_ct'] = np.atleast_1d(data['core_transport'].pop('time'))
@@ -342,7 +341,7 @@ class omas_io(io):
                                     eq_data_vars[tag] = (['time_eq', 'rho_eq'], np.expand_dims(np.atleast_1d(val), axis=0))
                             globs = eqs.pop('global_quantities', {})
                             for key, val in globs.items():
-                                tag = 'equilibrium.time_slice.global_quantities.{key}'
+                                tag = f'equilibrium.time_slice.global_quantities.{key}'
                                 if isinstance(val, (float, int)):
                                     eq_data_vars[tag] = (['time_eq'], np.atleast_1d([val]))
                             eq_dsvec.append(xr.Dataset(coords=eq_coords, data_vars=eq_data_vars, attrs=eq_attrs))
@@ -400,6 +399,30 @@ class omas_io(io):
 
 
     def _write_omas_json_file(self, data, path, overwrite=False):
+        pass
+
+
+    def generate_eqdsk_file(self, path):
+        #equilibrium.time_slice.profiles_1d.dpressure_dpsi            (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.dvolume_dpsi              (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.elongation                (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.f                         (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.f_df_dpsi                 (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.gm1                       (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.gm9                       (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.j_tor                     (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.pressure                  (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.psi                       (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.psi_norm                  (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.q                         (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.r_inboard                 (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.r_outboard                (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.rho_tor                   (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.surface                   (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.triangularity_lower       (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.triangularity_upper       (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.volume                    (time_eq, rho_eq)
+        #equilibrium.time_slice.profiles_1d.rho_tor_norm              (time_eq, rho_eq)
         pass
 
 
