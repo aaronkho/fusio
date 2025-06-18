@@ -492,6 +492,30 @@ class torax_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
+    def add_hydrogenic_minority_species(self, sname, sfrac):
+        if sname in ['H', 'D', 'T'] and sname not in self.input.get('main_ion', []):
+            data = self.input.to_dataset()
+            coords = {'main_ion': [sname]}
+            data_vars = {}
+            if 'plasma_composition.main_ion' in data:
+                total = data.get('plasma_composition.main_ion').sum('main_ion').to_numpy()
+                data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(sfrac / (total - sfrac), axis=0))
+            newdata = xr.Dataset(coords=coords, data_vars=data_vars)
+            self.input = xr.concat([data, newdata], dim='main_ion', data_vars='minimal', coords='minimal', join='outer')
+            if 'plasma_composition.main_ion' in self.input:
+                val = self.input['plasma_composition.main_ion']
+                newvars = {}
+                newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], (val / val.sum('main_ion')).to_numpy())
+                self.update_input_data_vars(newvars)
+
+
+    def set_constant_flat_effective_charge(self, zeff):
+        shape = (self.input.get('time').size, self.input.get('rho').size)
+        newvars = {}
+        newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.full(shape, float(zeff)))
+        self.update_input_data_vars(newvars)
+
+
     def add_geometry(self, geotype, geofile, geodir=None):
         newattrs = {}
         newattrs['use_psi'] = False
@@ -889,7 +913,7 @@ class torax_io(io):
         delvars = [
             'sources.cyclotron_radiation.prescribed_values',
         ]
-        self.delete_input_data_vars(delattrs)
+        self.delete_input_data_vars(delvars)
         delattrs = [
             'sources.cyclotron_radiation.wall_reflection_coeff',
             'sources.cyclotron_radiation.beta_min',
@@ -1207,19 +1231,32 @@ class torax_io(io):
         ds = self.input
         datadict.update(ds.attrs)
         for key in ds.data_vars:
-            if 'time' in ds[key].dims:
-                time = ds['time'].to_numpy().flatten()
+            dims = ds[key].dims
+            ttag = 'time' if 'time' in dims else None
+            if ttag is None:
+                for dim in dims:
+                    if dim.startswith('time_'):
+                        ttag = dim
+                        break
+            rtag = 'rho' if 'rho' in dims else None
+            if rtag is None:
+                for dim in dims:
+                    if dim.startswith('rho_'):
+                        rtag = dim
+                        break
+            if ttag is not None and ttag in ds[key].dims:
+                time = ds[ttag].to_numpy().flatten()
                 time_dependent_var = {}
-                if 'rho' in ds[key].dims:
+                if rtag is not None and rtag in ds[key].dims:
                     for ii in range(len(time)):
-                        da = ds[key].isel(time=ii).dropna('rho')
+                        da = ds[key].isel(time=ii).dropna(rtag)
                         if da.size > 0:
-                            time_dependent_var[float(time[ii])] = (da['rho'].to_numpy().flatten(), da.to_numpy().flatten())
+                            time_dependent_var[float(time[ii])] = (da[rtag].to_numpy().flatten(), da.to_numpy().flatten())
                 elif 'main_ion' in ds[key].dims:
                     for species in ds['main_ion'].to_numpy().flatten():
-                        da = ds[key].dropna('time').sel(main_ion=species)
+                        da = ds[key].dropna(ttag).sel(main_ion=species)
                         if da.size > 0:
-                            time_dependent_var[str(species)] = {float(t): v for t, v in zip(da['time'].to_numpy().flatten(), da.to_numpy().flatten())}
+                            time_dependent_var[str(species)] = {float(t): v for t, v in zip(da[ttag].to_numpy().flatten(), da.to_numpy().flatten())}
                 else:
                     for ii in range(len(time)):
                         da = ds[key].isel(time=ii)
