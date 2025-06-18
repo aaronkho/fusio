@@ -1,5 +1,7 @@
 import copy
+from pathlib import Path
 import numpy as np
+from freeqdsk import geqdsk
 
 def define_cocos(cocos_number):
     # Default dictionary returns COCOS=1
@@ -129,3 +131,21 @@ def convert_cocos(eqdsk, cocos_in, cocos_out, bt_sign_out=None, ip_sign_out=None
         out['zbdry'] = copy.deepcopy(eqdsk['zbdry'])
     return out
 
+
+def read_eqdsk(path):
+    data = {}
+    if isinstance(path, (str, Path)):
+        geqdsk_path = Path(path)
+        if geqdsk_path.is_file():
+            with open(geqdsk_path, 'r') as f:
+                data = geqdsk.read(f)
+    return data
+
+
+def write_eqdsk(data, path):
+    if isinstance(path, (str, Path)) and isinstance(data, dict):
+        geqdsk_path = Path(path)
+        if not geqdsk_path.exists():
+            geqdsk_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(geqdsk_path, 'w') as f:
+                geqdsk.write(data, f)
