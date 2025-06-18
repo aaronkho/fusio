@@ -4,6 +4,7 @@ import logging
 import numpy as np
 import xarray as xr
 from .io import io
+from ..utils.eqdsk_tools import write_eqdsk
 
 logger = logging.getLogger('fusio')
 
@@ -324,16 +325,20 @@ class omas_io(io):
                         timevec = eq_coords.pop('time_eq', [])
                         eq_dsvec = []
                         for ii, eqs in enumerate(slices):
-                            # Does not transfer boundary or constraints
+                            eq_coords.pop('i_bdry_eq', None)
+                            eq_coords.pop('i_xpt_eq', None)
                             eq_data_vars = {}
                             eq_coords['time_eq'] = np.atleast_1d([timevec[ii]]) if len(timevec) > ii else np.atleast_1d([float(eqs['time'])])
                             equil = eqs.pop('profiles_2d', [])
                             for cc in range(len(equil)):
-                                if 'grid_type' in equil[cc] and equil[cc]['grid_type'] == 'rectangular':
-                                    for key, val in equil[cc]:
+                                if 'grid_type' in equil[cc] and (
+                                    equil[cc]['grid_type'].get('name', '') == 'rectangular' or
+                                    equil[cc]['grid_type'].get('index', -1) == 1
+                                ):
+                                    for key, val in equil[cc].items():
                                         tag = f'equilibrium.time_slice.profiles_2d.{key}'
                                         if isinstance(val, list):
-                                            eq_data_vars[tag] = (['time_eq', 'r_eq', 'z_eq'], np.expand_dims(np.atleast_2d(val), axis=0))
+                                            eq_data_vars[tag] = (['time_eq', 'r_eq', 'z_eq'], np.expand_dims(np.atleast_2d(val).T, axis=0))
                             profs = eqs.pop('profiles_1d', {})
                             for key, val in profs.items():
                                 tag = f'equilibrium.time_slice.profiles_1d.{key}'
@@ -344,9 +349,45 @@ class omas_io(io):
                                 tag = f'equilibrium.time_slice.global_quantities.{key}'
                                 if isinstance(val, (float, int)):
                                     eq_data_vars[tag] = (['time_eq'], np.atleast_1d([val]))
+                            if 'magnetic_axis' in globs:
+                                for key, val in globs['magnetic_axis'].items():
+                                    tag = f'equilibrium.time_slice.global_quantities.magnetic_axis.{key}'
+                                    if isinstance(val, (float, int)):
+                                        eq_data_vars[tag] = (['time_eq'], np.atleast_1d([val]))
+                            bnds = eqs.pop('boundary', {})
+                            for key, val in bnds.items():
+                                if key == 'minor_radius':
+                                    tag = 'equilibrium.time_slice.boundary.minor_radius'
+                                    eq_data_vars[tag] = (['time_eq'], np.atleast_1d([val]))
+                                if key == 'outline' and 'r' in val and 'z' in val:
+                                    rtag = 'equilibrium.time_slice.boundary.outline.r'
+                                    ztag = 'equilibrium.time_slice.boundary.outline.z'
+                                    eq_coords['i_bdry_eq'] = [j for j in range(len(val['r']))]
+                                    eq_data_vars[rtag] = (['time_eq', 'i_bdry_eq'], np.expand_dims(np.atleast_1d(val['r']), axis=0))
+                                    eq_data_vars[ztag] = (['time_eq', 'i_bdry_eq'], np.expand_dims(np.atleast_1d(val['z']), axis=0))
+                                if key == 'x_point' and val:
+                                    rtag = 'equilibrium.time_slice.boundary.x_point.r'
+                                    ztag = 'equilibrium.time_slice.boundary.x_point.z'
+                                    rxpt = []
+                                    zxpt = []
+                                    for jj, xpt in enumerate(val):
+                                        if 'r' in xpt and 'z' in xpt:
+                                            rxpt.append(xpt['r'])
+                                            zxpt.append(xpt['z'])
+                                    if len(rxpt) > 0:
+                                        eq_coords['i_xpt_eq'] = [j for j in range(len(rxpt))]
+                                        eq_data_vars[rtag] = (['time_eq', 'i_xpt_eq'], np.expand_dims(np.atleast_1d(rxpt), axis=0))
+                                        eq_data_vars[ztag] = (['time_eq', 'i_xpt_eq'], np.expand_dims(np.atleast_1d(zxpt), axis=0))
                             eq_dsvec.append(xr.Dataset(coords=eq_coords, data_vars=eq_data_vars, attrs=eq_attrs))
                         if len(eq_dsvec) > 0:
                             eq_ds = xr.merge(eq_dsvec)
+                            if 'vacuum_toroidal_field' in data['equilibrium']:
+                                for key, val in data['equilibrium']['vacuum_toroidal_field'].items():
+                                    tag = f'equilibrium.vacuum_toroidal_field.{key}'
+                                    if key == 'r0':
+                                        eq_ds = eq_ds.assign({tag: (['time_eq'], np.repeat(np.atleast_1d([val]), len(timevec), axis=0))})
+                                    if key == 'b0':
+                                        eq_ds = eq_ds.assign({tag: (['time_eq'], np.atleast_1d(val))})
                     if eq_ds is not None:
                         dsvec.append(eq_ds)
 
@@ -402,28 +443,93 @@ class omas_io(io):
         pass
 
 
-    def generate_eqdsk_file(self, path):
-        #equilibrium.time_slice.profiles_1d.dpressure_dpsi            (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.dvolume_dpsi              (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.elongation                (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.f                         (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.f_df_dpsi                 (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.gm1                       (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.gm9                       (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.j_tor                     (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.pressure                  (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.psi                       (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.psi_norm                  (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.q                         (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.r_inboard                 (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.r_outboard                (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.rho_tor                   (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.surface                   (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.triangularity_lower       (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.triangularity_upper       (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.volume                    (time_eq, rho_eq)
-        #equilibrium.time_slice.profiles_1d.rho_tor_norm              (time_eq, rho_eq)
-        pass
+    def generate_eqdsk_file(self, path, time_index=-1, side='output'):
+        eqpath = None
+        if isinstance(path, (str, Path)):
+            eqpath = Path(path)
+        assert isinstance(eqpath, Path)
+        eqdata = {}
+        data = self.input.to_dataset().isel(time_eq=time_index) if side == 'input' else self.output.to_dataset().isel(time_eq=time_index)
+        rhovec = data['rho_eq'].to_numpy().flatten()
+        tag = 'r_eq'
+        if tag in data:
+            rvec = data[tag].to_numpy().flatten()
+            eqdata['nx'] = rvec.size
+            eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
+            eqdata['rleft'] = float(np.nanmin(rvec))
+            rhovec = np.linspace(0.0, 1.0, len(rvec))
+        tag = 'z_eq'
+        if tag in data:
+            zvec = data[tag].to_numpy().flatten()
+            eqdata['ny'] = zvec.size
+            eqdata['zdim'] = float(np.nanmax(zvec) - np.nanmin(zvec))
+            eqdata['zmid'] = float(np.nanmax(zvec) - np.nanmin(zvec)) / 2.0
+        tag = 'equilibrium.vacuum_toroidal_field.r0'
+        if tag in data:
+            eqdata['rcentr'] = float(data.get(tag).to_numpy().flatten())
+        tag = 'equilibrium.vacuum_toroidal_field.b0'
+        if tag in data:
+            eqdata['bcentr'] = float(data.get(tag).to_numpy().flatten())
+        tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.r'
+        if tag in data:
+            eqdata['rmagx'] = float(data.get(tag).to_numpy().flatten())
+        tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
+        if tag in data:
+            eqdata['zmagx'] = float(data.get(tag).to_numpy().flatten())
+        tag = 'equilibrium.time_slice.global_quantities.psi_axis'
+        if tag in data:
+            eqdata['simagx'] = float(data.get(tag).to_numpy().flatten())
+        tag = 'equilibrium.time_slice.global_quantities.psi_boundary'
+        if tag in data:
+            eqdata['sibdry'] = float(data.get(tag).to_numpy().flatten())
+        tag = 'equilibrium.time_slice.global_quantities.ip'
+        if tag in data:
+            eqdata['cpasma'] = float(data.get(tag).to_numpy().flatten())
+        tag = 'equilibrium.time_slice.profiles_1d.f'
+        if tag in data:
+            eqdata['fpol'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+        tag = 'equilibrium.time_slice.profiles_1d.pressure'
+        if tag in data:
+            eqdata['pres'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+        tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
+        if tag in data:
+            eqdata['ffprime'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+        tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
+        if tag in data:
+            eqdata['pprime'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+        tag = 'equilibrium.time_slice.profiles_2d.psi'
+        if tag in data:
+            eqdata['psi'] = data.get(tag).to_numpy()
+        tag = 'equilibrium.time_slice.profiles_1d.q'
+        if tag in data:
+            eqdata['qpsi'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+        rtag = 'equilibrium.time_slice.boundary.outline.r'
+        ztag = 'equilibrium.time_slice.boundary.outline.z'
+        if rtag in data and ztag in data:
+            rdata = data.get(rtag).dropna('i_bdry_eq').to_numpy().flatten()
+            zdata = data.get(ztag).dropna('i_bdry_eq').to_numpy().flatten()
+            if len(rdata) == len(zdata):
+                eqdata['nbdry'] = len(rdata)
+                eqdata['rbdry'] = rdata
+                eqdata['zbdry'] = zdata
+        write_eqdsk(eqdata, eqpath)
+        logger.info('Successfully generated g-eqdsk file, {path}')
+
+
+    def generate_all_eqdsk_files(self, basepath, side='output'):
+        path = None
+        if isinstance(basepath, (str, Path)):
+            path = Path(basepath)
+        assert isinstance(path, Path)
+        data = self.input if side == 'input' else self.output
+        if 'time_eq' in data.coords:
+            for ii, time in enumerate(data['time_eq'].to_numpy().flatten()):
+                stem = f'{path.stem}'
+                if stem.endswith('_input'):
+                    stem = stem[:-6]
+                time_tag = int(np.rint(time * 1000))
+                eqpath = path.parent / f'{stem}_{time_tag:d}ms_input{path.suffix}'
+                self.generate_eqdsk_file(eqpath, time_index=ii, side=side)
 
 
     @classmethod
