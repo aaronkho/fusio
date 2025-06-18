@@ -618,10 +618,10 @@ class torax_io(io):
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
                 newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
-            #newattrs[f'{prefix}.rho_min'] = 0.45
+            newattrs[f'{prefix}.rho_min'] = 0.45
             newattrs['n_combined_models'] = nmodels + 1
         newattrs[f'{prefix}.model_name'] = 'qualikiz'
-        newattrs[f'{prefix}.n_max_runs'] = 1
+        newattrs[f'{prefix}.n_max_runs'] = 2
         newattrs[f'{prefix}.n_processes'] = 60
         newattrs[f'{prefix}.collisionality_multiplier'] = 1.0
         newattrs[f'{prefix}.DV_effective'] = False
@@ -782,18 +782,30 @@ class torax_io(io):
         newattrs['sources.ei_exchange.mode'] = 'MODEL_BASED'
         newattrs['sources.ei_exchange.Qei_multiplier'] = 1.0
         self.update_input_attrs(newattrs)
+        delvars = [
+            'sources.ei_exchange.prescribed_values',
+        ]
+        self.delete_input_data_vars(delvars)
 
 
     def set_ohmic_source(self):
         newattrs = {}
         newattrs['sources.ohmic.mode'] = 'MODEL_BASED'
         self.update_input_attrs(newattrs)
+        delvars = [
+            'sources.ohmic.prescribed_values',
+        ]
+        self.delete_input_data_vars(delvars)
 
 
     def set_fusion_source(self):
         newattrs = {}
         newattrs['sources.fusion.mode'] = 'MODEL_BASED'
         self.update_input_attrs(newattrs)
+        delvars = [
+            'sources.fusion.prescribed_values',
+        ]
+        self.delete_input_data_vars(delvars)
 
 
     def reset_gas_puff_source(self):
@@ -826,6 +838,10 @@ class torax_io(io):
         newattrs = {}
         newattrs['sources.bremsstrahlung.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delvars = [
+            'sources.bremsstrahlung.prescribed_values',
+        ]
+        self.delete_input_data_vars(delvars)
         delattrs = [
             'sources.bremsstrahlung.use_relativistic_correction',
         ]
@@ -833,13 +849,30 @@ class torax_io(io):
 
 
     def set_bremsstrahlung_source(self):
+        self.reset_bremsstrahlung_source()
         newattrs = {}
         newattrs['sources.bremsstrahlung.mode'] = 'MODEL_BASED'
         newattrs['sources.bremsstrahlung.use_relativistic_correction'] = True
         self.update_input_attrs(newattrs)
 
 
+    def reset_line_radiation_source(self):
+        newattrs = {}
+        newattrs['sources.impurity_radiation.mode'] = 'ZERO'
+        self.update_input_attrs(newattrs)
+        delvars = [
+            'sources.impurity_radiation.prescribed_values',
+        ]
+        self.delete_input_data_vars(delvars)
+        delattrs = [
+            'sources.impurity_radiation.model_name',
+            'sources.impurity_radiation.radiation_multiplier',
+        ]
+        self.delete_input_attrs(delattrs)
+
+
     def set_mavrin_line_radiation_source(self):
+        self.reset_line_radiation_source()
         newattrs = {}
         newattrs['sources.impurity_radiation.mode'] = 'MODEL_BASED'
         newattrs['sources.impurity_radiation.model_name'] = 'mavrin_fit'
@@ -849,7 +882,25 @@ class torax_io(io):
         self.reset_bremsstrahlung_source()
 
 
+    def reset_synchrotron_source(self):
+        newattrs = {}
+        newattrs['sources.cyclotron_radiation.mode'] = 'ZERO'
+        self.update_input_attrs(newattrs)
+        delvars = [
+            'sources.cyclotron_radiation.prescribed_values',
+        ]
+        self.delete_input_data_vars(delattrs)
+        delattrs = [
+            'sources.cyclotron_radiation.wall_reflection_coeff',
+            'sources.cyclotron_radiation.beta_min',
+            'sources.cyclotron_radiation.beta_max',
+            'sources.cyclotron_radiation.beta_grid_size',
+        ]
+        self.delete_input_attrs(delattrs)
+
+
     def set_synchrotron_source(self):
+        self.reset_synchrotron_source()
         newattrs = {}
         newattrs['sources.cyclotron_radiation.mode'] = 'MODEL_BASED'
         newattrs['sources.cyclotron_radiation.wall_reflection_coeff'] = 0.9
@@ -1023,8 +1074,8 @@ class torax_io(io):
         newattrs['solver.use_predictor_corrector'] = True
         newattrs['solver.n_corrector_steps'] = 10
         newattrs['solver.use_pereverzev'] = True
-        newattrs['solver.chi_pereverzev'] = 20.0
-        newattrs['solver.D_pereverzev'] = 10.0
+        newattrs['solver.chi_pereverzev'] = 30.0
+        newattrs['solver.D_pereverzev'] = 15.0
         newattrs['time_step_calculator.calculator_type'] = 'fixed'
         newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
         newattrs['numerics.fixed_dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
@@ -1038,8 +1089,8 @@ class torax_io(io):
         newattrs['solver.use_predictor_corrector'] = True
         newattrs['solver.n_corrector_steps'] = 10
         newattrs['solver.use_pereverzev'] = True
-        newattrs['solver.chi_pereverzev'] = 20.0
-        newattrs['solver.D_pereverzev'] = 10.0
+        newattrs['solver.chi_pereverzev'] = 30.0
+        newattrs['solver.D_pereverzev'] = 15.0
         newattrs['time_step_calculator.calculator_type'] = 'chi'
         newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
         newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
@@ -1053,8 +1104,8 @@ class torax_io(io):
         newattrs['solver.use_predictor_corrector'] = True
         newattrs['solver.n_corrector_steps'] = 10
         newattrs['solver.use_pereverzev'] = True
-        newattrs['solver.chi_pereverzev'] = 20.0
-        newattrs['solver.D_pereverzev'] = 10.0
+        newattrs['solver.chi_pereverzev'] = 30.0
+        newattrs['solver.D_pereverzev'] = 15.0
         newattrs['solver.log_iterations'] = False
         newattrs['solver.initial_guess_mode'] = 1  # 0 = x_old, 1 = linear
         newattrs['solver.residual_tol'] = 1.0e-5 if not single else 1.0e-3
@@ -1075,8 +1126,8 @@ class torax_io(io):
         newattrs['solver.use_predictor_corrector'] = True
         newattrs['solver.n_corrector_steps'] = 10
         newattrs['solver.use_pereverzev'] = True
-        newattrs['solver.chi_pereverzev'] = 20.0
-        newattrs['solver.D_pereverzev'] = 10.0
+        newattrs['solver.chi_pereverzev'] = 30.0
+        newattrs['solver.D_pereverzev'] = 15.0
         newattrs['solver.log_iterations'] = False
         newattrs['solver.initial_guess_mode'] = 1  # 0 = x_old, 1 = linear
         newattrs['solver.residual_tol'] = 1.0e-5 if not single else 1.0e-3
@@ -1161,15 +1212,19 @@ class torax_io(io):
                 time_dependent_var = {}
                 if 'rho' in ds[key].dims:
                     for ii in range(len(time)):
-                        time_dependent_var[float(time[ii])] = (ds['rho'].to_numpy().flatten(), ds[key].isel(time=ii).to_numpy().flatten())
+                        da = ds[key].isel(time=ii).dropna('rho')
+                        if da.size > 0:
+                            time_dependent_var[float(time[ii])] = (da['rho'].to_numpy().flatten(), da.to_numpy().flatten())
                 elif 'main_ion' in ds[key].dims:
                     for species in ds['main_ion'].to_numpy().flatten():
-                        time_dependent_var[str(species)] = {}
-                        for ii in range(len(time)):
-                            time_dependent_var[str(species)] = {float(t): v for t, v in zip(time, ds[key].sel(main_ion=species).to_numpy().flatten())}
+                        da = ds[key].dropna('time').sel(main_ion=species)
+                        if da.size > 0:
+                            time_dependent_var[str(species)] = {float(t): v for t, v in zip(da['time'].to_numpy().flatten(), da.to_numpy().flatten())}
                 else:
                     for ii in range(len(time)):
-                        time_dependent_var[float(time[ii])] = float(ds[key].isel(time=ii).to_numpy().flatten())
+                        da = ds[key].isel(time=ii)
+                        if np.all(np.isfinite(da.values)):
+                            time_dependent_var[float(time[ii])] = float(da.to_numpy())
                 datadict[key] = time_dependent_var
         nmodels = datadict.pop('n_combined_models', 0)
         if datadict.get('transport.model_name', '') == 'combined':
@@ -1229,6 +1284,10 @@ class torax_io(io):
         use_generic_current = datadict.pop('use_generic_current', True)
         if not use_generic_current:
             self.reset_generic_current_source()
+        use_fusion = datadict.pop('use_fusion', True)
+        if not use_fusion:
+            self.reset_fusion_source()
+        datadict.pop('profile_conditions.n_i', None)
         datadict.pop('profile_conditions.q', None)
         datadict.pop('profile_conditions.j_ohmic', None)
         datadict.pop('profile_conditions.j_bootstrap', None)
@@ -1430,6 +1489,10 @@ class torax_io(io):
                     attrs['sources.generic_current.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_current_source, axis=0))
                     attrs['sources.generic_current.use_absolute_current'] = True
+                if fusion_source is not None:
+                    attrs['use_fusion'] = True
+                    attrs['sources.fusion.mode'] = 'PRESCRIBED'
+                    data_vars['sources.fusion.prescribed_values'] = (['time', 'rho'], np.expand_dims(fusion_source, axis=0))
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
 
@@ -1440,6 +1503,7 @@ class torax_io(io):
         if isinstance(obj, io):
             data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
             dsvec = []
+            struct_index = {}
             if 'time_cp' in data.coords and 'rho_cp' in data.coords:
                 coords = {}
                 data_vars = {}
@@ -1466,7 +1530,7 @@ class torax_io(io):
                     data_vars['profile_conditions.T_e'] = (['time', 'rho'], data[omas_tag].to_numpy())
                 omas_tag = 'core_profiles.profiles_1d.ion.temperature'
                 if omas_tag in data:
-                    data_vars['profile_conditions.T_i'] = (['time', 'rho'], data[omas_tag].mean('main_ion').to_numpy())
+                    data_vars['profile_conditions.T_i'] = (['time', 'rho'], data[omas_tag].mean('ion_cp').to_numpy()) if 'ion_cp' in data else (['time', 'rho'], data[omas_tag].to_numpy())
                 omas_tag = 'core_profiles.profiles_1d.grid.psi'
                 if omas_tag in data:
                     data_vars['profile_conditions.psi'] = (['time', 'rho'], data[omas_tag].to_numpy())
@@ -1481,7 +1545,8 @@ class torax_io(io):
                 #core_profiles.profiles_1d.current_parallel_inside            (time_cp, rho_cp)
                 #core_profiles.profiles_1d.j_tor                              (time_cp, rho_cp)
                 #core_profiles.profiles_1d.j_total                            (time_cp, rho_cp)
-                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs))
+                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs).drop_duplicates(list(coords.keys()), keep='first'))
+                struct_index['core_profiles'] = len(dsvec) - 1
             if 'time_cs' in data.coords and 'rho_cs' in data.coords:
                 coords = {}
                 data_vars = {}
@@ -1495,8 +1560,18 @@ class torax_io(io):
                 external_current_source = None
                 fusion_source = None
                 omas_tag = 'core_sources.ohmic.profiles_1d.electrons.energy'
+                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
+                    attrs['sources.ohmic.mode'] = 'PRESCRIBED'
+                    data_vars['sources.ohmic.prescribed_values'] = (['time', 'rho'], data[omas_tag].to_numpy())
                 omas_tag = 'core_sources.line_radiation.profiles_1d.electrons.energy'
+                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
+                    attrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
+                    data_vars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], data[omas_tag].to_numpy())
                 omas_tag = 'core_sources.bremsstrahlung.profiles_1d.electrons.energy'
+                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
+                    attrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
+                    data_vars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                omas_tag = 'core_sources.synchrotron.profiles_1d.electrons.energy'
                 omas_tag = 'core_sources.ic.profiles_1d.electrons.energy'
                 if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
                     if external_el_heat_source is None:
@@ -1511,6 +1586,15 @@ class torax_io(io):
                 if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
                     data_vars['sources.icrh.P_total'] = (['time'], data[omas_tag].to_numpy().flatten())
                 omas_tag = 'core_sources.fusion.profiles_1d.electrons.energy'
+                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
+                    if fusion_source is None:
+                        fusion_source = np.zeros_like(data[omas_tag].to_numpy())
+                    fusion_source += data[omas_tag].to_numpy()
+                omas_tag = 'core_sources.fusion.profiles_1d.ion.energy'
+                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
+                    if fusion_source is None:
+                        fusion_source = np.zeros_like(data[omas_tag].sum('ion_cp').to_numpy())
+                    fusion_source += data[omas_tag].sum('ion_cp').to_numpy()
                 if external_el_heat_source is not None:
                     attrs['use_generic_heat'] = True
                     attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
@@ -1525,7 +1609,8 @@ class torax_io(io):
                     attrs['sources.generic_current.mode'] = 'PRESCRIBED'
                     data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], external_current_source)
                     attrs['sources.generic_current.use_absolute_current'] = True
-                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs))
+                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs).drop_duplicates(list(coords.keys()), keep='first'))
+                struct_index['core_sources'] = len(dsvec) - 1
             if 'time_eq' in data.coords and 'rho_eq' in data.coords:
                 coords = {}
                 data_vars = {}
@@ -1538,7 +1623,20 @@ class torax_io(io):
                 omas_tag = 'equilibrium.time_slice.profiles_1d.q'
                 if omas_tag in data:
                     data_vars['profile_conditions.q'] = (['time', 'rho'], data[omas_tag].to_numpy())
-                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs))
+                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs).drop_duplicates(list(coords.keys()), keep='first'))
+                struct_index['equilibrium'] = len(dsvec) - 1
             if len(dsvec) > 0:
-                newobj.input = xr.merge(dsvec)
+                idx = struct_index.get('equilibrium', None)
+                if idx is not None:
+                    drop = [
+                        'profile_conditions.q',
+                    ]
+                    dsvec[idx] = dsvec[idx].drop_vars(drop, errors='ignore')
+                idx = struct_index.get('core_profiles', None)
+                if idx is not None:
+                    drop = [
+                        'profile_conditions.psi',
+                    ]
+                    dsvec[idx] = dsvec[idx].drop_vars(drop, errors='ignore')
+                newobj.input = xr.merge(dsvec, join='outer')
         return newobj
