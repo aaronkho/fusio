@@ -651,6 +651,8 @@ class torax_io(io):
             if self.input.get('pedestal.rho_norm_ped_top', None) is not None:
                 newvars[f'{prefix}.rho_max'] = (['time'], self.input['pedestal.rho_norm_ped_top'].to_numpy())
             newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + 0.45)
+            newattrs[f'{prefix}.apply_inner_patch'] = False
+            newattrs[f'{prefix}.apply_outer_patch'] = False
             newattrs['n_combined_models'] = nmodels + 1
         newattrs[f'{prefix}.model_name'] = 'qualikiz'
         newattrs[f'{prefix}.n_max_runs'] = 2
@@ -699,6 +701,8 @@ class torax_io(io):
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if self.input.get('pedestal.rho_norm_ped_top', None) is not None:
                 newvars[f'{prefix}.rho_max'] = (['time'], self.input['pedestal.rho_norm_ped_top'].to_numpy())
+            newattrs[f'{prefix}.apply_inner_patch'] = False
+            newattrs[f'{prefix}.apply_outer_patch'] = False
             newattrs['n_combined_models'] = nmodels + 1
         newattrs[f'{prefix}.model_name'] = 'qlknn'
         newattrs[f'{prefix}.model_path'] = ''
@@ -1389,26 +1393,31 @@ class torax_io(io):
                         nsum = np.zeros_like(data['ne'].to_numpy().flatten())
                         for ii in range(len(data['name'])):
                             sdata = data.isel(name=ii)
+                            nz = sdata['ni'].to_numpy().flatten()
                             if sdata['name'] in namelist and 'therm' in str(sdata['type'].to_numpy()):
                                 sname = str(sdata['name'].to_numpy())
+                                scharge = float(sdata['z'].to_numpy())
                                 if sname not in newobj.allowed_radiation_species:
                                     sn, sa, sz = define_ion_species(short_name=sname)
-                                    if sz > 60.0:
-                                        sname = 'W'
-                                    if sz > 48.0:
-                                        sname = 'Xe'
-                                    if sz > 30.0:
-                                        sname = 'Kr'
+                                    if sz > 2.0:
+                                        sname = 'C'
+                                    if sz > 8.0:
+                                        sname = 'Ne'
                                     if sz > 14.0:
                                         sname = 'Ar'
-                                    if sz > 6.0:
-                                        sname = 'Ne'
-                                    if sz > 1.0:
-                                        sname = 'C'
+                                    if sz > 24.0:
+                                        sname = 'Kr'
+                                    if sz > 45.0:
+                                        sname = 'Xe'
+                                    if sz > 64.0:
+                                        sname = 'W'
+                                    newsn, newsa, newsz = define_ion_species(short_name=sname)
+                                    nz = nz * scharge / newsz
                                     if sn == 'He':
                                         sname = 'He4'
-                                impcomp[sname] = sdata['ni'].to_numpy().flatten()
-                                nsum += sdata['ni'].to_numpy().flatten()
+                                # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
+                                impcomp[sname] = nz.copy()
+                                nsum += nz.copy()
                             zeff += sdata['ni'].to_numpy().flatten() * sdata['z'].to_numpy().flatten() ** 2.0 / data['ne'].to_numpy().flatten()
                         total = 0.0
                         for key in impcomp:
