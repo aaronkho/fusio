@@ -59,6 +59,10 @@ class io():
     def is_empty(self):
         return (self._tree['input'].is_empty and self._tree['output'].is_empty)
 
+    def update_input_coords(self, data):
+        if isinstance(data, dict):
+            self.input = self._tree['input'].to_dataset().assign_coords(data)
+
     def update_input_data_vars(self, data):
         if isinstance(data, dict):
             self.input = self._tree['input'].to_dataset().assign(data)
