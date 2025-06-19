@@ -571,29 +571,35 @@ class torax_io(io):
 
 
     def add_pedestal_exponential_transport(self, chiscale, chidecay, dscale, ddecay):
-        #newvars = {}
+        time = self.input.get('time').to_numpy().flatten()
+        newcoords = {}
+        newvars = {}
         newattrs = {}
-        wrho_array = self.input.attrs.get('pedestal.rho_norm_ped_top', None)
+        wrho_array = self.input.get('pedestal.rho_norm_ped_top', None)
         if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
             nmodels = self.input.attrs.get('n_combined_models', 0)
             prefix = f'transport.transport_models.{nmodels:d}'
-            newattrs[f'{prefix}.rho_min'] = wrho_array
-            wrho_list = []
-            for time, wrho in wrho_array.items():
-                wrho_list.append(wrho)
-            wrho = np.mean(wrho_list)
+            newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
+            wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
             factor = np.abs((xrho - wrho) / (1.0 - wrho))
             chirho = chiscale * np.exp(-factor / chidecay)
             drho = dscale * np.exp(-factor / ddecay)
+            vrho = np.zeros_like(factor)
+            newcoords['rho_ped_exp'] = xrho.flatten()
+            newvars[f'{prefix}.chi_i'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.chi_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
             newattrs[f'{prefix}.model_name'] = 'constant'
             # Improper form given base xarray structure, but necessary for now due to disjointed rho grid
-            newattrs[f'{prefix}.chi_i'] = {rho: chi for rho, chi in zip(xrho, chirho)}
-            newattrs[f'{prefix}.chi_e'] = {rho: chi for rho, chi in zip(xrho, chirho)}
-            newattrs[f'{prefix}.D_e'] = {rho: d for rho, d in zip(xrho, drho)}
-            newattrs[f'{prefix}.V_e'] = {rho: 0.0 for rho, d in zip(xrho, drho)}
+            #newattrs[f'{prefix}.chi_i'] = {0.0: (xrho, chirho)}
+            #newattrs[f'{prefix}.chi_e'] = {0.0: (xrho, chirho)}
+            #newattrs[f'{prefix}.D_e'] = {0.0: (xrho, drho)}
+            #newattrs[f'{prefix}.V_e'] = {0.0: (xrho, np.zeros_like(xrho))}
             newattrs['n_combined_models'] = nmodels + 1
-        #self.update_input_data_vars(newvars)
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
 
@@ -634,15 +640,17 @@ class torax_io(io):
 
 
     def add_qualikiz_transport(self):
+        newvars = {}
         newattrs = {}
         prefix = 'transport'
         if self.input.attrs.get('transport.model_name', '') == 'combined':
+            time = self.input.get('time').to_numpy().flatten()
             nmodels = self.input.attrs.get('n_combined_models', 0)
             prefix = f'transport.transport_models.{nmodels:d}'
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
-            if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
-                newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
-            newattrs[f'{prefix}.rho_min'] = 0.45
+            if self.input.get('pedestal.rho_norm_ped_top', None) is not None:
+                newvars[f'{prefix}.rho_max'] = (['time'], self.input['pedestal.rho_norm_ped_top'].to_numpy())
+            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + 0.45)
             newattrs['n_combined_models'] = nmodels + 1
         newattrs[f'{prefix}.model_name'] = 'qualikiz'
         newattrs[f'{prefix}.n_max_runs'] = 2
@@ -665,6 +673,7 @@ class torax_io(io):
         #    newattrs['transport.apply_inner_patch'] = {0.0: False}
         #if 'transport.apply_outer_patch' not in self.input.attrs:
         #    newattrs['transport.apply_outer_patch'] = {0.0: False}
+        self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
 
@@ -681,14 +690,15 @@ class torax_io(io):
 
 
     def add_qlknn_transport(self):
+        newvars = {}
         newattrs = {}
         prefix = 'transport'
         if self.input.attrs.get('transport.model_name', '') == 'combined':
             nmodels = self.input.attrs.get('n_combined_models', 0)
             prefix = f'transport.transport_models.{nmodels:d}'
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
-            if self.input.attrs.get('pedestal.rho_norm_ped_top', None) is not None:
-                newattrs[f'{prefix}.rho_max'] = self.input.attrs['pedestal.rho_norm_ped_top']
+            if self.input.get('pedestal.rho_norm_ped_top', None) is not None:
+                newvars[f'{prefix}.rho_max'] = (['time'], self.input['pedestal.rho_norm_ped_top'].to_numpy())
             newattrs['n_combined_models'] = nmodels + 1
         newattrs[f'{prefix}.model_name'] = 'qlknn'
         newattrs[f'{prefix}.model_path'] = ''
@@ -717,6 +727,7 @@ class torax_io(io):
         #    newattrs['transport.apply_inner_patch'] = {0.0: False}
         #if 'transport.apply_outer_patch' not in self.input.attrs:
         #    newattrs['transport.apply_outer_patch'] = {0.0: False}
+        self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
 
@@ -1185,25 +1196,25 @@ class torax_io(io):
         if self.has_output:
             fields = {
                 'Bt': ('B_0', 1.0, 'T'),
-                'Ip': ('Ip', 1.0e-6, 'MA'),
+                'Ip': ('Ip', 1.0e6, 'MA'),
                 'q95': ('q95', 1.0, ''),
                 'R': ('R_major', 1.0, 'm'),
                 'a': ('a_minor', 1.0, 'm'),
                 'Q': ('Q_fusion', 1.0, ''),
-                'Pfus': ('P_alpha_total', 5.0e-6, 'MW'),
-                'Pin': ('P_external_injected', 1.0e-6, 'MW'),
+                'Pfus': ('P_alpha_total', 2.0e5, 'MW'),
+                'Pin': ('P_external_injected', 1.0e6, 'MW'),
                 'H98y2': ('H98', 1.0, ''),
                 'H89p': ('H89P', 1.0, ''),
-                '<ne>': ('n_e_volume_avg', 1.0e-20, '10^20 m^-3'),
+                '<ne>': ('n_e_volume_avg', 1.0e20, '10^20 m^-3'),
                 '<Te>': ('T_e_volume_avg', 1.0, 'keV'),
                 '<Ti>': ('T_i_volume_avg', 1.0, 'keV'),
                 'betaN': ('beta_N', 1.0, ''),
-                'Prad': ('P_radiation_e', 1.0e-6, 'MW'),
-                'Psol': ('P_SOL_total', 1.0e-6, 'MW'),
+                'Prad': ('P_radiation_e', -1.0e6, 'MW'),
+                'Psol': ('P_SOL_total', 1.0e6, 'MW'),
                 'fG': ('fgw_n_e_volume_avg', 1.0, ''),
-                'We': ('W_thermal_e', 1.0e-6, 'MJ'),
-                'Wi': ('W_thermal_i', 1.0e-6, 'MJ'),
-                'W_thr': ('W_thermal_total', 1.0e-6, 'MJ'),
+                'We': ('W_thermal_e', 1.0e6, 'MJ'),
+                'Wi': ('W_thermal_i', 1.0e6, 'MJ'),
+                'W_thr': ('W_thermal_total', 1.0e6, 'MJ'),
                 'tauE': ('tau_E', 1.0, ''),
             }
             radial_fields = {
@@ -1215,7 +1226,7 @@ class torax_io(io):
             data = self.output.isel(time=-1)
             for key, specs in fields.items():
                 var, scale, units = specs
-                val = scale * data[var]
+                val = data[var] / scale
                 print(f'{key:10}: {val:.2f} {units}')
             for key, specs in radial_fields.items():
                 var, idx, scale, units = specs
