@@ -661,7 +661,7 @@ class torax_io(io):
         newattrs[f'{prefix}.DV_effective'] = False
         newattrs[f'{prefix}.An_min'] = 0.05
         newattrs[f'{prefix}.avoid_big_negative_s'] = True
-        newattrs[f'{prefix}.smag_alpha_correction'] = True
+        newattrs[f'{prefix}.smag_alpha_correction'] = False
         newattrs[f'{prefix}.q_sawtooth_proxy'] = True
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
