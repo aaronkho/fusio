@@ -309,8 +309,8 @@ class omas_io(io):
                     if 'time' in data['equilibrium']:
                         eq_coords['time_eq'] = np.atleast_1d(data['equilibrium'].pop('time'))
                     slices = data['equilibrium'].pop('time_slice', [])
-                    if len(slices) > 0 and 'rho_tor_norm' in slices[0].get('profiles_1d', {}):
-                        eq_coords['rho_eq'] = np.atleast_1d(slices[0]['profiles_1d'].pop('rho_tor_norm'))
+                    if len(slices) > 0 and 'psi_norm' in slices[0].get('profiles_1d', {}):
+                        eq_coords['psin_eq'] = np.atleast_1d(slices[0]['profiles_1d'].pop('psi_norm'))
                     if len(slices) > 0 and len(slices[0].get('profiles_2d', [])) > 0:
                         for cc in range(len(slices[0]['profiles_2d'])):
                             gtype = slices[0]['profiles_2d'][cc].get('grid_type', {})
@@ -342,8 +342,8 @@ class omas_io(io):
                             profs = eqs.pop('profiles_1d', {})
                             for key, val in profs.items():
                                 tag = f'equilibrium.time_slice.profiles_1d.{key}'
-                                if isinstance(val, list):
-                                    eq_data_vars[tag] = (['time_eq', 'rho_eq'], np.expand_dims(np.atleast_1d(val), axis=0))
+                                if isinstance(val, list) and key != 'psi_norm':
+                                    eq_data_vars[tag] = (['time_eq', 'psin_eq'], np.expand_dims(np.atleast_1d(val), axis=0))
                             globs = eqs.pop('global_quantities', {})
                             for key, val in globs.items():
                                 tag = f'equilibrium.time_slice.global_quantities.{key}'
@@ -450,14 +450,14 @@ class omas_io(io):
         assert isinstance(eqpath, Path)
         eqdata = {}
         data = self.input.to_dataset().isel(time_eq=time_index) if side == 'input' else self.output.to_dataset().isel(time_eq=time_index)
-        rhovec = data['rho_eq'].to_numpy().flatten()
+        psinvec = data['psin_eq'].to_numpy().flatten()
         tag = 'r_eq'
         if tag in data:
             rvec = data[tag].to_numpy().flatten()
             eqdata['nx'] = rvec.size
             eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
             eqdata['rleft'] = float(np.nanmin(rvec))
-            rhovec = np.linspace(0.0, 1.0, len(rvec))
+            psinvec = np.linspace(0.0, 1.0, len(rvec))
         tag = 'z_eq'
         if tag in data:
             zvec = data[tag].to_numpy().flatten()
@@ -487,22 +487,22 @@ class omas_io(io):
             eqdata['cpasma'] = float(data.get(tag).to_numpy().flatten())
         tag = 'equilibrium.time_slice.profiles_1d.f'
         if tag in data:
-            eqdata['fpol'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+            eqdata['fpol'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_1d.pressure'
         if tag in data:
-            eqdata['pres'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+            eqdata['pres'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
         if tag in data:
-            eqdata['ffprime'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+            eqdata['ffprime'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
         if tag in data:
-            eqdata['pprime'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+            eqdata['pprime'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_2d.psi'
         if tag in data:
             eqdata['psi'] = data.get(tag).to_numpy()
         tag = 'equilibrium.time_slice.profiles_1d.q'
         if tag in data:
-            eqdata['qpsi'] = data.drop_duplicates('rho_eq').get(tag).interp(rho_eq=rhovec).to_numpy().flatten()
+            eqdata['qpsi'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
         rtag = 'equilibrium.time_slice.boundary.outline.r'
         ztag = 'equilibrium.time_slice.boundary.outline.z'
         if rtag in data and ztag in data:
@@ -528,7 +528,7 @@ class omas_io(io):
                 if stem.endswith('_input'):
                     stem = stem[:-6]
                 time_tag = int(np.rint(time * 1000))
-                eqpath = path.parent / f'{stem}_{time_tag:d}ms_input{path.suffix}'
+                eqpath = path.parent / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
                 self.generate_eqdsk_file(eqpath, time_index=ii, side=side)
 
 
