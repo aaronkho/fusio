@@ -454,16 +454,16 @@ class omas_io(io):
         tag = 'r_eq'
         if tag in data:
             rvec = data[tag].to_numpy().flatten()
-            eqdata['nx'] = rvec.size
+            eqdata['nr'] = rvec.size
             eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
             eqdata['rleft'] = float(np.nanmin(rvec))
             psinvec = np.linspace(0.0, 1.0, len(rvec))
         tag = 'z_eq'
         if tag in data:
             zvec = data[tag].to_numpy().flatten()
-            eqdata['ny'] = zvec.size
+            eqdata['nz'] = zvec.size
             eqdata['zdim'] = float(np.nanmax(zvec) - np.nanmin(zvec))
-            eqdata['zmid'] = float(np.nanmax(zvec) - np.nanmin(zvec)) / 2.0
+            eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
         tag = 'equilibrium.vacuum_toroidal_field.r0'
         if tag in data:
             eqdata['rcentr'] = float(data.get(tag).to_numpy().flatten())
@@ -499,7 +499,7 @@ class omas_io(io):
             eqdata['pprime'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_2d.psi'
         if tag in data:
-            eqdata['psi'] = data.get(tag).to_numpy()
+            eqdata['psi'] = data.get(tag).to_numpy().T
         tag = 'equilibrium.time_slice.profiles_1d.q'
         if tag in data:
             eqdata['qpsi'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
