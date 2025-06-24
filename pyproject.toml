@@ -27,7 +27,6 @@ dynamic = ["version"]
 
 dependencies = [
   "numpy",
-  "freeqdsk",
 ]
 
 [project.optional-dependencies]
