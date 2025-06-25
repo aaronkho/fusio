@@ -671,7 +671,7 @@ class torax_io(io):
         newattrs[f'{prefix}.n_max_runs'] = 1
         newattrs[f'{prefix}.n_processes'] = 60
         newattrs[f'{prefix}.collisionality_multiplier'] = 1.0
-        newattrs[f'{prefix}.DV_effective'] = False
+        newattrs[f'{prefix}.DV_effective'] = True
         newattrs[f'{prefix}.An_min'] = 0.05
         newattrs[f'{prefix}.avoid_big_negative_s'] = True
         newattrs[f'{prefix}.smag_alpha_correction'] = False
