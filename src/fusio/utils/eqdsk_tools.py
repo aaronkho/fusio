@@ -1,5 +1,11 @@
 import copy
+from pathlib import Path
 import numpy as np
+from scipy.integrate import quad
+import contourpy
+import cv2
+import logging
+
 
 def define_cocos(cocos_number):
     # Default dictionary returns COCOS=1
@@ -80,8 +86,8 @@ def detect_cocos(eqdsk):
 
 def convert_cocos(eqdsk, cocos_in, cocos_out, bt_sign_out=None, ip_sign_out=None):
     out = {
-        'nx': eqdsk.get('nx', None),
-        'ny': eqdsk.get('ny', None),
+        'nr': eqdsk.get('nr', None),
+        'nz': eqdsk.get('nz', None),
         'rdim': eqdsk.get('rdim', None),
         'zdim': eqdsk.get('zdim', None),
         'rcentr': eqdsk.get('rcentr', None),
@@ -128,4 +134,254 @@ def convert_cocos(eqdsk, cocos_in, cocos_out, bt_sign_out=None, ip_sign_out=None
         out['rbdry'] = copy.deepcopy(eqdsk['rbdry'])
         out['zbdry'] = copy.deepcopy(eqdsk['zbdry'])
     return out
+
+
+def trace_flux_surfaces(r, z, psi, levels, axis=None):
+    check = tuple([np.float32(i) for i in axis]) if isinstance(axis, (list, tuple)) else (np.mean(r).astype(np.float32), np.mean(z).astype(np.float32))
+    cg_psi = contourpy.contour_generator(r, z, psi)
+    contours = {}
+    for level in levels:
+        vertices = cg_psi.create_contour(level)
+        for i in range(len(vertices)):
+            enclosed = cv2.pointPolygonTest(cv2.UMat(vertices[i].astype(np.float32)), check, False)
+            if enclosed > 0:
+                contours[float(level)] = vertices[i].copy()
+                break
+    return contours
+
+
+def calculate_mxh_coefficients(r, z, n=5):
+
+    z = np.roll(z, -np.argmax(r))
+    r = np.roll(r, -np.argmax(r))
+    if z[1] < z[0]: # reverses array so that theta increases
+        z = np.flip(z)
+        r = np.flip(r)
+
+    # compute bounding box for each flux surface
+    rmin = 0.5 * (np.nanmax(r) - np.nanmin(r))
+    kappa = 0.5 * (np.nanmax(z) - np.nanmin(z)) / rmin
+    r0 = 0.5 * (np.nanmax(r) + np.nanmin(r))
+    z0 = 0.5 * (np.max(z) + np.min(z))
+    bbox = [r0, rmin, z0, kappa]
+
+    # solve for polar angles
+    # need to use np.clip to avoid floating-point precision errors
+    theta_r = np.arccos(np.clip(((r - r0) / rmin), -1, 1))
+    theta = np.arcsin(np.clip(((z - z0) / rmin / kappa), -1, 1))
+
+    # Find the continuation of theta and theta_r to [0,2pi]
+    theta_r_cont = np.copy(theta_r)
+    theta_cont = np.copy(theta)
+
+    max_theta = np.argmax(theta)
+    min_theta = np.argmin(theta)
+    max_theta_r = np.argmax(theta_r)
+    min_theta_r = np.argmin(theta_r)
+
+    theta_cont[:max_theta] = theta_cont[:max_theta]
+    theta_cont[max_theta:max_theta_r] = np.pi - theta[max_theta:max_theta_r]
+    theta_cont[max_theta_r:min_theta] = np.pi - theta[max_theta_r:min_theta]
+    theta_cont[min_theta:] = 2.0 * np.pi + theta[min_theta:]
+
+    theta_r_cont[:max_theta] = theta_r_cont[:max_theta]
+    theta_r_cont[max_theta:max_theta_r] = theta_r[max_theta:max_theta_r]
+    theta_r_cont[max_theta_r:min_theta] = 2.0 * np.pi - theta_r[max_theta_r:min_theta]
+    theta_r_cont[min_theta:] = 2.0 * np.pi - theta_r[min_theta:]
+
+    theta_r_cont = theta_r_cont - theta_cont
+    theta_r_cont[-1] = theta_r_cont[0]
+
+    # Fourier decompose to find coefficients
+    c = [0.0] * (n + 1)
+    s = [0.0] * (n + 1)
+
+    def f_theta_r(theta):
+        return np.interp(theta, theta_cont, theta_r_cont)
+
+    for i in range(n + 1):
+        s[i] = quad(f_theta_r, 0, 2.0 * np.pi, weight='sin', wvar=i)[0] / np.pi
+        c[i] = quad(f_theta_r, 0, 2.0 * np.pi, weight='cos', wvar=i)[0] / np.pi
+
+    c[0] /= 2
+
+    return c, s, bbox
+
+
+def read_eqdsk(path):
+    ''' Read an eqdsk file '''
+
+    def _sep_eq_line(line, float_width=16, floats_per_line=5, sep=' '):
+        ''' Split a eqdsk-style line and inserts seperator characters '''
+        splitted = [line[num*float_width:(num+1)*float_width] for num in range(floats_per_line)]
+        separate = sep.join(splitted)
+        return separate
+
+    def _read_chunk(lines, length, floats_per_line=5):
+        num_lines = int(np.ceil(length / floats_per_line))
+        vals = []
+        for line in lines[:num_lines]:
+            sep = _sep_eq_line(line)
+            vals.append(np.fromstring(sep, sep=' '))
+        del lines[:num_lines]
+        return vals
+
+    lines = []
+    if isinstance(path, (str, Path)):
+        geqdsk_path = Path(path)
+        if geqdsk_path.is_file():
+            with open(geqdsk_path, 'r') as ff:
+                lines = ff.readlines()
+
+    data = {}
+    if len(lines) > 0:
+
+        data['case'] = lines[0][:48].strip()
+        header = lines.pop(0)[48:].split()
+
+        # Read sizes of arrays/vectors
+        data['idum'] = int(header[0])
+        data['nr'] = int(header[1])
+        data['nz'] = int(header[2])
+
+        # Read singles
+        data['rdim'], data['zdim'], data['rcentr'], data['rleft'], data['zmid'] = np.fromstring(_sep_eq_line(lines.pop(0)), sep=' ')
+        data['rmagx'], data['zmagx'], data['simagx'], data['sibdry'], data['bcentr'] = np.fromstring(_sep_eq_line(lines.pop(0)), sep=' ')
+        data['cpasma'], data['simagx2'], _, data['rmagx2'], _ = np.fromstring(_sep_eq_line(lines.pop(0)), sep=' ')
+        data['zmagx2'], _, data['sibdry2'], _, _ = np.fromstring(_sep_eq_line(lines.pop(0)), sep=' ')
+
+        # Check if duplicate fields are equal
+        for base in ['simagx', 'sibdry', 'rmagx', 'zmagx']:
+            if not data[base] == data.pop(base + '2'):
+                raise Exception("Dual values for '{!s}' not equal!".format(base))
+
+        # Read 1D array blocks
+        for name in ['fpol', 'pres', 'ffprime', 'pprime']:
+            data[name] = np.concatenate(_read_chunk(lines, data['nr']))
+
+        # Read psi map
+        data['psi'] = np.concatenate(_read_chunk(lines, data['nr'] * data['nz']))
+        data['psi'] = data['psi'].reshape((data['nz'], data['nr']))
+
+        # Read q-profile
+        data['qpsi'] = np.concatenate(_read_chunk(lines, data['nr']))
+
+        # Read sizes of boundary vector and limiter vector
+        header = lines.pop(0)
+        data['nbdry'] = int(header[:5])
+        data['nlim'] = int(header[5:])
+
+        # Read boundary vector
+        if data['nbdry'] > 0:
+            boundary = _read_chunk(lines, data['nbdry'] * 2)
+            boundary = np.concatenate(boundary).reshape((data['nbdry'], 2))
+            data['rbdry'] = boundary[:, 0]
+            data['zbdry'] = boundary[:, 1]
+        else:
+            data['rbdry'] = None
+            data['zbdry'] = None
+
+        # Read limiter vector
+        if data['nlim'] > 0:
+            limiter = _read_chunk(lines, data['nlim'] * 2)
+            limiter = np.concatenate(limiter).reshape((data['nlim'], 2))
+            data['rlim'] = limiter[:, 0]
+            data['zlim'] = limiter[:, 1]
+        else:
+            data['rlim'] = None
+            data['zlim'] = None
+
+    return data
+
+
+def write_eqdsk(data, path):
+
+    if isinstance(path, (str, Path)) and isinstance(data, dict):
+        geqdsk_path = Path(path)
+        if geqdsk_path.exists():
+            print(f'{geqdsk_path} exists, overwriting file with EQDSK file!')
+        geqdsk_path.parent.mkdir(parents=True, exist_ok=True)
+
+        gcase = data['case'] if 'case' in data else ''
+        if len(gcase) > 48:
+            gcase = gcase[:48]
+        idum = data['idum'] if 'idum' in data else 0
+
+        # Write sizes of arrays/vectors
+        dstr = '%-48s%4d%4d%4d\n' % (gcase, idum, data['nr'], data['nz'])
+
+        # Write singles
+        dstr += '%16.9E%16.9E%16.9E%16.9E%16.9E\n' % (data['rdim'], data['zdim'], data['rcentr'], data['rleft'], data['zmid'])
+        dstr += '%16.9E%16.9E%16.9E%16.9E%16.9E\n' % (data['rmagx'], data['zmagx'], data['simagx'], data['sibdry'], data['bcentr'])
+        dstr += '%16.9E%16.9E%16.9E%16.9E%16.9E\n' % (data['cpasma'], data['simagx'], 0.0, data['rmagx'], 0.0)
+        dstr += '%16.9E%16.9E%16.9E%16.9E%16.9E\n' % (data['zmagx'], 0.0, data['sibdry'], 0.0, 0.0)
+
+        # Write 1D array blocks
+        for name in ['fpol', 'pres', 'ffprime', 'pprime']:
+            for ii in range(data['nr']):
+                dstr += '%16.9E' % (data[name][ii])
+                if (ii + 1) % 5 == 0 and (ii + 1) != len(data[name]):
+                    dstr += '\n'
+            dstr += '\n'
+
+        # Write psi map
+        kk = 0
+        for ii in range(data['nz']):
+            for jj in range(data['nr']):
+                dstr += '%16.9E' % (data['psi'][ii, jj])
+                if (kk + 1) % 5 == 0 and (kk + 1) != data['nr'] * data['nz']:
+                    dstr += '\n'
+                kk = kk + 1
+        dstr += '\n'
+
+        # Read q-profile
+        for ii in range(len(data['qpsi'])):
+            dstr += '%16.9E' % (data['qpsi'][ii])
+            if (ii + 1) % 5 == 0 and (ii + 1) != len(data['qpsi']):
+                dstr += '\n'
+        dstr += '\n'
+
+        nbdry = data.get('nbdry')
+        rbdry = data.get('rbdry')
+        zbdry = data.get('zbdry')
+        if nbdry is None or rbdry is None or zbdry is None:
+            nbdry = 0
+            rbdry = []
+            zbdry = []
+        nlim = data.get('nlim')
+        rlim = data.get('rlim')
+        zlim = data.get('zlim')
+        if nlim is None or rlim is None or zlim is None:
+            nlim = 0
+            rlim = []
+            zlim = []
+
+        dstr += '%5d%5d\n' % (nbdry, nlim)
+        kk = 0
+        for ii in range(nbdry):
+            dstr += '%16.9E' % (rbdry[ii])
+            if (kk + 1) % 5 == 0 and (ii + 1) != nbdry:
+                dstr += '\n'
+            kk = kk + 1
+            dstr += '%16.9E' % (zbdry[ii])
+            if (kk + 1) % 5 == 0 and (ii + 1) != nbdry:
+                dstr += '\n'
+            kk = kk + 1
+        dstr += '\n'
+        kk = 0
+        for ii in range(nlim):
+            dstr += '%16.9E' % (rlim[ii])
+            if (kk + 1) % 5 == 0 and (kk + 1) != nlim:
+                dstr += '\n'
+            kk = kk + 1
+            dstr += '%16.9E' % (zlim[ii])
+            if (kk + 1) % 5 == 0 and (kk + 1) != nlim:
+                dstr += '\n'
+            kk = kk + 1
+        dstr += '\n'
+
+        with open(geqdsk_path, 'w') as ff:
+            ff.write(dstr)
+
+        print(f'Output EQDSK file saved as {geqdsk_path}!')
 

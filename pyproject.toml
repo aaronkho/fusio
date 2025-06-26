@@ -27,7 +27,10 @@ dynamic = ["version"]
 
 dependencies = [
   "numpy",
-  "freeqdsk",
+  "scipy",
+  "h5py",
+  "contourpy",
+  "opencv-python",
 ]
 
 [project.optional-dependencies]

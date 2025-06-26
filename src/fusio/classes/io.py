@@ -59,13 +59,43 @@ class io():
     def is_empty(self):
         return (self._tree['input'].is_empty and self._tree['output'].is_empty)
 
+    def update_input_coords(self, data):
+        if isinstance(data, dict):
+            self.input = self._tree['input'].to_dataset().assign_coords(data)
+
+    def update_output_coords(self, data):
+        if isinstance(data, dict):
+            self.output = self._tree['output'].to_dataset().assign_coords(data)
+
+    def update_input_data_vars(self, data):
+        if isinstance(data, dict):
+            self.input = self._tree['input'].to_dataset().assign(data)
+
+    def update_output_data_vars(self, data):
+        if isinstance(data, dict):
+            self.output = self._tree['output'].to_dataset().assign(data)
+
+    def delete_input_data_vars(self, data):
+        self.input = self._tree['input'].to_dataset().drop_vars([key for key in data], errors='ignore')
+
+    def delete_output_data_vars(self, data):
+        self.output = self._tree['output'].to_dataset().drop_vars([key for key in data], errors='ignore')
+
     def update_input_attrs(self, data):
         if isinstance(data, dict):
             self._tree['input'].attrs.update(data)
 
+    def update_output_attrs(self, data):
+        if isinstance(data, dict):
+            self._tree['output'].attrs.update(data)
+
     def delete_input_attrs(self, data):
         for key in data:
             self._tree['input'].attrs.pop(key, None)
+
+    def delete_output_attrs(self, data):
+        for key in data:
+            self._tree['output'].attrs.pop(key, None)
 
     # These functions always assume data is placed on input side of target format
 
