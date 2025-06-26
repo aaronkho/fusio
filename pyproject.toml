@@ -7,7 +7,7 @@ name = "fusio"
 description = "Input file conversions to popular file formats in fusion research"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
-license = {file = "LICENSE"}
+license = "MIT"
 keywords = ["fusion", "interfaces"]
 authors = [
   { name = "Aaron Ho", email = "aaronkho@mit.edu" }
@@ -17,7 +17,6 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Topic :: Scientific/Engineering",
   "Topic :: Software Development :: User Interfaces",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -35,6 +34,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+build = ["build", "twine"]
 
 [project.urls]
 "Homepage" = "https://github.com/aaronkho/fusio"
