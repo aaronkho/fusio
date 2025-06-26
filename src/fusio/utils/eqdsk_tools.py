@@ -1,6 +1,9 @@
 import copy
 from pathlib import Path
 import numpy as np
+from scipy.integrate import quad
+import contourpy
+import cv2
 import logging
 
 
@@ -133,25 +136,96 @@ def convert_cocos(eqdsk, cocos_in, cocos_out, bt_sign_out=None, ip_sign_out=None
     return out
 
 
-def _sep_eq_line(line, float_width=16, floats_per_line=5, sep=' '):
-    """ Split a eqdsk-style line and inserts seperator characters """
-    splitted = [line[num*float_width:(num+1)*float_width] for num in range(floats_per_line)]
-    separate = sep.join(splitted)
-    return separate
+def trace_flux_surfaces(r, z, psi, levels, axis=None):
+    check = tuple([np.float32(i) for i in axis]) if isinstance(axis, (list, tuple)) else (np.mean(r).astype(np.float32), np.mean(z).astype(np.float32))
+    cg_psi = contourpy.contour_generator(r, z, psi)
+    contours = {}
+    for level in levels:
+        vertices = cg_psi.create_contour(level)
+        for i in range(len(vertices)):
+            enclosed = cv2.pointPolygonTest(cv2.UMat(vertices[i].astype(np.float32)), check, False)
+            if enclosed > 0:
+                contours[float(level)] = vertices[i].copy()
+                break
+    return contours
 
 
-def _read_chunk(lines, length, floats_per_line=5):
-    num_lines = int(np.ceil(length / floats_per_line))
-    vals = []
-    for line in lines[:num_lines]:
-        sep = sep_eq_line(line)
-        vals.append(np.fromstring(sep, sep=' '))
-    del lines[:num_lines]
-    return vals
+def calculate_mxh_coefficients(r, z, n=5):
+
+    z = np.roll(z, -np.argmax(r))
+    r = np.roll(r, -np.argmax(r))
+    if z[1] < z[0]: # reverses array so that theta increases
+        z = np.flip(z)
+        r = np.flip(r)
+
+    # compute bounding box for each flux surface
+    rmin = 0.5 * (np.nanmax(r) - np.nanmin(r))
+    kappa = 0.5 * (np.nanmax(z) - np.nanmin(z)) / rmin
+    r0 = 0.5 * (np.nanmax(r) + np.nanmin(r))
+    z0 = 0.5 * (np.max(z) + np.min(z))
+    bbox = [r0, rmin, z0, kappa]
+
+    # solve for polar angles
+    # need to use np.clip to avoid floating-point precision errors
+    theta_r = np.arccos(np.clip(((r - r0) / rmin), -1, 1))
+    theta = np.arcsin(np.clip(((z - z0) / rmin / kappa), -1, 1))
+
+    # Find the continuation of theta and theta_r to [0,2pi]
+    theta_r_cont = np.copy(theta_r)
+    theta_cont = np.copy(theta)
+
+    max_theta = np.argmax(theta)
+    min_theta = np.argmin(theta)
+    max_theta_r = np.argmax(theta_r)
+    min_theta_r = np.argmin(theta_r)
+
+    theta_cont[:max_theta] = theta_cont[:max_theta]
+    theta_cont[max_theta:max_theta_r] = np.pi - theta[max_theta:max_theta_r]
+    theta_cont[max_theta_r:min_theta] = np.pi - theta[max_theta_r:min_theta]
+    theta_cont[min_theta:] = 2.0 * np.pi + theta[min_theta:]
+
+    theta_r_cont[:max_theta] = theta_r_cont[:max_theta]
+    theta_r_cont[max_theta:max_theta_r] = theta_r[max_theta:max_theta_r]
+    theta_r_cont[max_theta_r:min_theta] = 2.0 * np.pi - theta_r[max_theta_r:min_theta]
+    theta_r_cont[min_theta:] = 2.0 * np.pi - theta_r[min_theta:]
+
+    theta_r_cont = theta_r_cont - theta_cont
+    theta_r_cont[-1] = theta_r_cont[0]
+
+    # Fourier decompose to find coefficients
+    c = [0.0] * (n + 1)
+    s = [0.0] * (n + 1)
+
+    def f_theta_r(theta):
+        return np.interp(theta, theta_cont, theta_r_cont)
+
+    for i in range(n + 1):
+        s[i] = quad(f_theta_r, 0, 2.0 * np.pi, weight='sin', wvar=i)[0] / np.pi
+        c[i] = quad(f_theta_r, 0, 2.0 * np.pi, weight='cos', wvar=i)[0] / np.pi
+
+    c[0] /= 2
+
+    return c, s, bbox
 
 
 def read_eqdsk(path):
     ''' Read an eqdsk file '''
+
+    def _sep_eq_line(line, float_width=16, floats_per_line=5, sep=' '):
+        ''' Split a eqdsk-style line and inserts seperator characters '''
+        splitted = [line[num*float_width:(num+1)*float_width] for num in range(floats_per_line)]
+        separate = sep.join(splitted)
+        return separate
+
+    def _read_chunk(lines, length, floats_per_line=5):
+        num_lines = int(np.ceil(length / floats_per_line))
+        vals = []
+        for line in lines[:num_lines]:
+            sep = _sep_eq_line(line)
+            vals.append(np.fromstring(sep, sep=' '))
+        del lines[:num_lines]
+        return vals
+
     lines = []
     if isinstance(path, (str, Path)):
         geqdsk_path = Path(path)
