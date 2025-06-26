@@ -83,8 +83,6 @@ class imas_io(io):
                             if key == 'profiles_1d[]&neutral[]&AOS_SHAPE' and 'profiles_1d[]&neutral[]&label' in data:
                                 cp_coords['neut_cp'] = [label.decode('utf-8') for label in data['profiles_1d[]&neutral[]&label'][0]]
                                 data.pop('profiles_1d[]&neutral[]&label')
-                        elif 'element[]' in key:
-                            data.pop(key)
                         elif 'state[]' in key:
                             data.pop(key)
                         elif key == 'profiles_1d[]&grid&rho_tor_norm':  # Assumes rho_tor_norm is the constant radial coordinate
@@ -109,6 +107,8 @@ class imas_io(io):
                                     dims.append('ion_cp')
                                 if 'neutral[]' in components:
                                     dims.append('neut_cp')
+                                if 'element[]' in components:
+                                    val = val.squeeze(axis=2) if val.ndim == 3 else None
                                 if f'{key}_SHAPE' in data:
                                     dims.append('rho_cp')
                                 if isinstance(val, bytes):
@@ -147,19 +147,17 @@ class imas_io(io):
                             if key == 'source[]&profiles_1d[]&ion[]&AOS_SHAPE' and 'source[]&profiles_1d[]&ion[]&label' in data:
                                 cp_coords['ion_cs'] = [label.decode('utf-8') for label in data['source[]&profiles_1d[]&ion[]&label'][0, 0, :]]
                                 data.pop('source[]&profiles_1d[]&ion[]&label')
-                                data.pop('source[]&profiles_1d[]&ion[]&multiple_states_flag')
                             if key == 'source[]&profiles_1d[]&neutral[]&AOS_SHAPE' and 'source[]&profiles_1d[]&neutral[]&label' in data:
                                 cp_coords['neut_cs'] = [label.decode('utf-8') for label in data['source[]&profiles_1d[]&neutral[]&label'][0]]
                                 data.pop('source[]&profiles_1d[]&neutral[]&label')
-                        elif 'element[]' in key:
-                            data.pop(key)
                         elif 'state[]' in key:
                             data.pop(key)
                         elif key == 'source[]&profiles_1d[]&grid&rho_tor_norm':  # Assumes rho_tor_norm is the constant radial coordinate
-                            cp_coords['rho_cs'] = data.pop(key)[0, 0].flatten()
+                            cs_coords['rho_cs'] = data.pop(key)[0, 0].flatten()
                             data.pop(f'{key}_SHAPE')
-                    if 'time_cp' in cp_coords and 'rho_cp' in cp_coords:
-                        timevec = cp_coords['time_cp']
+                    if 'time_cs' in cs_coords and 'rho_cs' in cs_coords:
+                        timevec = cs_coords['time_cs']
+                        cs_attrs['sources'] = list(srctags.keys())
                         for key, val in data.items():
                             if not key.endswith('_SHAPE'):
                                 if isinstance(val, np.ndarray):
@@ -172,6 +170,8 @@ class imas_io(io):
                                 dims = []
                                 components = key.split('&')
                                 if components[0] == 'source[]':
+                                    if 'element[]' in components:
+                                        val = val.squeeze(axis=2) if val.ndim == 3 else None
                                     for srctag, ii in srctags.items():
                                         dims = []
                                         if 'profiles_1d[]' in components:
@@ -348,11 +348,7 @@ class imas_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
-    def generate_eqdsk_file(self, path, time_index=-1, side='output'):
-        eqpath = None
-        if isinstance(path, (str, Path)):
-            eqpath = Path(path)
-        assert isinstance(eqpath, Path)
+    def to_eqdsk(self, time_index=-1, side='output'):
         eqdata = {}
         data = self.input.to_dataset().isel(time_eq=time_index) if side == 'input' else self.output.to_dataset().isel(time_eq=time_index)
         psinvec = data['psin_eq'].to_numpy().flatten() if 'psin_eq' in data else None
@@ -441,6 +437,15 @@ class imas_io(io):
                 eqdata['nbdry'] = len(rdata)
                 eqdata['rbdry'] = rdata
                 eqdata['zbdry'] = zdata
+        return eqdata
+
+
+    def generate_eqdsk_file(self, path, time_index=-1, side='output'):
+        eqpath = None
+        if isinstance(path, (str, Path)):
+            eqpath = Path(path)
+        assert isinstance(eqpath, Path)
+        eqdata = self.to_eqdsk(time_index=time_index, side=side)
         write_eqdsk(eqdata, eqpath)
         logger.info('Successfully generated g-eqdsk file, {path}')
 
