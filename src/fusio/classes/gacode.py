@@ -1,9 +1,11 @@
+import datetime
 from pathlib import Path
 import logging
 import numpy as np
 import xarray as xr
 from .io import io
 from ..utils.plasma_tools import define_ion_species
+from ..utils.eqdsk_tools import define_cocos_converter, trace_flux_surfaces, calculate_mxh_coefficients
 
 logger = logging.getLogger('fusio')
 
@@ -148,6 +150,20 @@ class gacode_io(io):
         if opath is not None:
             self.read(opath, side='output')
         self.autoformat()
+
+
+    def make_file_header(self):
+        now = datetime.datetime.now()
+        gacode_header = [
+            f'#  *original : {now.strftime("%a %b %-d %H:%M:%S %Z %Y")}',
+            f'# *statefile : null',
+            f'#     *gfile : null',
+            f'#   *cerfile : null',
+            f'#      *vgen : null',
+            f'#     *tgyro : null',
+            f'#',
+        ]
+        return '\n'.join(gacode_header)
 
 
     def correct_magnetic_fluxes(self, exponent=-1, side='input'):
@@ -573,7 +589,280 @@ class gacode_io(io):
                 #'vpol'
                 #'omega0'
                 #'qmom'
+                attrs['header'] = newobj.make_file_header()
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+        return newobj
+
+
+    @classmethod
+    def from_imas(cls, obj, side='output', window=None):
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            cocos = define_cocos_converter(17, 2)  # Assumed IMAS=17 -> GACODE=2
+            time_index = -1
+            time = np.array([data.get('time_cp').to_numpy().flatten()[time_index]])  #TODO: Use window argument
+            ikwargs = {'fill_value': 'extrapolate'}
+            coords = {}
+            data_vars = {}
+            attrs = {}
+            if 'rho_cp' in data.coords:
+                coords['n'] = [0]
+                coords['rho'] = data.coords['rho_cp'].to_numpy().flatten()
+                data_vars['nexp'] = (['n'], [len(coords['rho'])])
+                data_vars['shot'] = (['n'], [0])
+                data_vars['masse'] = (['n'], [5.4488748e-04])
+                data_vars['ze'] = (['n'], [-1.0])
+                if 'ion_cp' in data.coords:
+                    coords['name'] = data.coords['ion_cp'].to_numpy().flatten()
+                    data_vars['nion'] = (['n'], [len(coords['name'])])
+                    ni = None
+                    zi = None
+                    tag = 'core_profiles&profiles_1d[]&ion[]&density_thermal'
+                    if tag in data:
+                        types = []
+                        for j in range(len(coords['name'])):
+                            types.extend(['[therm]' if data[tag].isel(ion_cp=j).interp(time_cp=time).sum() > 0.0 else '[fast]'])
+                        ni = data[tag].interp(time_cp=time)
+                        data_vars['ni'] = (['n', 'rho', 'name'], 1.0e-19 * np.transpose(ni.to_numpy(), axes=(0, 2, 1)))
+                        data_vars['type'] = (['n', 'name'], np.expand_dims(types, axis=0))
+                    tag = 'core_profiles&profiles_1d[]&ion[]&temperature'
+                    if tag in data:
+                        ti = data[tag].interp(time_cp=time)
+                        data_vars['ti'] = (['n', 'rho', 'name'], 1.0e-3 * np.transpose(ti.to_numpy(), axes=(0, 2, 1)))
+                    tag = 'core_profiles&profiles_1d[]&ion[]&element[]&a'
+                    if tag in data:
+                        data_vars['mass'] = (['n', 'name'], data[tag].interp(time_cp=time).to_numpy())
+                    tag = 'core_profiles&profiles_1d[]&ion[]&element[]&z_n'
+                    if tag in data:
+                        zi = data[tag].interp(time_cp=time)
+                        data_vars['z'] = (['n', 'name'], zi.to_numpy())
+                    tag = 'core_profiles&profiles_1d[]&ion[]&z_ion_1d'  # Potential source of mismatch
+                    if tag in data:
+                        zi = data[tag].interp(time_cp=time)
+                    tag = 'core_profiles&profiles_1d[]&electrons&density_thermal'
+                    if ni is not None and zi is not None and tag in data:
+                        zeff = (ni * zi * zi).sum('ion_cp') / data[tag].interp(time_cp=time)
+                        data_vars['z_eff'] = (['n', 'rho'], zeff.to_numpy())
+                tag = 'core_profiles&profiles_1d[]&electrons&density_thermal'
+                if tag in data:
+                    ne = data[tag].interp(time_cp=time)
+                    data_vars['ne'] = (['n', 'rho'], 1.0e-19 * ne.to_numpy())
+                tag = 'core_profiles&profiles_1d[]&electrons&temperature'
+                if tag in data:
+                    te = data[tag].interp(time_cp=time)
+                    data_vars['te'] = (['n', 'rho'], 1.0e-3 * te.to_numpy())
+                tag = 'core_profiles&profiles_1d[]&pressure_thermal'
+                if tag in data:
+                    data_vars['ptot'] = (['n', 'rho'], data[tag].interp(time_cp=time).to_numpy())
+                tag = 'core_profiles&profiles_1d[]&q'
+                if tag in data:
+                    data_vars['q'] = (['n', 'rho'], cocos['spol'] * data[tag].interp(time_cp=time).to_numpy())
+                tag = 'core_profiles&profiles_1d[]&j_ohmic'
+                if tag in data:
+                    data_vars['johm'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * data[tag].interp(time_cp=time).to_numpy())
+                tag = 'core_profiles&profiles_1d[]&j_bootstrap'
+                if tag in data:
+                    data_vars['jbs'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * data[tag].interp(time_cp=time).to_numpy())
+                #tag = 'core_profiles&profiles_1d[]&momentum_tor'
+                tag = 'core_profiles&profiles_1d[]&ion[]&velocity&toroidal'
+                if tag in data:
+                    data_vars['vtor'] = (['n', 'rho', 'name'], cocos['scyl'] * np.transpose(data[tag].interp(time_cp=time).to_numpy(), axes=(0, 2, 1)))
+                tag = 'core_profiles&profiles_1d[]&ion[]&velocity&poloidal'
+                if tag in data:
+                    data_vars['vpol'] = (['n', 'rho', 'name'], cocos['spol'] * np.transpose(data[tag].interp(time_cp=time).to_numpy(), axes=(0, 2, 1)))
+                tag = 'core_profiles&profiles_1d[]&rotation_frequency_tor_sonic'
+                if tag in data:
+                    data_vars['omega0'] = (['n', 'rho'], cocos['scyl'] * data[tag].interp(time_cp=time).to_numpy())
+            if 'rho_eq' in data.coords or 'equilibrium&time_slice[]&profiles_1d[]&rho_tor_norm' in data:
+                eqdsk_data = obj.to_eqdsk(time_index=time_index, side=side)
+                rhovec = data.get('rho_eq')
+                if rhovec is None:
+                    rhovec = data['equilibrium&time_slice[]&profiles_1d[]&rho_tor_norm'].interp(time_eq=time, kwargs=ikwargs)
+                rhovec = rhovec.to_numpy().flatten()
+                tag = 'equilibrium&time_slice[]&profiles_1d&psi'
+                if tag in data:
+                    ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'psi': (['rho_int'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())})
+                    data_vars['polflux'] = (['n', 'rho'], np.expand_dims(ndata['psi'].interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
+                tag = 'equilibrium&vacuum_toroidal_field&r0'
+                if tag in data:
+                    data_vars['rcentr'] = (['n'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy())
+                tag = 'equilibrium&vacuum_toroidal_field&b0'
+                if tag in data:
+                    data_vars['bcentr'] = (['n'], cocos['scyl'] * data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy())
+                tag = 'equilibrium&time_slice[]&profiles_1d&pressure'
+                if tag in data and 'ptot' not in data_vars:
+                    ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'pressure': (['rho_int'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())})
+                    data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ndata['pressure'].interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
+                tag = 'equilibrium&time_slice[]&profiles_1d&q'
+                if tag in data and 'q' not in data_vars:
+                    ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'q': (['rho_int'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())})
+                    data_vars['q'] = (['n', 'rho'], np.expand_dims(ndata['q'].interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
+                if eqdsk_data:
+                    rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
+                    zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
+                    psivec = data_vars['polflux'][1].flatten() if 'polflux' in data_vars else np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], len(coords['rho']))
+                    if np.isclose(eqdsk_data['psi'][0, 0], eqdsk_data['psi'][-1, -1]) and np.isclose(eqdsk_data['psi'][0, -1], eqdsk_data['psi'][-1, 0]):
+                        if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[-1] < eqdsk_data['psi'][0, 0]:
+                            psivec[-1] = eqdsk_data['psi'][0, 0] + 1.0e-6
+                        elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[-1] > eqdsk_data['psi'][0, 0]:
+                            psivec[-1] = eqdsk_data['psi'][0, 0] - 1.0e-6
+                    if psivec[0] == eqdsk_data['simagx']:
+                        if eqdsk_data['simagx'] > eqdsk_data['sibdry']:
+                            psivec[0] = eqdsk_data['simagx'] - 1.0e-6
+                        elif eqdsk_data['simagx'] < eqdsk_data['sibdry']:
+                            psivec[0] = eqdsk_data['simagx'] + 1.0e-6
+                    rmesh, zmesh = np.meshgrid(rvec, zvec, indexing='ij')
+                    axis = [eqdsk_data['rmagx'], eqdsk_data['zmagx']]
+                    fs = trace_flux_surfaces(rmesh, zmesh, eqdsk_data['psi'], psivec, axis=axis)
+                    mxh = {psi: calculate_mxh_coefficients(c[:, 0], c[:, 1], n=6) for psi, c in fs.items()}
+                    rmaj, rmin, kappa, delta, zeta = [], [], [], [], []
+                    sin3, sin4, sin5, sin6 = [], [], [], []
+                    cos0, cos1, cos2, cos3, cos4, cos5, cos6 = [], [], [], [], [], [], []
+                    for psi in psivec:
+                        rmaj.append(mxh[psi][2][0] if psi in mxh else np.nan)
+                        rmin.append(mxh[psi][2][1] if psi in mxh else np.nan)
+                        kappa.append(mxh[psi][2][3] if psi in mxh else np.nan)
+                        delta.append(np.sin(mxh[psi][1][1]) if psi in mxh else np.nan)
+                        zeta.append(-mxh[psi][1][2] if psi in mxh else np.nan)
+                        sin3.append(mxh[psi][1][3] if psi in mxh else np.nan)
+                        sin4.append(mxh[psi][1][4] if psi in mxh else np.nan)
+                        sin5.append(mxh[psi][1][5] if psi in mxh else np.nan)
+                        sin6.append(mxh[psi][1][6] if psi in mxh else np.nan)
+                        cos0.append(mxh[psi][0][0] if psi in mxh else np.nan)
+                        cos1.append(mxh[psi][0][1] if psi in mxh else np.nan)
+                        cos2.append(mxh[psi][0][2] if psi in mxh else np.nan)
+                        cos3.append(mxh[psi][0][3] if psi in mxh else np.nan)
+                        cos4.append(mxh[psi][0][4] if psi in mxh else np.nan)
+                        cos5.append(mxh[psi][0][5] if psi in mxh else np.nan)
+                        cos6.append(mxh[psi][0][6] if psi in mxh else np.nan)
+                    data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(rmaj), axis=0))
+                    data_vars['rmin'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(rmin), axis=0))
+                    data_vars['kappa'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(kappa), axis=0))
+                    data_vars['delta'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(delta), axis=0))
+                    data_vars['zeta'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(zeta), axis=0))
+                    data_vars['shape_sin3'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(sin3), axis=0))
+                    data_vars['shape_sin4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(sin4), axis=0))
+                    data_vars['shape_sin5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(sin5), axis=0))
+                    data_vars['shape_sin6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(sin6), axis=0))
+                    data_vars['shape_cos0'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos0), axis=0))
+                    data_vars['shape_cos1'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos1), axis=0))
+                    data_vars['shape_cos2'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos2), axis=0))
+                    data_vars['shape_cos3'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos3), axis=0))
+                    data_vars['shape_cos4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos4), axis=0))
+                    data_vars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos5), axis=0))
+                    data_vars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos6), axis=0))
+                if 'equilibrium&time_slice[]&profiles_1d[]&r_inboard' in data and 'equilibrium&time_slice[]&profiles_1d[]&r_outboard' in data and ('rmaj' not in data_vars or 'rmin' not in data_vars):
+                    ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={
+                        'r_inboard': (['rho_int'], data['equilibrium&time_slice[]&profiles_1d[]&r_inboard'].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten()),
+                        'r_outboard': (['rho_int'], data['equilibrium&time_slice[]&profiles_1d[]&r_outboard'].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())
+                    })
+                    data_vars['rmin'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] - ndata['r_inboard'])).interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
+                    data_vars['rmaj'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] + ndata['r_inboard'])).interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
+                tag = 'equilibrium&time_slice[]&profiles_1d&elongation'
+                if tag in data and 'kappa' not in data_vars:
+                    ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'elongation': (['rho_int'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())})
+                    data_vars['kappa'] = (['n', 'rho'], np.expand_dims(ndata['elongation'].interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
+                if 'equilibrium&time_slice[]&profiles_1d[]&triangularity_upper' in data or 'equilibrium&time_slice[]&profiles_1d[]&triangularity_lower' in data and 'delta' not in data_vars:
+                    #tri = np.zeros(data['rho(-)'].shape)
+                    #itri = 0
+                    #if hasattr(time_struct.profiles_1d, 'triangularity_upper'):
+                    #    tri += time_struct.profiles_1d.triangularity_upper.flatten()
+                    #    itri += 1
+                    #if hasattr(time_struct.profiles_1d, 'triangularity_lower') and len(time_struct.profiles_1d.triangularity_lower) == data['nexp']:
+                    #    tri += time_struct.profiles_1d.triangularity_lower.flatten()
+                    #    itri += 1
+                    #data['delta(-)'] = tri / float(itri) if itri > 0 else tri
+                    pass
+            #    data['polflux(Wb/radian)'] = cocos['sBp'] * time_struct.profiles_1d.psi.flatten() * np.power(2.0 * np.pi, cocos['eBp'])
+            #if hasattr(time_struct.profiles_1d, 'phi') and 'torfluxa(Wb/radian)' not in data:
+            #    data['torfluxa(Wb/radian)'] = cocos['scyl'] * np.array([time_struct.profiles_1d.phi[-1]], dtype=float) * np.power(2.0 * np.pi, cocos['eBp'])
+            if 'rho_cs' in data.coords:
+                tag = 'core_sources&ohmic&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    data_vars['qohme'] = (['n', 'rho'], 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                qrfe = np.zeros((1, len(coords['rho'])))
+                tag = 'core_sources&ec&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    qrfe += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                tag = 'core_sources&ic&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    qrfe += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                tag = 'core_sources&lh&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    qrfe += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                if np.abs(qrfe).sum() > 0.0:
+                    data_vars['qrfe'] = (['n', 'rho'], 1.0e-6 * qrfe)
+                qrfi = np.zeros((1, len(coords['rho'])))
+                tag = 'core_sources&ec&profiles_1d[]&total_ion_energy'
+                if tag in data:
+                    qrfi += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                tag = 'core_sources&ic&profiles_1d[]&total_ion_energy'
+                if tag in data:
+                    qrfi += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                tag = 'core_sources&lh&profiles_1d[]&total_ion_energy'
+                if tag in data:
+                    qrfi += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                if np.abs(qrfi).sum() > 0.0:
+                    data_vars['qrfi'] = (['n', 'rho'], 1.0e-6 * qrfi)
+                tag = 'core_sources&nbi&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    data_vars['qbeame'] = (['n', 'rho'], 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&nbi&profiles_1d[]&total_ion_energy'
+                if tag in data:
+                    data_vars['qbeami'] = (['n', 'rho'], 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&synchrotron_radiation&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    data_vars['qsync'] = (['n', 'rho'], -1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&radiation&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    data_vars['qline'] = (['n', 'rho'], -1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                    data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(np.zeros_like(coords['rho']), axis=0))
+                tag = 'core_sources&charge_exchange&profiles_1d[]&total_ion_energy'
+                if tag in data:
+                    data_vars['qcxi'] = (['n', 'rho'], 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&fusion&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    data_vars['qfuse'] = (['n', 'rho'], 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&fusion&profiles_1d[]&total_ion_energy'
+                if tag in data:
+                    data_vars['qfusi'] = (['n', 'rho'], 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&collisional_equipartition&profiles_1d[]&electrons&energy'
+                if tag in data:
+                    data_vars['qei'] = (['n', 'rho'], -1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&ohmic&profiles_1d[]&j_parallel'
+                if tag in data and 'johm' not in data_vars:
+                    data_vars['johm'] = (['n', 'rho'], 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&bootstrap_current$profiles_1d[]&j_parallel'
+                if tag in data and 'jbs' not in data_vars:
+                    data_vars['jbs'] = (['n', 'rho'], 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                    #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                jrf = np.zeros((1, len(coords['rho'])))
+                tag = 'core_sources&ec&profiles_1d[]&j_parallel'
+                if tag in data:
+                    jrf += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                tag = 'core_sources&ic&profiles_1d[]&j_parallel'
+                if tag in data:
+                    jrf += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                tag = 'core_sources&lh&profiles_1d[]&j_parallel'
+                if tag in data:
+                    jrf += data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy()
+                if np.abs(jrf).sum() > 0.0:
+                    data_vars['jrf'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * jrf)
+                tag = 'core_sources&nbi&profiles_1d[]&j_parallel'
+                if tag in data:
+                    data_vars['jnb'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+                tag = 'core_sources&cold_neutrals&profiles_1d[]&ion[]&particles'
+                if tag in data:
+                    data_vars['qpar_wall'] = (['n', 'rho'], data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).sum('ion_cs').to_numpy())
+                tag = 'core_sources&nbi&profiles_1d[]&ion[]&particles'
+                if tag in data:
+                    data_vars['qpar_beam'] = (['n', 'rho'], data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).sum('ion_cs').to_numpy())
+                tag = 'core_sources&nbi&profiles_1d[]&momentum_tor'
+                if tag in data:
+                    data_vars['qmom'] = (['n', 'rho'], cocos['scyl'] * data[tag].interp(time_cs=time, rho_cs=coords['rho'], kwargs=ikwargs).to_numpy())
+            attrs['header'] = newobj.make_file_header()
+            newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
 
 
