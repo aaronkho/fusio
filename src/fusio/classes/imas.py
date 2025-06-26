@@ -107,6 +107,8 @@ class imas_io(io):
                                     dims.append('ion_cp')
                                 if 'neutral[]' in components:
                                     dims.append('neut_cp')
+                                if 'global_quantities' in components:
+                                    dims.append('time_cp')
                                 if 'element[]' in components:
                                     val = val.squeeze(axis=2) if val.ndim == 3 else None
                                 if f'{key}_SHAPE' in data:
