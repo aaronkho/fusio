@@ -5,7 +5,12 @@ import numpy as np
 import xarray as xr
 from .io import io
 from ..utils.plasma_tools import define_ion_species
-from ..utils.eqdsk_tools import define_cocos_converter, trace_flux_surfaces, calculate_mxh_coefficients
+from ..utils.eqdsk_tools import (
+    define_cocos_converter,
+    read_eqdsk,
+    trace_flux_surfaces,
+    calculate_mxh_coefficients,
+)
 
 logger = logging.getLogger('fusio')
 
@@ -179,6 +184,112 @@ class gacode_io(io):
                 self._tree['output']['torfluxa'] *= np.power(2.0 * np.pi, exponent)
 
 
+    def add_geometry_from_eqdsk(self, path, side='input', overwrite=False):
+        data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
+        if isinstance(path, (str, Path)) and 'polflux' in data:
+            eqdsk_data = read_eqdsk(path)
+            mxh_data = self._calculate_geometry_from_eqdsk(eqdsk_data, data.isel(n=0)['polflux'].to_numpy().flatten())
+            newvars = {}
+            if overwrite or np.abs(data.get('rmaj', np.array([0.0]))).sum() == 0.0:
+                newvars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmaj']), axis=0))
+            if overwrite or np.abs(data.get('rmin', np.array([0.0]))).sum() == 0.0:
+                newvars['rmin'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmin']), axis=0))
+            if overwrite or np.abs(data.get('zmag', np.array([0.0]))).sum() == 0.0:
+                newvars['zmag'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['zmag']), axis=0))
+            if overwrite or np.abs(data.get('kappa', np.array([0.0]))).sum() == 0.0:
+                newvars['kappa'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['kappa']), axis=0))
+            if overwrite or np.abs(data.get('delta', np.array([0.0]))).sum() == 0.0:
+                newvars['delta'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['delta']), axis=0))
+            if overwrite or np.abs(data.get('zeta', np.array([0.0]))).sum() == 0.0:
+                newvars['zeta'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['zeta']), axis=0))
+            if overwrite or np.abs(data.get('shape_sin3', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_sin3'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['sin3']), axis=0))
+            if overwrite or np.abs(data.get('shape_sin4', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_sin4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['sin4']), axis=0))
+            if overwrite or np.abs(data.get('shape_sin5', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_sin5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['sin5']), axis=0))
+            if overwrite or np.abs(data.get('shape_sin6', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_sin6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['sin6']), axis=0))
+            if overwrite or np.abs(data.get('shape_cos0', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_cos0'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos0']), axis=0))
+            if overwrite or np.abs(data.get('shape_cos1', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_cos1'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos1']), axis=0))
+            if overwrite or np.abs(data.get('shape_cos2', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_cos2'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos2']), axis=0))
+            if overwrite or np.abs(data.get('shape_cos3', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_cos3'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos3']), axis=0))
+            if overwrite or np.abs(data.get('shape_cos4', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_cos4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos4']), axis=0))
+            if overwrite or np.abs(data.get('shape_cos5', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos5']), axis=0))
+            if overwrite or np.abs(data.get('shape_cos6', np.array([0.0]))).sum() == 0.0:
+                newvars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
+            if newvars:
+                if side == 'input':
+                    self.update_input_data_vars(newvars)
+                else:
+                    self.update_output_data_vars(newvars)
+
+
+    # This could probably be generalized and moved to eqdsk_tools
+    def _calculate_geometry_from_eqdsk(self, eqdsk_data, psivec):
+        mxh_data = {
+            'rmaj': [],
+            'rmin': [],
+            'zmag': [],
+            'kappa': [],
+            'delta': [],
+            'zeta': [],
+            'sin3': [],
+            'sin4': [],
+            'sin5': [],
+            'sin6': [],
+            'cos0': [],
+            'cos1': [],
+            'cos2': [],
+            'cos3': [],
+            'cos4': [],
+            'cos5': [],
+            'cos6': [],
+        }
+        if isinstance(eqdsk_data, dict) and isinstance(psivec, np.ndarray):
+            rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
+            zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
+            if np.isclose(eqdsk_data['psi'][0, 0], eqdsk_data['psi'][-1, -1]) and np.isclose(eqdsk_data['psi'][0, -1], eqdsk_data['psi'][-1, 0]):
+                if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[-1] < eqdsk_data['psi'][0, 0]:
+                    psivec[-1] = eqdsk_data['psi'][0, 0] + 1.0e-6
+                elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[-1] > eqdsk_data['psi'][0, 0]:
+                    psivec[-1] = eqdsk_data['psi'][0, 0] - 1.0e-6
+            if psivec[0] == eqdsk_data['simagx']:
+                if eqdsk_data['simagx'] > eqdsk_data['sibdry']:
+                    psivec[0] = eqdsk_data['simagx'] - 1.0e-6
+                elif eqdsk_data['simagx'] < eqdsk_data['sibdry']:
+                    psivec[0] = eqdsk_data['simagx'] + 1.0e-6
+            rmesh, zmesh = np.meshgrid(rvec, zvec, indexing='ij')
+            axis = [eqdsk_data['rmagx'], eqdsk_data['zmagx']]
+            fs = trace_flux_surfaces(rmesh, zmesh, eqdsk_data['psi'], psivec, axis=axis)
+            mxh = {psi: calculate_mxh_coefficients(c[:, 0], c[:, 1], n=6) for psi, c in fs.items()}
+            for psi in psivec:
+                mxh_data['rmaj'].append(mxh[psi][2][0] if psi in mxh else np.nan)
+                mxh_data['rmin'].append(mxh[psi][2][1] if psi in mxh else np.nan)
+                mxh_data['zmag'].append(mxh[psi][2][2] if psi in mxh else np.nan)
+                mxh_data['kappa'].append(mxh[psi][2][3] if psi in mxh else np.nan)
+                mxh_data['delta'].append(np.sin(mxh[psi][1][1]) if psi in mxh else np.nan)
+                mxh_data['zeta'].append(-mxh[psi][1][2] if psi in mxh else np.nan)
+                mxh_data['sin3'].append(mxh[psi][1][3] if psi in mxh else np.nan)
+                mxh_data['sin4'].append(mxh[psi][1][4] if psi in mxh else np.nan)
+                mxh_data['sin5'].append(mxh[psi][1][5] if psi in mxh else np.nan)
+                mxh_data['sin6'].append(mxh[psi][1][6] if psi in mxh else np.nan)
+                mxh_data['cos0'].append(mxh[psi][0][0] if psi in mxh else np.nan)
+                mxh_data['cos1'].append(mxh[psi][0][1] if psi in mxh else np.nan)
+                mxh_data['cos2'].append(mxh[psi][0][2] if psi in mxh else np.nan)
+                mxh_data['cos3'].append(mxh[psi][0][3] if psi in mxh else np.nan)
+                mxh_data['cos4'].append(mxh[psi][0][4] if psi in mxh else np.nan)
+                mxh_data['cos5'].append(mxh[psi][0][5] if psi in mxh else np.nan)
+                mxh_data['cos6'].append(mxh[psi][0][6] if psi in mxh else np.nan)
+        return mxh_data
+
+
     def read(self, path, side='output'):
         if side == 'input':
             self.input = self._read_gacode_file(path)
@@ -215,7 +326,7 @@ class gacode_io(io):
             header = lines[:istartProfs]
             if header[-1].strip() == '#':
                 header = header[:-1]
-            attrs['header'] = ''.join(header)
+            attrs['header'] = ''.join(header).strip()
 
             singleLine, title, var = None, None, None
             found = False
@@ -674,6 +785,10 @@ class gacode_io(io):
                 tag = 'core_profiles&profiles_1d[]&rotation_frequency_tor_sonic'
                 if tag in data:
                     data_vars['omega0'] = (['n', 'rho'], cocos['scyl'] * data[tag].interp(time_cp=time).to_numpy())
+                tag = 'core_profiles&profiles_1d[]&grid&rho_tor'
+                if tag in data and 'core_profiles&vacuum_toroidal_field&b0' in data:
+                    torflux = data[tag].interp(time_cp=time, rho_cp=np.array([1.0]), kwargs=ikwargs) ** 2.0 / (np.pi * data['core_profiles&vacuum_toroidal_field&b0'].interp(time_cp=time))
+                    data_vars['torfluxa'] = (['n'], torflux.to_numpy().flatten())
             if 'rho_eq' in data.coords or 'equilibrium&time_slice[]&profiles_1d[]&rho_tor_norm' in data:
                 eqdsk_data = obj.to_eqdsk(time_index=time_index, side=side)
                 rhovec = data.get('rho_eq')
@@ -699,59 +814,28 @@ class gacode_io(io):
                     ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'q': (['rho_int'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())})
                     data_vars['q'] = (['n', 'rho'], np.expand_dims(ndata['q'].interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
                 if eqdsk_data:
-                    rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
-                    zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
                     psivec = data_vars['polflux'][1].flatten() if 'polflux' in data_vars else np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], len(coords['rho']))
-                    if np.isclose(eqdsk_data['psi'][0, 0], eqdsk_data['psi'][-1, -1]) and np.isclose(eqdsk_data['psi'][0, -1], eqdsk_data['psi'][-1, 0]):
-                        if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[-1] < eqdsk_data['psi'][0, 0]:
-                            psivec[-1] = eqdsk_data['psi'][0, 0] + 1.0e-6
-                        elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[-1] > eqdsk_data['psi'][0, 0]:
-                            psivec[-1] = eqdsk_data['psi'][0, 0] - 1.0e-6
-                    if psivec[0] == eqdsk_data['simagx']:
-                        if eqdsk_data['simagx'] > eqdsk_data['sibdry']:
-                            psivec[0] = eqdsk_data['simagx'] - 1.0e-6
-                        elif eqdsk_data['simagx'] < eqdsk_data['sibdry']:
-                            psivec[0] = eqdsk_data['simagx'] + 1.0e-6
-                    rmesh, zmesh = np.meshgrid(rvec, zvec, indexing='ij')
-                    axis = [eqdsk_data['rmagx'], eqdsk_data['zmagx']]
-                    fs = trace_flux_surfaces(rmesh, zmesh, eqdsk_data['psi'], psivec, axis=axis)
-                    mxh = {psi: calculate_mxh_coefficients(c[:, 0], c[:, 1], n=6) for psi, c in fs.items()}
-                    rmaj, rmin, kappa, delta, zeta = [], [], [], [], []
-                    sin3, sin4, sin5, sin6 = [], [], [], []
-                    cos0, cos1, cos2, cos3, cos4, cos5, cos6 = [], [], [], [], [], [], []
-                    for psi in psivec:
-                        rmaj.append(mxh[psi][2][0] if psi in mxh else np.nan)
-                        rmin.append(mxh[psi][2][1] if psi in mxh else np.nan)
-                        kappa.append(mxh[psi][2][3] if psi in mxh else np.nan)
-                        delta.append(np.sin(mxh[psi][1][1]) if psi in mxh else np.nan)
-                        zeta.append(-mxh[psi][1][2] if psi in mxh else np.nan)
-                        sin3.append(mxh[psi][1][3] if psi in mxh else np.nan)
-                        sin4.append(mxh[psi][1][4] if psi in mxh else np.nan)
-                        sin5.append(mxh[psi][1][5] if psi in mxh else np.nan)
-                        sin6.append(mxh[psi][1][6] if psi in mxh else np.nan)
-                        cos0.append(mxh[psi][0][0] if psi in mxh else np.nan)
-                        cos1.append(mxh[psi][0][1] if psi in mxh else np.nan)
-                        cos2.append(mxh[psi][0][2] if psi in mxh else np.nan)
-                        cos3.append(mxh[psi][0][3] if psi in mxh else np.nan)
-                        cos4.append(mxh[psi][0][4] if psi in mxh else np.nan)
-                        cos5.append(mxh[psi][0][5] if psi in mxh else np.nan)
-                        cos6.append(mxh[psi][0][6] if psi in mxh else np.nan)
-                    data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(rmaj), axis=0))
-                    data_vars['rmin'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(rmin), axis=0))
-                    data_vars['kappa'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(kappa), axis=0))
-                    data_vars['delta'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(delta), axis=0))
-                    data_vars['zeta'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(zeta), axis=0))
-                    data_vars['shape_sin3'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(sin3), axis=0))
-                    data_vars['shape_sin4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(sin4), axis=0))
-                    data_vars['shape_sin5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(sin5), axis=0))
-                    data_vars['shape_sin6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(sin6), axis=0))
-                    data_vars['shape_cos0'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos0), axis=0))
-                    data_vars['shape_cos1'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos1), axis=0))
-                    data_vars['shape_cos2'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos2), axis=0))
-                    data_vars['shape_cos3'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos3), axis=0))
-                    data_vars['shape_cos4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos4), axis=0))
-                    data_vars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos5), axis=0))
-                    data_vars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(cos6), axis=0))
+                    mxh_data = newobj._calculate_geometry_from_eqdsk(eqdsk_data, psivec)
+                    data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmaj']), axis=0))
+                    data_vars['rmin'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmin']), axis=0))
+                    data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['zmag']), axis=0))
+                    data_vars['kappa'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['kappa']), axis=0))
+                    data_vars['delta'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['delta']), axis=0))
+                    data_vars['zeta'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['zeta']), axis=0))
+                    data_vars['shape_sin3'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['sin3']), axis=0))
+                    data_vars['shape_sin4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['sin4']), axis=0))
+                    data_vars['shape_sin5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['sin5']), axis=0))
+                    data_vars['shape_sin6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['sin6']), axis=0))
+                    data_vars['shape_cos0'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos0']), axis=0))
+                    data_vars['shape_cos1'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos1']), axis=0))
+                    data_vars['shape_cos2'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos2']), axis=0))
+                    data_vars['shape_cos3'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos3']), axis=0))
+                    data_vars['shape_cos4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos4']), axis=0))
+                    data_vars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos5']), axis=0))
+                    data_vars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
+                tag = 'equilibrium&time_slice[]&global_quantities&ip'
+                if tag in data:
+                    data_vars['current'] = (['n'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())
                 if 'equilibrium&time_slice[]&profiles_1d[]&r_inboard' in data and 'equilibrium&time_slice[]&profiles_1d[]&r_outboard' in data and ('rmaj' not in data_vars or 'rmin' not in data_vars):
                     ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={
                         'r_inboard': (['rho_int'], data['equilibrium&time_slice[]&profiles_1d[]&r_inboard'].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten()),
@@ -759,6 +843,9 @@ class gacode_io(io):
                     })
                     data_vars['rmin'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] - ndata['r_inboard'])).interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
                     data_vars['rmaj'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] + ndata['r_inboard'])).interp(rho_int=coords['rho'], kwargs=ikwargs).to_numpy(), axis=0))
+                tag = 'equilibrium&time_slice[]&global_quantities&magnetic_axis&z'
+                if tag in data and 'zmag' not in data_vars:
+                    data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.repeat(data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten(), len(coords['rho']), axis=0), axis=0))
                 tag = 'equilibrium&time_slice[]&profiles_1d&elongation'
                 if tag in data and 'kappa' not in data_vars:
                     ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'elongation': (['rho_int'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())})
