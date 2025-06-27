@@ -253,6 +253,7 @@ class gacode_io(io):
             'cos6': [],
         }
         if isinstance(eqdsk_data, dict) and isinstance(psivec, np.ndarray):
+            faxis = False
             rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
             zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
             if np.isclose(eqdsk_data['psi'][0, 0], eqdsk_data['psi'][-1, -1]) and np.isclose(eqdsk_data['psi'][0, -1], eqdsk_data['psi'][-1, 0]):
@@ -260,12 +261,13 @@ class gacode_io(io):
                     psivec[-1] = eqdsk_data['psi'][0, 0] + 1.0e-6
                 elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[-1] > eqdsk_data['psi'][0, 0]:
                     psivec[-1] = eqdsk_data['psi'][0, 0] - 1.0e-6
-            if psivec[0] == eqdsk_data['simagx']:
-                if eqdsk_data['simagx'] > eqdsk_data['sibdry']:
-                    psivec[0] = eqdsk_data['simagx'] - 1.0e-6
-                elif eqdsk_data['simagx'] < eqdsk_data['sibdry']:
-                    psivec[0] = eqdsk_data['simagx'] + 1.0e-6
-            rmesh, zmesh = np.meshgrid(rvec, zvec, indexing='ij')
+            if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[0] >= eqdsk_data['simagx']:
+                faxis = True
+                psivec[0] = eqdsk_data['simagx'] - 1.0e-6
+            elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[0] <= eqdsk_data['simagx']:
+                faxis = True
+                psivec[0] = eqdsk_data['simagx'] + 1.0e-6
+            rmesh, zmesh = np.meshgrid(rvec, zvec)
             axis = [eqdsk_data['rmagx'], eqdsk_data['zmagx']]
             fs = trace_flux_surfaces(rmesh, zmesh, eqdsk_data['psi'], psivec, axis=axis)
             mxh = {psi: calculate_mxh_coefficients(c[:, 0], c[:, 1], n=6) for psi, c in fs.items()}
@@ -287,6 +289,16 @@ class gacode_io(io):
                 mxh_data['cos4'].append(mxh[psi][0][4] if psi in mxh else np.nan)
                 mxh_data['cos5'].append(mxh[psi][0][5] if psi in mxh else np.nan)
                 mxh_data['cos6'].append(mxh[psi][0][6] if psi in mxh else np.nan)
+            for key in mxh_data:
+                if not np.isfinite(mxh_data[key][0]):
+                    mxh_data[key][0] = mxh_data[key][1]
+                    if faxis:
+                        if key == 'rmaj':
+                            mxh_data[key][0] = eqdsk_data['rmagx']
+                        elif key == 'zmag':
+                            mxh_data[key][0] = eqdsk_data['zmagx']
+                        elif key not in ['kappa']:
+                            mxh_data[key][0] = 0.0
         return mxh_data
 
 
