@@ -350,7 +350,7 @@ class imas_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
-    def to_eqdsk(self, time_index=-1, side='output'):
+    def to_eqdsk(self, time_index=-1, side='output', transpose=False):
         eqdata = {}
         data = self.input.to_dataset().isel(time_eq=time_index) if side == 'input' else self.output.to_dataset().isel(time_eq=time_index)
         psinvec = data['psin_eq'].to_numpy().flatten() if 'psin_eq' in data else None
@@ -422,7 +422,7 @@ class imas_io(io):
                 eqdata['pprime'] = ndata.drop_duplicates('psin_interp').get(tag).interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
         tag = 'equilibrium&time_slice[]&profiles_2d&psi'
         if tag in data:
-            eqdata['psi'] = data.get(tag).to_numpy().T
+            eqdata['psi'] = data.get(tag).to_numpy() if transpose else data.get(tag).to_numpy().T
         tag = 'equilibrium&time_slice[]&profiles_1d&q'
         if tag in data:
             if conversion is None:
@@ -442,17 +442,17 @@ class imas_io(io):
         return eqdata
 
 
-    def generate_eqdsk_file(self, path, time_index=-1, side='output'):
+    def generate_eqdsk_file(self, path, time_index=-1, side='output', transpose=False):
         eqpath = None
         if isinstance(path, (str, Path)):
             eqpath = Path(path)
         assert isinstance(eqpath, Path)
-        eqdata = self.to_eqdsk(time_index=time_index, side=side)
+        eqdata = self.to_eqdsk(time_index=time_index, side=side, transpose=transpose)
         write_eqdsk(eqdata, eqpath)
         logger.info('Successfully generated g-eqdsk file, {path}')
 
 
-    def generate_all_eqdsk_files(self, basepath, side='output'):
+    def generate_all_eqdsk_files(self, basepath, side='output', transpose=False):
         path = None
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
@@ -465,7 +465,7 @@ class imas_io(io):
                     stem = stem[:-6]
                 time_tag = int(np.rint(time * 1000))
                 eqpath = path.parent / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
-                self.generate_eqdsk_file(eqpath, time_index=ii, side=side)
+                self.generate_eqdsk_file(eqpath, time_index=ii, side=side, transpose=transpose)
 
 
     @classmethod
