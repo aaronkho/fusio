@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "mypy", "pylint"]
 build = ["build", "twine"]
 
 [project.urls]
