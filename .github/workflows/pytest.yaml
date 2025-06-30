@@ -1,9 +1,19 @@
 name: pytest
 
-on: [push]
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  pull_request_review:
+    types: [submitted]
 
 jobs:
-  build:
+  pytest:
     runs-on: ubuntu-latest
     continue-on-error: true
 
@@ -15,7 +25,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: setup-python-${{ matrix.python-version }}
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
