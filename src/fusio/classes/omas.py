@@ -1,8 +1,12 @@
-import json
-from pathlib import Path
 import logging
+from pathlib import Path
+from .io import Any, Final, Self
+from collections.abc import MutableMapping, Mapping, Sequence, Iterable
+from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
+
+import json
 from .io import io
 from ..utils.eqdsk_tools import write_eqdsk
 
@@ -12,7 +16,11 @@ logger = logging.getLogger('fusio')
 class omas_io(io):
 
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         ipath = None
         opath = None
@@ -33,21 +41,33 @@ class omas_io(io):
         self.autoformat()
 
 
-    def read(self, path, side='output'):
+    def read(
+        self,
+        path: str | Path,
+        side: str = 'output',
+    ) -> None:
         if side == 'input':
             self.input = self._read_omas_json_file(path)
         else:
             self.output = self._read_omas_json_file(path)
 
 
-    def write(self, path, side='input', overwrite=False):
+    def write(
+        self,
+        path: str | Path,
+        side: str = 'input',
+        overwrite: bool = False
+    ) -> None:
         if side == 'input':
-            self._write_omas_json_file(path, self.input, overwrite=overwrite)
+            self._write_omas_json_file(path, self.input.to_dataset(), overwrite=overwrite)
         else:
-            self._write_omas_json_file(path, self.output, overwrite=overwrite)
+            self._write_omas_json_file(path, self.output.to_dataset(), overwrite=overwrite)
 
 
-    def _read_omas_json_file(self, path):
+    def _read_omas_json_file(
+        self,
+        path: str | Path,
+    ) -> xr.Dataset:
 
         dsvec = []
 
@@ -70,12 +90,12 @@ class omas_io(io):
                         ionlist = []
                         for ii, ion in enumerate(profs[0]['ion']):
                             ionlist.append(ion.pop('label', 'UNKNOWN'))
-                        cp_coords['ion_cp'] = ionlist
+                        cp_coords['ion_cp'] = np.atleast_1d(ionlist).flatten()
                     if 'code' in data['core_profiles']:
-                        cp_attrs['core_profiles.code.name'] = data['core_profiles'].pop('code').get('name', '')
+                        cp_attrs['core_profiles.code.name'] = data['core_profiles'].pop('code', {}).get('name', '')
                     cp_ds = xr.Dataset(coords=cp_coords, attrs=cp_attrs) if cp_coords else None
                     if 'time_cp' in cp_coords and 'rho_cp' in cp_coords:
-                        timevec = cp_coords.pop('time_cp', [])
+                        timevec = cp_coords.pop('time_cp', np.array([]))
                         cp_dsvec = []
                         for ii, cpp in enumerate(profs):
                             cp_data_vars = {}
@@ -92,16 +112,16 @@ class omas_io(io):
                                     cp_data_vars[tag] = (['time_cp', 'rho_cp'], np.expand_dims(np.atleast_1d(val), axis=0))
                             if 'ion_cp' in cp_coords:
                                 ions = cpp.pop('ion', [])
-                                iondict = {}
+                                ionprof_cp: MutableMapping[str, NDArray] = {}
                                 for jj, ion in enumerate(ions):
                                     for key, val in ion.items():
                                         tag = f'core_profiles.profiles_1d.ion.{key}'
                                         if isinstance(val, list):
-                                            iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(val)], axis=0) if tag in iondict else np.atleast_2d(val)
-                                for tag in iondict:
-                                    while iondict[tag].shape[0] < len(cp_coords['ion_cp']):
-                                        iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(iondict[tag][-1, :])], axis=0)
-                                for tag, val in iondict.items():
+                                            ionprof_cp[tag] = np.concatenate([ionprof_cp[tag], np.atleast_2d(val)], axis=0) if tag in ionprof_cp else np.atleast_2d(val)
+                                for tag in ionprof_cp:
+                                    while ionprof_cp[tag].shape[0] < len(cp_coords['ion_cp']):
+                                        ionprof_cp[tag] = np.concatenate([ionprof_cp[tag], np.atleast_2d(ionprof_cp[tag][-1, :])], axis=0)
+                                for tag, val in ionprof_cp.items():
                                     cp_data_vars[tag] = (['time_cp', 'ion_cp', 'rho_cp'], np.expand_dims(val, axis=0))
                             for key, val in cpp.items():
                                 tag = f'core_profiles.profiles_1d.{key}'
@@ -111,17 +131,17 @@ class omas_io(io):
                                 cp_dsvec.append(xr.Dataset(coords=cp_coords, data_vars=cp_data_vars, attrs=cp_attrs))
                         if len(cp_dsvec) > 0:
                             cp_ds = xr.merge(cp_dsvec)
-                    if 'time_cp' in cp_coords:
+                    if cp_ds is not None and 'time_cp' in cp_coords:
                         globs = data['core_profiles'].pop('global_quantities', {})
                         if 'ion_cp' in cp_coords:
                             ions = globs.pop('ion', [])
-                            iondict = {}
+                            ionglob_cp: MutableMapping[str, NDArray] = {}
                             for jj, ion in enumerate(ions):
                                 for key, val in ion.items():
                                     tag = f'core_profiles.global_quantities.ion.{key}'
                                     if isinstance(val, list):
-                                        iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(val).T], axis=-1) if tag in iondict else np.atleast_2d(val).T
-                            for tag, val in iondict.items():
+                                        ionglob_cp[tag] = np.concatenate([ionglob_cp[tag], np.atleast_2d(val).T], axis=-1) if tag in ionglob_cp else np.atleast_2d(val).T
+                            for tag, val in ionglob_cp.items():
                                 cp_ds[tag] = (['time_cp', 'ion_cp'], val)
                         for key, val in globs.items():
                             tag = f'core_profiles.global_quantities.{key}'
@@ -139,28 +159,28 @@ class omas_io(io):
                         sid = src.pop('identifier', {})
                         srctag = sid['name'] if 'name' in sid else f'source_index_{sid.get("index", ii):d}'
                         if 'global_quantities' in src:
-                            timevec = []
+                            timevec = np.array([])
                             for jj in range(len(src['global_quantities'])):
                                 if 'time' in src['global_quantities'][jj]:
-                                    timevec.append(src['global_quantities'][jj]['time'])
-                            cs_coords['time_cs'] = np.atleast_1d(timevec)
+                                    timevec = np.concatenate([timevec, src['global_quantities'][jj]['time']], axis=0)
+                            cs_coords['time_cs'] = timevec.flatten()
                         profs = src.pop('profiles_1d', [])
                         if len(profs) > 0 and 'rho_tor_norm' in profs[0].get('grid', {}):
-                            cs_coords['rho_cs'] = np.atleast_1d(profs[0]['grid'].pop('rho_tor_norm'))
+                            cs_coords['rho_cs'] = np.atleast_1d(profs[0]['grid'].pop('rho_tor_norm')).flatten()
                         if len(profs) > 0 and 'ion' in profs[0] and len(profs[0]['ion']) > 0:
                             ionlist = []
                             for ii, ion in enumerate(profs[0]['ion']):
                                 ionlist.append(ion.pop('label', 'UNKNOWN'))
-                            cs_coords['ion_cs'] = ionlist
+                            cs_coords['ion_cs'] = np.array(ionlist).flatten()
                         if 'code' in src:
                             cs_attrs[f'core_sources.{srctag}.code.name'] = src.pop('code').get('name', '')
                         cs_ds = xr.Dataset(coords=cs_coords, attrs=cs_attrs) if cs_coords else None
                         if cs_ds is not None and 'time_cs' in cs_coords and 'rho_cs' in cs_coords:
-                            timevec = cs_coords.pop('time_cs', [])
+                            timevec = cs_coords.pop('time_cs', np.array([]))
                             csp_dsvec = []
                             for jj, csp in enumerate(profs):
                                 cs_data_vars = {}
-                                cs_coords['time_cs'] = np.atleast_1d([timevec[jj]]) if len(timevec) > jj else np.atleast_1d([float(csp['time'])])
+                                cs_coords['time_cs'] = np.atleast_1d([timevec[jj]]).flatten() if len(timevec) > jj else np.atleast_1d([float(csp['time'])]).flatten()
                                 grid = csp.pop('grid', {})
                                 for key, val in grid.items():
                                     tag = f'core_sources.{srctag}.profiles_1d.grid.{key}'
@@ -173,13 +193,13 @@ class omas_io(io):
                                         cs_data_vars[tag] = (['time_cs', 'rho_cs'], np.expand_dims(np.atleast_1d(val), axis=0))
                                 if 'ion_cs' in cs_coords:
                                     ions = csp.pop('ion', [])
-                                    iondict = {}
+                                    ionprof_cs: MutableMapping[str, NDArray] = {}
                                     for kk, ion in enumerate(ions):
                                         for key, val in ion.items():
                                             tag = f'core_sources.{srctag}.profiles_1d.ion.{key}'
                                             if isinstance(val, list):
-                                                iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(val)], axis=-1) if tag in iondict else np.atleast_2d(val)
-                                    for tag, val in iondict.items():
+                                                ionprof_cs[tag] = np.concatenate([ionprof_cs[tag], np.atleast_2d(val)], axis=-1) if tag in ionprof_cs else np.atleast_2d(val)
+                                    for tag, val in ionprof_cs.items():
                                         cs_data_vars[tag] = (['time_cs', 'rho_cs', 'ion_cs'], np.expand_dims(val, axis=0))
                                 for key, val in csp.items():
                                     tag = f'core_sources.{srctag}.profiles_1d.{key}'
@@ -191,23 +211,23 @@ class omas_io(io):
                                 csp_ds = xr.merge(csp_dsvec)
                                 cs_ds = cs_ds.assign_coords(csp_ds.coords).assign(csp_ds.data_vars).assign_attrs(**csp_ds.attrs)
                             if len(timevec) > 0:
-                                cs_coords['time_cs'] = timevec
+                                cs_coords['time_cs'] = timevec.flatten()
                         if cs_ds is not None and 'time_cs' in cs_coords:
                             globs = src.pop('global_quantities', [])
-                            timevec = cs_coords.pop('time_cs', [])
+                            timevec = cs_coords.pop('time_cs', np.array([]))
                             csg_dsvec = []
                             for jj, csg in enumerate(globs):
                                 cs_data_vars = {}
-                                cs_coords['time_cs'] = np.atleast_1d([timevec[jj]]) if len(timevec) > jj else np.atleast_1d([float(csg['time'])])
+                                cs_coords['time_cs'] = np.atleast_1d([timevec[jj]]).flatten() if len(timevec) > jj else np.atleast_1d([float(csg['time'])]).flatten()
                                 if 'ion_cs' in cs_coords:
                                     ions = csg.pop('ion', [])
-                                    iondict = {}
+                                    ionglob_cs: MutableMapping[str, NDArray] = {}
                                     for kk, ion in enumerate(ions):
                                         for key, val in ion.items():
                                             tag = f'core_sources.{srctag}.global_quantities.ion.{key}'
                                             if isinstance(val, list):
-                                                iondict[tag] = np.concatenate([iondict[tag], np.atleast_1d(val)], axis=-1) if tag in iondict else np.atleast_1d(val)
-                                    for tag, val in iondict.items():
+                                                ionglob_cs[tag] = np.concatenate([ionglob_cs[tag], np.atleast_1d(val)], axis=-1) if tag in ionglob_cs else np.atleast_1d(val)
+                                    for tag, val in ionglob_cs.items():
                                         cs_data_vars[tag] = (['time_cs', 'ion_cs'], val)
                                 for key, val in csg.items():
                                     tag = f'core_sources.{srctag}.global_quantities.{key}'
@@ -247,43 +267,43 @@ class omas_io(io):
                             if 'rho_tor_norm' in profs[0].get('grid_flux', {}):
                                 ctm_coords[f'rho_flux_{ii}_ct'] = np.atleast_1d(profs[0]['grid_flux']['rho_tor_norm'])
                         if 'ion' in profs[0] and len(profs[0]['ion']) > 0:
-                            ctm_coords[f'ion_{ii}_ct'] = [jj for jj in range(len(profs[0]['ion']))]
+                            ctm_coords[f'ion_{ii}_ct'] = np.array([jj for jj in range(len(profs[0]['ion']))], dtype=int).flatten()
                         if 'neutral' in profs[0] and len(profs[0]['neutral']) > 0:
-                            ctm_coords[f'neutral_{ii}_ct'] = [jj for jj in range(len(profs[0]['neutral']))]
+                            ctm_coords[f'neutral_{ii}_ct'] = np.array([jj for jj in range(len(profs[0]['neutral']))], dtype=int).flatten()
                         ctm_ds = xr.Dataset(coords=ctm_coords, attrs=ctm_attrs) if ctm_coords else None
                         if 'time_ct' in ctm_coords and (f'rho_d_{ii}_ct' in ctm_coords or f'rho_v_{ii}_ct' in ctm_coords or 'rho_flux_{ii}_ct' in ctm_coords):
-                            timevec = ctm_coords.pop('time_ct', [])
+                            timevec = ctm_coords.pop('time_ct', np.array([]))
                             ctp_dsvec = []
                             for jj, ctp in enumerate(profs):
                                 ctm_data_vars = {}
-                                ctm_coords['time_ct'] = np.atleast_1d([timevec[jj]]) if len(timevec) > jj else np.atleast_1d([ctp['time']])
+                                ctm_coords['time_ct'] = np.atleast_1d([timevec[jj]]).flatten() if len(timevec) > jj else np.atleast_1d([ctp['time']]).flatten()
                                 if f'ion_{ii}_ct' in ctm_coords:
                                     ions = ctp.pop('ion', [])
-                                    iondict = {}
+                                    ionprof_ct: MutableMapping[str, NDArray] = {}
                                     for kk, ion in enumerate(ions):
                                         for var, obj in ion.items():
                                             for key, val in obj.items():
                                                 tag = f'core_transport.{modtag}.profiles_1d.ion.{var}.{key}'
                                                 if isinstance(val, list):
-                                                    iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(val)], axis=0) if tag in iondict else np.atleast_2d(val)
-                                    for tag in iondict:
-                                        while iondict[tag].shape[0] < len(ctm_coords[f'ion_{ii}_ct']):
-                                            iondict[tag] = np.concatenate([iondict[tag], np.atleast_2d(iondict[tag][-1, :])], axis=0)
-                                    for tag, val in iondict.items():
+                                                    ionprof_ct[tag] = np.concatenate([ionprof_ct[tag], np.atleast_2d(val)], axis=0) if tag in ionprof_ct else np.atleast_2d(val)
+                                    for tag in ionprof_ct:
+                                        while ionprof_ct[tag].shape[0] < len(ctm_coords[f'ion_{ii}_ct']):
+                                            ionprof_ct[tag] = np.concatenate([ionprof_ct[tag], np.atleast_2d(ionprof_ct[tag][-1, :])], axis=0)
+                                    for tag, val in ionprof_ct.items():
                                         ctm_data_vars[tag] = (['time_ct', f'ion_{ii}_ct', f'rho_{key}_{ii}_ct'], np.expand_dims(val, axis=0))
                                 if f'neutral_{ii}_ct' in ctm_coords:
                                     neutrals = ctp.pop('neutral', [])
-                                    neutdict = {}
+                                    neutprof_ct: MutableMapping[str, NDArray] = {}
                                     for kk, neut in enumerate(neutrals):
                                         for var, obj in neut.items():
                                             for key, val in obj.items():
                                                 tag = f'core_transport.{modtag}.profiles_1d.neutral.{var}.{key}'
                                                 if isinstance(val, list):
-                                                    neutdict[tag] = np.concatenate([neutdict[tag], np.atleast_2d(val)], axis=0) if tag in neutdict else np.atleast_2d(val)
-                                    for tag in neutdict:
-                                        while neutdict[tag].shape[0] < len(ctm_coords[f'neutral_{ii}_ct']):
-                                            neutdict[tag] = np.concatenate([neutdict[tag], np.atleast_2d(neutdict[tag][-1, :])], axis=0)
-                                    for tag, val in neutdict.items():
+                                                    neutprof_ct[tag] = np.concatenate([neutprof_ct[tag], np.atleast_2d(val)], axis=0) if tag in neutprof_ct else np.atleast_2d(val)
+                                    for tag in neutprof_ct:
+                                        while neutprof_ct[tag].shape[0] < len(ctm_coords[f'neutral_{ii}_ct']):
+                                            neutprof_ct[tag] = np.concatenate([neutprof_ct[tag], np.atleast_2d(neutprof_ct[tag][-1, :])], axis=0)
+                                    for tag, val in neutprof_ct.items():
                                         ctm_data_vars[tag] = (['time_ct', f'neutral_{ii}_ct', f'rho_{key}_{ii}_ct'], np.expand_dims(val, axis=0))
                                 elec = ctp.pop('electrons', {})
                                 for var, obj in elec.items():
@@ -322,7 +342,7 @@ class omas_io(io):
                                     eq_attrs['equilibrium.profiles_2d.grid_type.description'] = gtype['description']
                     eq_ds = xr.Dataset(coords=eq_coords, attrs=eq_attrs) if eq_coords else None
                     if 'time_eq' in eq_coords and 'r_eq' in eq_coords and 'z_eq' in eq_coords:
-                        timevec = eq_coords.pop('time_eq', [])
+                        timevec = eq_coords.pop('time_eq', np.array([]))
                         eq_dsvec = []
                         for ii, eqs in enumerate(slices):
                             eq_coords.pop('i_bdry_eq', None)
@@ -362,7 +382,7 @@ class omas_io(io):
                                 if key == 'outline' and 'r' in val and 'z' in val:
                                     rtag = 'equilibrium.time_slice.boundary.outline.r'
                                     ztag = 'equilibrium.time_slice.boundary.outline.z'
-                                    eq_coords['i_bdry_eq'] = [j for j in range(len(val['r']))]
+                                    eq_coords['i_bdry_eq'] = np.array([j for j in range(len(val['r']))], dtype=int).flatten()
                                     eq_data_vars[rtag] = (['time_eq', 'i_bdry_eq'], np.expand_dims(np.atleast_1d(val['r']), axis=0))
                                     eq_data_vars[ztag] = (['time_eq', 'i_bdry_eq'], np.expand_dims(np.atleast_1d(val['z']), axis=0))
                                 if key == 'x_point' and val:
@@ -375,7 +395,7 @@ class omas_io(io):
                                             rxpt.append(xpt['r'])
                                             zxpt.append(xpt['z'])
                                     if len(rxpt) > 0:
-                                        eq_coords['i_xpt_eq'] = [j for j in range(len(rxpt))]
+                                        eq_coords['i_xpt_eq'] = np.array([j for j in range(len(rxpt))], dtype=int).flatten()
                                         eq_data_vars[rtag] = (['time_eq', 'i_xpt_eq'], np.expand_dims(np.atleast_1d(rxpt), axis=0))
                                         eq_data_vars[ztag] = (['time_eq', 'i_xpt_eq'], np.expand_dims(np.atleast_1d(zxpt), axis=0))
                             eq_dsvec.append(xr.Dataset(coords=eq_coords, data_vars=eq_data_vars, attrs=eq_attrs))
@@ -439,16 +459,27 @@ class omas_io(io):
         return ds
 
 
-    def _write_omas_json_file(self, data, path, overwrite=False):
+    def _write_omas_json_file(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        window: ArrayLike | None = None,
+        overwrite: bool = False
+    ) -> None:
         pass
 
 
-    def generate_eqdsk_file(self, path, time_index=-1, side='output'):
+    def generate_eqdsk_file(
+        self,
+        path: str | Path,
+        time_index: int = -1,
+        side: str = 'output',
+    ) -> None:
         eqpath = None
         if isinstance(path, (str, Path)):
             eqpath = Path(path)
         assert isinstance(eqpath, Path)
-        eqdata = {}
+        eqdata: MutableMapping[str, Any] = {}
         data = self.input.to_dataset().isel(time_eq=time_index) if side == 'input' else self.output.to_dataset().isel(time_eq=time_index)
         psinvec = data['psin_eq'].to_numpy().flatten()
         tag = 'r_eq'
@@ -457,7 +488,7 @@ class omas_io(io):
             eqdata['nr'] = rvec.size
             eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
             eqdata['rleft'] = float(np.nanmin(rvec))
-            psinvec = np.linspace(0.0, 1.0, len(rvec))
+            psinvec = np.linspace(0.0, 1.0, len(rvec)).flatten()
         tag = 'z_eq'
         if tag in data:
             zvec = data[tag].to_numpy().flatten()
@@ -466,48 +497,48 @@ class omas_io(io):
             eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
         tag = 'equilibrium.vacuum_toroidal_field.r0'
         if tag in data:
-            eqdata['rcentr'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['rcentr'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium.vacuum_toroidal_field.b0'
         if tag in data:
-            eqdata['bcentr'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['bcentr'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.r'
         if tag in data:
-            eqdata['rmagx'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['rmagx'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
         if tag in data:
-            eqdata['zmagx'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['zmagx'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium.time_slice.global_quantities.psi_axis'
         if tag in data:
-            eqdata['simagx'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['simagx'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium.time_slice.global_quantities.psi_boundary'
         if tag in data:
-            eqdata['sibdry'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['sibdry'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium.time_slice.global_quantities.ip'
         if tag in data:
-            eqdata['cpasma'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['cpasma'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium.time_slice.profiles_1d.f'
         if tag in data:
-            eqdata['fpol'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+            eqdata['fpol'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_1d.pressure'
         if tag in data:
-            eqdata['pres'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+            eqdata['pres'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
         if tag in data:
-            eqdata['ffprime'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+            eqdata['ffprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
         if tag in data:
-            eqdata['pprime'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+            eqdata['pprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
         tag = 'equilibrium.time_slice.profiles_2d.psi'
         if tag in data:
-            eqdata['psi'] = data.get(tag).to_numpy().T
+            eqdata['psi'] = data[tag].to_numpy().T
         tag = 'equilibrium.time_slice.profiles_1d.q'
         if tag in data:
-            eqdata['qpsi'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+            eqdata['qpsi'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
         rtag = 'equilibrium.time_slice.boundary.outline.r'
         ztag = 'equilibrium.time_slice.boundary.outline.z'
         if rtag in data and ztag in data:
-            rdata = data.get(rtag).dropna('i_bdry_eq').to_numpy().flatten()
-            zdata = data.get(ztag).dropna('i_bdry_eq').to_numpy().flatten()
+            rdata = data[rtag].dropna('i_bdry_eq').to_numpy().flatten()
+            zdata = data[ztag].dropna('i_bdry_eq').to_numpy().flatten()
             if len(rdata) == len(zdata):
                 eqdata['nbdry'] = len(rdata)
                 eqdata['rbdry'] = rdata
@@ -516,7 +547,11 @@ class omas_io(io):
         logger.info('Successfully generated g-eqdsk file, {path}')
 
 
-    def generate_all_eqdsk_files(self, basepath, side='output'):
+    def generate_all_eqdsk_files(
+        self,
+        basepath: str | Path,
+        side: str = 'output',
+    ) -> None:
         path = None
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
@@ -533,7 +568,12 @@ class omas_io(io):
 
 
     @classmethod
-    def from_file(cls, path=None, input=None, output=None):
+    def from_file(
+        cls,
+        path: str | Path | None = None,
+        input: str | Path | None = None,
+        output: str | Path | None = None,
+    ) -> Self:
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
