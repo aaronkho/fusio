@@ -1,6 +1,9 @@
-import datetime
-from pathlib import Path
 import logging
+from pathlib import Path
+from typing import Any, Final, Self
+from collections.abc import MutableMapping, Mapping, Sequence, Iterable
+from numpy.typing import ArrayLike, NDArray
+import datetime
 import numpy as np
 import xarray as xr
 from .io import io
@@ -17,7 +20,7 @@ logger = logging.getLogger('fusio')
 
 class gacode_io(io):
 
-    basevars = [
+    basevars: Final[Sequence[str]] = [
         'nexp',
         'nion',
         'shot',
@@ -74,16 +77,16 @@ class gacode_io(io):
         'qpar_wall',
         'qmom',
     ]
-    titles_singleInt = [
+    titles_singleInt: Final[Sequence[str]] = [
         'nexp',
         'nion',
         'shot',
     ]
-    titles_singleStr = [
+    titles_singleStr: Final[Sequence[str]] = [
         'name',
         'type',
     ]
-    titles_singleFloat = [
+    titles_singleFloat: Final[Sequence[str]] = [
         'masse',
         'mass',
         'ze',
@@ -94,7 +97,7 @@ class gacode_io(io):
         'current',
         'time',
     ]
-    units = {
+    units: Final[Mapping[str, str]] = {
         'torfluxa': 'Wb/radian',
         'rcentr': 'm',
         'bcentr': 'T',
@@ -136,7 +139,11 @@ class gacode_io(io):
     }
 
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         ipath = None
         opath = None
@@ -157,7 +164,9 @@ class gacode_io(io):
         self.autoformat()
 
 
-    def make_file_header(self):
+    def make_file_header(
+        self,
+    ) -> str:
         now = datetime.datetime.now()
         gacode_header = [
             f'#  *original : {now.strftime("%a %b %-d %H:%M:%S %Z %Y")}',
@@ -171,20 +180,29 @@ class gacode_io(io):
         return '\n'.join(gacode_header)
 
 
-    def correct_magnetic_fluxes(self, exponent=-1, side='input'):
+    def correct_magnetic_fluxes(
+        self,
+        exponent: int = -1,
+        side: str = 'input',
+    ) -> None:
         if side == 'input':
-            if 'polflux' in self._input:
+            if 'polflux' in self.input:
                 self._tree['input']['polflux'] *= np.power(2.0 * np.pi, exponent)
-            if 'torfluxa' in self._input:
+            if 'torfluxa' in self.input:
                 self._tree['input']['torfluxa'] *= np.power(2.0 * np.pi, exponent)
         else:
-            if 'polflux' in self._output:
+            if 'polflux' in self.output:
                 self._tree['output']['polflux'] *= np.power(2.0 * np.pi, exponent)
-            if 'torfluxa' in self._output:
+            if 'torfluxa' in self.output:
                 self._tree['output']['torfluxa'] *= np.power(2.0 * np.pi, exponent)
 
 
-    def add_geometry_from_eqdsk(self, path, side='input', overwrite=False):
+    def add_geometry_from_eqdsk(
+        self,
+        path: str | Path,
+        side: str = 'input',
+        overwrite: bool = False,
+    ) -> None:
         data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
         if isinstance(path, (str, Path)) and 'polflux' in data:
             eqdsk_data = read_eqdsk(path)
@@ -232,8 +250,12 @@ class gacode_io(io):
 
 
     # This could probably be generalized and moved to eqdsk_tools
-    def _calculate_geometry_from_eqdsk(self, eqdsk_data, psivec):
-        mxh_data = {
+    def _calculate_geometry_from_eqdsk(
+        self,
+        eqdsk_data: MutableMapping[str, Any],
+        psivec: ArrayLike,
+    ) -> MutableMapping[str, list[int | float]]:
+        mxh_data: dict[str, list[int| float]] = {
             'rmaj': [],
             'rmin': [],
             'zmag': [],
@@ -302,21 +324,33 @@ class gacode_io(io):
         return mxh_data
 
 
-    def read(self, path, side='output'):
+    def read(
+        self,
+        path: str | Path,
+        side: str = 'output',
+    ) -> None:
         if side == 'input':
             self.input = self._read_gacode_file(path)
         else:
             self.output = self._read_gacode_file(path)
 
 
-    def write(self, path, side='input', overwrite=False):
+    def write(
+        self,
+        path: str | Path,
+        side: str = 'input',
+        overwrite: bool = False
+    ) -> None:
         if side == 'input':
-            self._write_gacode_file(path, self.input, overwrite=overwrite)
+            self._write_gacode_file(path, self.input.to_dataset(), overwrite=overwrite)
         else:
-            self._write_gacode_file(path, self.output, overwrite=overwrite)
+            self._write_gacode_file(path, self.output.to_dataset(), overwrite=overwrite)
 
 
-    def _read_gacode_file(self, path):
+    def _read_gacode_file(
+        self,
+        path: str | Path
+    ) -> xr.Dataset:
 
         coords = {}
         data_vars = {}
@@ -325,25 +359,30 @@ class gacode_io(io):
         if isinstance(path, (str, Path)):
             ipath = Path(path)
             lines = []
+            titles_single: list[str] = []
             if ipath.is_file():
-                titles_single = self.titles_singleInt + self.titles_singleStr + self.titles_singleFloat
+                titles_single.extend(self.titles_singleInt)
+                titles_single.extend(self.titles_singleStr)
+                titles_single.extend(self.titles_singleFloat)
                 with open(ipath, 'r') as f:
                     lines = f.readlines()
 
             istartProfs = None
             for i in range(len(lines)):
-                if "# nexp" in lines[i]:
+                if '# nexp' in lines[i]:
                     istartProfs = i
                     break
             header = lines[:istartProfs]
-            if header[-1].strip() == '#':
+            while len(header) > 0 and not header[-1].strip():
                 header = header[:-1]
             attrs['header'] = ''.join(header).strip()
 
-            singleLine, title, var = None, None, None
+            singleLine = False
+            title = ''
+            var: list[list[int | float]] = []
             found = False
-            singles = {}
-            profiles = {}
+            singles: dict[str, NDArray] = {}
+            profiles: dict[str, NDArray] = {}
             for i in range(len(lines)):
 
                 if lines[i].startswith('#') and not lines[i + 1].startswith('#'):
@@ -376,10 +415,7 @@ class gacode_io(io):
                         else:
                             singles[title] = np.array(var0, dtype=str)
                     else:
-                        varT = [
-                            float(j) if (j[-4].upper() == "E" or "." in j) else 0.0
-                            for j in var0[1:]
-                        ]
+                        varT = [float(j) if (j[-4].upper() == "E" or "." in j) else 0.0 for j in var0[1:]]
                         var.append(varT)
 
             # last
@@ -393,14 +429,14 @@ class gacode_io(io):
             ncoord = 'n'
             rcoord = 'rho' if 'rho' in profiles else 'polflux'
             scoord = 'name' if 'name' in singles else 'z'
-            coords[ncoord] = [0]
+            coords[ncoord] = np.atleast_1d([0])
             if rcoord in profiles:
                 coords[rcoord] = profiles.pop(rcoord)
             if scoord in singles:
                 coords[scoord] = singles.pop(scoord)
             for key, val in profiles.items():
                 if key in ['rho', 'polflux', 'rmin']:
-                    coords[key] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
+                    data_vars[key] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
                 elif key in ['ni', 'ti', 'vtor', 'vpol']:
                     data_vars[key] = ([ncoord, rcoord, scoord], np.expand_dims(val, axis=0))
                 elif key in ['w0']:
@@ -409,58 +445,62 @@ class gacode_io(io):
                     data_vars[key] = ([ncoord, rcoord], np.expand_dims(val, axis=0))
             for key, val in singles.items():
                 if key in ['name', 'z', 'mass', 'type']:
-                    coords[key] = ([ncoord, scoord], np.expand_dims(val, axis=0))
-                elif key in ['header']:
-                    attrs[key] = val
+                    data_vars[key] = ([ncoord, scoord], np.expand_dims(val, axis=0))
+                #elif key in ['header']:
+                #    attrs[key] = val
                 else:
                     data_vars[key] = ([ncoord], val)
 
         return xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
 
 
-    def _write_gacode_file(self, path, data, overwrite=False):
-
-        if isinstance(data, xr.DataTree):
-            data = data.to_dataset().sel(n=0, drop=True) if not data.is_empty else None
+    def _write_gacode_file(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        item: int = 0,
+        overwrite: bool = False
+    ) -> None:
 
         if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
+            wdata = data.sel(n=item, drop=True)
             opath = Path(path)
             processed_titles = []
-            header = data.attrs.get('header', '').split('\n')
+            header = wdata.attrs.get('header', '').split('\n')
             lines = [f'{line:<70}\n' for line in header]
             lines += ['#\n']
             processed_titles.append('header')
             for title in self.titles_singleInt:
                 newlines = []
-                if title in data:
+                if title in wdata:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(f'{data[title]:d}\n')
+                    newlines.append(f'{wdata[title]:d}\n')
                     processed_titles.append(title)
                 lines += newlines
             for title in self.titles_singleStr:
                 newlines = []
-                if title in data:
+                if title in wdata:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(' '.join([f'{val}' for val in data[title].to_numpy().flatten().tolist()]) + '\n')
+                    newlines.append(' '.join([f'{val}' for val in wdata[title].values]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
             for title in self.titles_singleFloat:
                 newlines = []
-                if title in data:
+                if title in wdata:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(' '.join([f'{val:14.7E}' for val in data[title].to_numpy().flatten().tolist()]) + '\n')
+                    newlines.append(' '.join([f'{val:14.7E}' for val in wdata[title].values]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
-            for title in list(data.coords) + list(data.data_vars):
+            for title in list(wdata.coords) + list(wdata.data_vars):
                 newlines = []
                 if title not in processed_titles:
                     newtitle = title
@@ -469,9 +509,12 @@ class gacode_io(io):
                     else:
                         newtitle += f' | -'
                     newlines.append(f'# {newtitle}\n')
-                    rcoord = [f'{dim}' for dim in data[title].dims if dim in ['rho', 'polflux', 'rmin']]
-                    for ii in range(len(data[rcoord[0]])):
-                        newlines.append(' '.join([f'{ii+1:3d}'] + [f'{val:14.7E}' for val in data[title].isel(**{f'{rcoord[0]}': ii}).to_numpy().flatten().tolist()]) + '\n')
+                    rcoord = [f'{dim}' for dim in wdata[title].dims if dim in ['rho', 'polflux', 'rmin']]
+                    if len(rcoord) > 0:
+                        for ii in range(len(wdata[rcoord[0]])):
+                            nstr = [f'{ii + 1:3d}']
+                            nstr.extend([f'{val:14.7E}' for val in wdata[title].isel({f'{rcoord[0]}': ii}).values])
+                            newlines.append(' '.join(nstr) + '\n')
                     processed_titles.append(title)
                 lines += newlines
 
@@ -485,21 +528,35 @@ class gacode_io(io):
 
 
     @classmethod
-    def from_file(cls, path=None, input=None, output=None):
+    def from_file(
+        cls,
+        path: str | Path | None = None,
+        input: str | Path | None = None,
+        output: str | Path | None = None,
+    ) -> Self:
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
     # Assumed that the self creation method transfers output to input
     @classmethod
-    def from_gacode(cls, obj, side='output'):
+    def from_gacode(
+        cls,
+        obj: io,
+        side: str = 'output',
+    ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            newobj.input = obj.input if side == 'input' else obj.output
+            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
         return newobj
 
 
     @classmethod
-    def from_torax(cls, obj, side='output', window=None):
+    def from_torax(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[int | float] | None = None,
+    ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
             data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
@@ -509,18 +566,18 @@ class gacode_io(io):
                 coords = {}
                 data_vars = {}
                 attrs = {}
-                name = []
-                coords['n'] = [0]
+                name: list[str] = []
+                coords['n'] = np.array([0], dtype=int)
                 if 'rho_norm' in data.coords:
                     coords['rho'] = data.coords['rho_norm'].to_numpy().flatten()
-                    data_vars['nexp'] = (['n'], [len(coords['rho'])])
+                    data_vars['nexp'] = (['n'], np.array([len(coords['rho'])], dtype=int))
                 if 'psi' in data:
-                    coords['polflux'] = (['n', 'rho'], np.expand_dims(data['psi'].to_numpy().flatten(), axis=0))
+                    data_vars['polflux'] = (['n', 'rho'], np.expand_dims(data['psi'].to_numpy().flatten(), axis=0))
                 if 'r_mid' in data:
-                    coords['rmin'] = (['n', 'rho'], np.expand_dims(data['r_mid'].to_numpy().flatten(), axis=0))
-                data_vars['shot'] = (['n'], [0])
-                data_vars['masse'] = (['n'], [5.4488748e-04])
-                data_vars['ze'] = (['n'], [-1.0])
+                    data_vars['rmin'] = (['n', 'rho'], np.expand_dims(data['r_mid'].to_numpy().flatten(), axis=0))
+                data_vars['shot'] = (['n'], np.atleast_1d([0]))
+                data_vars['masse'] = (['n'], np.atleast_1d([5.4488748e-04]))
+                data_vars['ze'] = (['n'], np.atleast_1d([-1.0]))
                 if 'Phi_b' in data:
                     data_vars['torfluxa'] = (['n'], data['Phi_b'].to_numpy().flatten())
                 #if 'R_major' in data:
@@ -599,9 +656,9 @@ class gacode_io(io):
                         masses.append(impa)
                         zs.append(impz)
                         zeff += np.expand_dims(ni[:, zz+ii], axis=-1) * (impz ** 2.0) / ne
-                    coords['name'] = names
+                    coords['name'] = np.array(names)
                     data_vars['ni'] = (['n', 'rho', 'name'], np.expand_dims(ni, axis=0))
-                    data_vars['nion'] = (['n'], [len(names)])
+                    data_vars['nion'] = (['n'], np.array([len(names)], dtype=int))
                     data_vars['type'] = (['n', 'name'], np.expand_dims(types, axis=0))
                     data_vars['mass'] = (['n', 'name'], np.expand_dims(masses, axis=0))
                     data_vars['z'] = (['n', 'name'], np.expand_dims(zs, axis=0))
@@ -718,27 +775,32 @@ class gacode_io(io):
 
 
     @classmethod
-    def from_imas(cls, obj, side='output', window=None):
+    def from_imas(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[int | float] | None = None,
+    ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data: xr.Dataset = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
             cocos = define_cocos_converter(17, 2)  # Assumed IMAS=17 -> GACODE=2
             time_index = -1
-            time = np.array([data.get('time_cp').to_numpy().flatten()[time_index]])  #TODO: Use window argument
+            time = np.array([data.get('time_cp', xr.DataArray()).to_numpy().flatten()[time_index]])  #TODO: Use window argument
             ikwargs = {'fill_value': 'extrapolate'}
             coords = {}
             data_vars = {}
             attrs = {}
             if 'rho_cp' in data.coords:
-                coords['n'] = [0]
+                coords['n'] = np.array([0], dtype=int)
                 coords['rho'] = data.coords['rho_cp'].to_numpy().flatten()
-                data_vars['nexp'] = (['n'], [len(coords['rho'])])
-                data_vars['shot'] = (['n'], [0])
-                data_vars['masse'] = (['n'], [5.4488748e-04])
-                data_vars['ze'] = (['n'], [-1.0])
+                data_vars['nexp'] = (['n'], np.array([len(coords['rho'])], dtype=int))
+                data_vars['shot'] = (['n'], np.atleast_1d([0]))
+                data_vars['masse'] = (['n'], np.atleast_1d([5.4488748e-04]))
+                data_vars['ze'] = (['n'], np.atleast_1d([-1.0]))
                 if 'ion_cp' in data.coords:
                     coords['name'] = data.coords['ion_cp'].to_numpy().flatten()
-                    data_vars['nion'] = (['n'], [len(coords['name'])])
+                    data_vars['nion'] = (['n'], np.array([len(coords['name'])], dtype=int))
                     ni = None
                     zi = None
                     tag = 'core_profiles&profiles_1d[]&ion[]&density_thermal'
@@ -802,11 +864,10 @@ class gacode_io(io):
                     torflux = data[tag].interp(time_cp=time, rho_cp=np.array([1.0]), kwargs=ikwargs) ** 2.0 / (np.pi * data['core_profiles&vacuum_toroidal_field&b0'].interp(time_cp=time))
                     data_vars['torfluxa'] = (['n'], torflux.to_numpy().flatten())
             if 'rho_eq' in data.coords or 'equilibrium&time_slice[]&profiles_1d[]&rho_tor_norm' in data:
-                eqdsk_data = obj.to_eqdsk(time_index=time_index, side=side)
-                rhovec = data.get('rho_eq')
-                if rhovec is None:
-                    rhovec = data['equilibrium&time_slice[]&profiles_1d[]&rho_tor_norm'].interp(time_eq=time, kwargs=ikwargs)
-                rhovec = rhovec.to_numpy().flatten()
+                eqdsk_data = obj.to_eqdsk(time_index=time_index, side=side) if hasattr(obj, 'to_eqdsk') else {}
+                rhovec = data.get('rho_eq', xr.DataArray()).to_numpy().flatten()
+                if rhovec.size == 0:
+                    rhovec = data['equilibrium&time_slice[]&profiles_1d[]&rho_tor_norm'].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten()
                 tag = 'equilibrium&time_slice[]&profiles_1d&psi'
                 if tag in data:
                     ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'psi': (['rho_int'], data[tag].interp(time_eq=time, kwargs=ikwargs).to_numpy().flatten())})
@@ -966,22 +1027,29 @@ class gacode_io(io):
 
 
     @classmethod
-    def from_astra(cls, obj, side='output', window=None):
+    def from_astra(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[int | float] | None = None,
+    ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
             data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            coords = {}
+            data_vars = {}
+            attrs = {}
             if 'xrho' in data.coords:
                 data = data.isel(time=-1)
                 zeros = np.zeros_like(data.coords['xrho'].to_numpy().flatten())
-                coords = {}
-                data_vars = {}
-                attrs = {}
-                name = []
-                coords['n'] = [0]
+                #name = []
+                coords['n'] = np.array([0], dtype=int)
                 coords['rho'] = data.coords['xrho'].to_numpy().flatten()
-                data_vars['nexp'] = (['n'], [len(coords['rho'])])
+                data_vars['nexp'] = (['n'], np.array([len(coords['rho'])], dtype=int))
                 if 'te' in data:
                     data_vars['te'] = (['n', 'rho'], np.expand_dims(data['te'].to_numpy().flatten(), axis=0))
                 if 'ti' in data:
                     data_vars['ti'] = (['n', 'rho'], np.expand_dims(data['ti'].to_numpy().flatten(), axis=0))
+            attrs['header'] = newobj.make_file_header()
+            newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
