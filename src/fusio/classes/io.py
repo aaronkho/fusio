@@ -2,7 +2,7 @@ import copy
 import logging
 import importlib
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Self
 from collections.abc import Mapping, Sequence, Iterable
 import xarray as xr
 
@@ -102,7 +102,7 @@ class io():
 
     # These functions always assume data is placed on input side of target format
 
-    def to(self, fmt: str) -> io:
+    def to(self, fmt: str) -> Self:
         try:
             mod = importlib.import_module(f'fusio.classes.{fmt}')
             cls = getattr(mod, f'{fmt}_io')
@@ -111,7 +111,7 @@ class io():
             raise NotImplementedError(f'Direct conversion to {fmt} not implemented.')
 
     @classmethod
-    def _from(cls, obj: 'io', side: str = 'output') -> 'io' | None:
+    def _from(cls, obj: Self, side: str = 'output') -> Self | None:
         newobj = None
         if isinstance(obj, io):
             if hasattr(cls, f'from_{obj.format}'):
@@ -136,23 +136,23 @@ class io():
             logger.warning(f'Invalid path argument given to dump function! Aborting dump...')
 
     @classmethod
-    def load(cls, path: str | Path) -> 'io':
+    def load(cls, path: str | Path) -> Self:
         if isinstance(path, (str, Path)):
             load_path = Path(path)
             if load_path.exists():
                 tree = xr.open_datatree(path)
                 root = tree.get('root')
                 if isinstance(root, xr.DataTree):
-                    fmt = root.to_dataset().attrs.get('class', 'io')
+                    fmt = root.to_dataset().attrs.get('class', 'unknown')
                     try:
                         mod = importlib.import_module(f'fusio.classes.{fmt}')
-                        newcls = getattr(mod, f'{fmt}_io')
-                        newobj = newcls()
-                        newobj.input = tree.get('input')
-                        newobj.output = tree.get('output')
-                        return newobj
                     except:
                         raise NotImplementedError(f'File contains data for {fmt} but this format is not yet implemented.')
+                    newcls = getattr(mod, f'{fmt}_io')
+                    newobj = newcls()
+                    newobj.input = tree.get('input')
+                    newobj.output = tree.get('output')
+                    return newobj
                 else:
                     logger.warning('Requested load path, {load_path}, contains data which is incompatible with fusio! Returning empty base class...')
             else:
