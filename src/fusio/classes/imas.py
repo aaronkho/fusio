@@ -1,8 +1,12 @@
-import h5py
-from pathlib import Path
 import logging
+from pathlib import Path
+from .io import Any, Final, Self
+from collections.abc import MutableMapping, Mapping, Sequence, Iterable
+from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
+
+import h5py  # type: ignore[import-untyped]
 from .io import io
 from ..utils.eqdsk_tools import write_eqdsk
 
@@ -12,15 +16,19 @@ logger = logging.getLogger('fusio')
 class imas_io(io):
 
 
-    empty_int = -999999999
-    empty_float = -9.0e40
-    empty_complex = -9.0e40-9.0e40j
-    int_types = (int, np.int8, np.int16, np.int32, np.int64)
-    float_types = (float, np.float16, np.float32, np.float64, np.float128)
-    complex_types = (complex, np.complex64, np.complex128, np.complex256)
+    empty_int: Final[int] = -999999999
+    empty_float: Final[float] = -9.0e40
+    empty_complex: Final[complex] = -9.0e40-9.0e40j
+    int_types: Final[Sequence[Any]] = (int, np.int8, np.int16, np.int32, np.int64)
+    float_types: Final[Sequence[Any]] = (float, np.float16, np.float32, np.float64, np.float128)
+    complex_types: Final[Sequence[Any]] = (complex, np.complex64, np.complex128, np.complex256)
 
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         ipath = None
         opath = None
@@ -41,21 +49,33 @@ class imas_io(io):
         self.autoformat()
 
 
-    def read(self, path, side='output'):
+    def read(
+        self,
+        path: str | Path,
+        side: str = 'output',
+    ) -> None:
         if side == 'input':
             self.input = self._read_imas_directory(path)
         else:
             self.output = self._read_imas_directory(path)
 
 
-    def write(self, path, side='input', overwrite=False):
+    def write(
+        self,
+        path: str | Path,
+        side: str = 'input',
+        overwrite: bool = False,
+    ) -> None:
         if side == 'input':
-            self._write_imas_file(path, self.input, overwrite=overwrite)
+            self._write_imas_file(path, self.input.to_dataset(), overwrite=overwrite)
         else:
-            self._write_imas_file(path, self.output, overwrite=overwrite)
+            self._write_imas_file(path, self.output.to_dataset(), overwrite=overwrite)
 
 
-    def _read_imas_directory(self, path):
+    def _read_imas_directory(
+        self,
+        path: str | Path,
+    ) -> xr.Dataset:
 
         dsvec = []
 
@@ -71,17 +91,17 @@ class imas_io(io):
                     data = {k: v[()] for k, v in core_profiles_data['core_profiles'].items()}
                     cp_coords = {}
                     cp_data_vars = {}
-                    cp_attrs = {}
+                    cp_attrs: MutableMapping[str, Any] = {}
                     if 'time' in data:
                         cp_coords['time_cp'] = np.atleast_1d(data.pop('time')).flatten()
                     for key in list(data.keys()):
                         if key.endswith('&AOS_SHAPE'):
                             val = data.pop(key)
                             if key == 'profiles_1d[]&ion[]&AOS_SHAPE' and 'profiles_1d[]&ion[]&label' in data:
-                                cp_coords['ion_cp'] = [label.decode('utf-8') for label in data['profiles_1d[]&ion[]&label'][0]]
+                                cp_coords['ion_cp'] = np.atleast_1d([label.decode('utf-8') for label in data['profiles_1d[]&ion[]&label'][0]]).flatten()
                                 data.pop('profiles_1d[]&ion[]&label')
                             if key == 'profiles_1d[]&neutral[]&AOS_SHAPE' and 'profiles_1d[]&neutral[]&label' in data:
-                                cp_coords['neut_cp'] = [label.decode('utf-8') for label in data['profiles_1d[]&neutral[]&label'][0]]
+                                cp_coords['neut_cp'] = np.atleast_1d([label.decode('utf-8') for label in data['profiles_1d[]&neutral[]&label'][0]]).flatten()
                                 data.pop('profiles_1d[]&neutral[]&label')
                         elif 'state[]' in key:
                             data.pop(key)
@@ -135,7 +155,7 @@ class imas_io(io):
                     data = {k: v[()] for k, v in core_sources_data['core_sources'].items()}
                     cs_coords = {}
                     cs_data_vars = {}
-                    cs_attrs = {}
+                    cs_attrs: MutableMapping[str, Any] = {}
                     srctags = {}
                     if 'time' in data:
                         cs_coords['time_cs'] = np.atleast_1d(data.pop('time')).flatten()
@@ -147,10 +167,10 @@ class imas_io(io):
                                 data.pop('source[]&identifier&index')
                                 data.pop('source[]&identifier&description')
                             if key == 'source[]&profiles_1d[]&ion[]&AOS_SHAPE' and 'source[]&profiles_1d[]&ion[]&label' in data:
-                                cp_coords['ion_cs'] = [label.decode('utf-8') for label in data['source[]&profiles_1d[]&ion[]&label'][0, 0, :]]
+                                cp_coords['ion_cs'] = np.atleast_1d([label.decode('utf-8') for label in data['source[]&profiles_1d[]&ion[]&label'][0, 0, :]]).flatten()
                                 data.pop('source[]&profiles_1d[]&ion[]&label')
                             if key == 'source[]&profiles_1d[]&neutral[]&AOS_SHAPE' and 'source[]&profiles_1d[]&neutral[]&label' in data:
-                                cp_coords['neut_cs'] = [label.decode('utf-8') for label in data['source[]&profiles_1d[]&neutral[]&label'][0]]
+                                cp_coords['neut_cs'] = np.atleast_1d([label.decode('utf-8') for label in data['source[]&profiles_1d[]&neutral[]&label'][0]]).flatten()
                                 data.pop('source[]&profiles_1d[]&neutral[]&label')
                         elif 'state[]' in key:
                             data.pop(key)
@@ -210,7 +230,7 @@ class imas_io(io):
                     data = {k: v[()] for k, v in equilibrium_data['equilibrium'].items()}
                     eq_coords = {}
                     eq_data_vars = {}
-                    eq_attrs = {}
+                    eq_attrs: MutableMapping[str, Any] = {}
                     if 'time' in data:
                         eq_coords['time_eq'] = np.atleast_1d(data.pop('time')).flatten()
                     rect2d_idx = None
@@ -234,10 +254,10 @@ class imas_io(io):
                             eq_coords['rho_eq'] = data.pop('time_slice[]&profiles_1d&rho_tor_norm')[0].flatten()
                         elif key == 'time_slice[]&boundary&outline&r':
                             if 'i_bdry_eq' not in eq_coords:
-                                eq_coords['i_bdry_eq'] = [j for j in range(len(data['time_slice[]&boundary&outline&r'][0]))]
+                                eq_coords['i_bdry_eq'] = np.array([j for j in range(len(data['time_slice[]&boundary&outline&r'][0]))], dtype=int).flatten()
                         elif key == 'time_slice[]&boundary&outline&z':
                             if 'i_bdry_eq' not in eq_coords:
-                                eq_coords['i_bdry_eq'] = [j for j in range(len(data['time_slice[]&boundary&outline&z'][0]))]
+                                eq_coords['i_bdry_eq'] = np.array([j for j in range(len(data['time_slice[]&boundary&outline&z'][0]))], dtype=int).flatten()
                     if 'time_eq' in eq_coords and ('psin_eq' in eq_coords or 'rho_eq' in eq_coords):
                         timevec = eq_coords['time_eq']
                         for key, val in data.items():
@@ -287,7 +307,7 @@ class imas_io(io):
                     data = {k: v[()] for k, v in summary_data['summary'].items()}
                     sm_coords = {}
                     sm_data_vars = {}
-                    sm_attrs = {}
+                    sm_attrs: MutableMapping[str, Any] = {}
                     hcdtags = []
                     if 'time' in data:
                         sm_coords['time_sm'] = np.atleast_1d(data.pop('time')).flatten()
@@ -297,7 +317,7 @@ class imas_io(io):
                             components = key.split('&')
                             if components[0] == 'heating_current_drive' and components[1].endswith('[]'):
                                 hcdtag = components[1][:-2]
-                                sm_coords[f'i_{hcdtag}_sm'] = [j for j in range(val[0])]
+                                sm_coords[f'i_{hcdtag}_sm'] = np.array([j for j in range(val[0])], dtype=int).flatten()
                                 hcdtags.append(hcdtag)
                     if 'time_sm' in sm_coords:
                         timevec = sm_coords['time_sm']
@@ -336,12 +356,16 @@ class imas_io(io):
         return ds
 
 
-    def _write_imas_file(self, data, path, overwrite=False):
-
-        if isinstance(data, xr.DataTree):
-            data = data.to_dataset().sel(n=0, drop=True) if not data.is_empty else None
+    def _write_imas_file(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        window: ArrayLike | None = None,
+        overwrite: bool = False,
+    ) -> None:
 
         if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
+            wdata = data.sel(time=-1)
             opath = Path(path)
             logger.info(f'Saved {self.format} data into {opath.resolve()}')
             #else:
@@ -350,8 +374,13 @@ class imas_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
-    def to_eqdsk(self, time_index=-1, side='output', transpose=False):
-        eqdata = {}
+    def to_eqdsk(
+        self,
+        time_index: int = -1,
+        side: str = 'output',
+        transpose: bool = False,
+    ) -> MutableMapping[str, Any]:
+        eqdata: MutableMapping[str, Any] = {}
         data = self.input.to_dataset().isel(time_eq=time_index) if side == 'input' else self.output.to_dataset().isel(time_eq=time_index)
         psinvec = data['psin_eq'].to_numpy().flatten() if 'psin_eq' in data else None
         conversion = None
@@ -364,7 +393,7 @@ class imas_io(io):
             eqdata['nr'] = rvec.size
             eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
             eqdata['rleft'] = float(np.nanmin(rvec))
-            psinvec = np.linspace(0.0, 1.0, len(rvec))
+            psinvec = np.linspace(0.0, 1.0, len(rvec)).flatten()
         tag = 'z_eq'
         if tag in data:
             zvec = data[tag].to_numpy().flatten()
@@ -373,68 +402,68 @@ class imas_io(io):
             eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
         tag = 'equilibrium&vacuum_toroidal_field&r0'
         if tag in data:
-            eqdata['rcentr'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['rcentr'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium&vacuum_toroidal_field&b0'
         if tag in data:
-            eqdata['bcentr'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['bcentr'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium&time_slice[]&global_quantities&magnetic_axis&r'
         if tag in data:
-            eqdata['rmagx'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['rmagx'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium&time_slice[]&global_quantities&magnetic_axis&z'
         if tag in data:
-            eqdata['zmagx'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['zmagx'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium&time_slice[]&global_quantities&psi_axis'
         if tag in data:
-            eqdata['simagx'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['simagx'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium&time_slice[]&global_quantities&psi_boundary'
         if tag in data:
-            eqdata['sibdry'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['sibdry'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium&time_slice[]&global_quantities&ip'
         if tag in data:
-            eqdata['cpasma'] = float(data.get(tag).to_numpy().flatten())
+            eqdata['cpasma'] = float(data[tag].to_numpy().flatten())
         tag = 'equilibrium&time_slice[]&profiles_1d&f'
         if tag in data:
             if conversion is None:
-                eqdata['fpol'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+                eqdata['fpol'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
             else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data.get(tag).to_numpy().flatten())})
-                eqdata['fpol'] = ndata.drop_duplicates('psin_interp').get(tag).interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                eqdata['fpol'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
         tag = 'equilibrium&time_slice[]&profiles_1d&pressure'
         if tag in data:
             if conversion is None:
-                eqdata['pres'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+                eqdata['pres'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
             else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data.get(tag).to_numpy().flatten())})
-                eqdata['pres'] = ndata.drop_duplicates('psin_interp').get(tag).interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                eqdata['pres'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
         tag = 'equilibrium&time_slice[]&profiles_1d&f_df_dpsi'
         if tag in data:
             if conversion is None:
-                eqdata['ffprime'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+                eqdata['ffprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
             else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data.get(tag).to_numpy().flatten())})
-                eqdata['ffprime'] = ndata.drop_duplicates('psin_interp').get(tag).interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                eqdata['ffprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
         tag = 'equilibrium&time_slice[]&profiles_1d&dpressure_dpsi'
         if tag in data:
             if conversion is None:
-                eqdata['pprime'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+                eqdata['pprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
             else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data.get(tag).to_numpy().flatten())})
-                eqdata['pprime'] = ndata.drop_duplicates('psin_interp').get(tag).interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                eqdata['pprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
         tag = 'equilibrium&time_slice[]&profiles_2d&psi'
         if tag in data:
-            eqdata['psi'] = data.get(tag).to_numpy() if transpose else data.get(tag).to_numpy().T
+            eqdata['psi'] = data[tag].to_numpy() if transpose else data[tag].to_numpy().T
         tag = 'equilibrium&time_slice[]&profiles_1d&q'
         if tag in data:
             if conversion is None:
-                eqdata['qpsi'] = data.drop_duplicates('psin_eq').get(tag).interp(psin_eq=psinvec).to_numpy().flatten()
+                eqdata['qpsi'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
             else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data.get(tag).to_numpy().flatten())})
-                eqdata['qpsi'] = ndata.drop_duplicates('psin_interp').get(tag).interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                eqdata['qpsi'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
         rtag = 'equilibrium&time_slice[]&boundary&outline&r'
         ztag = 'equilibrium&time_slice[]&boundary&outline&z'
         if rtag in data and ztag in data:
-            rdata = data.get(rtag).dropna('i_bdry_eq').to_numpy().flatten()
-            zdata = data.get(ztag).dropna('i_bdry_eq').to_numpy().flatten()
+            rdata = data[rtag].dropna('i_bdry_eq').to_numpy().flatten()
+            zdata = data[ztag].dropna('i_bdry_eq').to_numpy().flatten()
             if len(rdata) == len(zdata):
                 eqdata['nbdry'] = len(rdata)
                 eqdata['rbdry'] = rdata
@@ -442,7 +471,13 @@ class imas_io(io):
         return eqdata
 
 
-    def generate_eqdsk_file(self, path, time_index=-1, side='output', transpose=False):
+    def generate_eqdsk_file(
+        self,
+        path: str | Path,
+        time_index: int = -1,
+        side: str = 'output',
+        transpose: bool = False,
+    ) -> None:
         eqpath = None
         if isinstance(path, (str, Path)):
             eqpath = Path(path)
@@ -452,7 +487,12 @@ class imas_io(io):
         logger.info('Successfully generated g-eqdsk file, {path}')
 
 
-    def generate_all_eqdsk_files(self, basepath, side='output', transpose=False):
+    def generate_all_eqdsk_files(
+        self,
+        basepath: str | Path,
+        side: str = 'output',
+        transpose: bool = False,
+    ) -> None:
         path = None
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
@@ -469,15 +509,24 @@ class imas_io(io):
 
 
     @classmethod
-    def from_file(cls, path=None, input=None, output=None):
+    def from_file(
+        cls,
+        path: str | Path | None = None,
+        input: str | Path | None = None,
+        output: str | Path | None = None,
+    ) -> Self:
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
     # Assumed that the self creation method transfers output to input
     @classmethod
-    def from_gacode(cls, obj, side='output'):
+    def from_gacode(
+        cls,
+        obj: io,
+        side: str = 'output',
+    ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            newobj.input = obj.input if side == 'input' else obj.output
+            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
         return newobj
 
