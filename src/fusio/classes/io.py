@@ -1,8 +1,21 @@
+import importlib
 import copy
 import logging
-import importlib
 from pathlib import Path
-from typing import Any, Final, Self
+try:
+    from typing import Any
+except ImportError:
+    from typing_extensions import Any
+Final: Any
+try:
+    from typing import Final
+except ImportError:
+    from typing_extensions import Final
+Self: Any
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
 from collections.abc import Mapping, Sequence, Iterable
 import xarray as xr
 

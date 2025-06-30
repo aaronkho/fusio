@@ -25,6 +25,7 @@ classifiers = [
 dynamic = ["version"]
 
 dependencies = [
+  "typing-extensions",
   "numpy",
   "scipy",
   "xarray",

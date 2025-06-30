@@ -1,11 +1,12 @@
 import logging
 from pathlib import Path
-from typing import Any, Final, Self
+from .io import Any, Final, Self
 from collections.abc import MutableMapping, Mapping, Sequence, Iterable
 from numpy.typing import ArrayLike, NDArray
-import datetime
 import numpy as np
 import xarray as xr
+
+import datetime
 from .io import io
 from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (
