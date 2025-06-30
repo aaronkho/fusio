@@ -27,6 +27,7 @@ dynamic = ["version"]
 dependencies = [
   "numpy",
   "scipy",
+  "xarray",
   "h5py",
   "contourpy",
   "opencv-python",
