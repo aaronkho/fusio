@@ -1,9 +1,13 @@
-import copy
-import json
-from pathlib import Path
 import logging
+from pathlib import Path
+from .io import Any, Final, Self
+from collections.abc import MutableMapping, Mapping, Sequence, Iterable
+from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
+
+import copy
+import json
 from .io import io
 from ..utils.json_tools import serialize, deserialize
 from ..utils.plasma_tools import define_ion_species
@@ -13,7 +17,7 @@ logger = logging.getLogger('fusio')
 
 class torax_io(io):
 
-    basevars = {
+    basevars: Final[Mapping[str, Sequence[str]]] = {
         'plasma_composition': [
             'main_ion',
             'impurity',
@@ -112,13 +116,13 @@ class torax_io(io):
             'tolerance',
         ],
     }
-    restartvars = [
+    restartvars: Final[Sequence[str]] = [
         'filename',
         'time',
         'do_restart',
         'stitch',
     ]
-    specvars = {
+    specvars: Final[Mapping[str, Any]] = {
         'geometry': {
             'circular': [
                 'R_major',
@@ -363,7 +367,7 @@ class torax_io(io):
             ],
         },
     }
-    allowed_radiation_species = [
+    allowed_radiation_species: Final[Sequence[str]] = [
         'H',
         'D',
         'T',
@@ -384,7 +388,11 @@ class torax_io(io):
     ]
 
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         ipath = None
         opath = None
@@ -405,9 +413,12 @@ class torax_io(io):
         self.autoformat()
 
 
-    def _unflatten(self, datadict):
-        odict = {}
-        udict = {}
+    def _unflatten(
+        self,
+        datadict: MutableMapping[str, Any],
+    ) -> MutableMapping[str, Any]:
+        odict: MutableMapping[str, Any] = {}
+        udict: MutableMapping[str, Any] = {}
         for key in datadict:
             klist = key.split('.')
             if len(klist) > 1:
@@ -428,7 +439,11 @@ class torax_io(io):
         return odict
 
 
-    def read(self, path, side='output'):
+    def read(
+        self,
+        path: str | Path,
+        side: str = 'output',
+    ) -> None:
         if side == 'input':
             self.input = self._read_torax_file(path)
         else:
@@ -436,11 +451,16 @@ class torax_io(io):
         #logger.warning(f'{self.format} reading function not defined yet...')
 
 
-    def write(self, path, side='input', overwrite=False):
+    def write(
+        self,
+        path: str | Path,
+        side: str = 'input',
+        overwrite: bool = False,
+    ) -> None:
         if side == 'input':
-            self._write_torax_file(path, self.input, overwrite=overwrite)
+            self._write_torax_file(path, self.input.to_dataset(), overwrite=overwrite)
         else:
-            self._write_torax_file(path, self.output, overwrite=overwrite)
+            self._write_torax_file(path, self.output.to_dataset(), overwrite=overwrite)
         #if not self.empty:
         #    odict = self._uncompress(self.input)
         #    with open(opath, 'w') as jf:
@@ -450,13 +470,17 @@ class torax_io(io):
         #    logger.error(f'Attempting to write empty {self.format} class instance... Failed!')
 
 
-    def _read_torax_file(self, path):
+    def _read_torax_file(
+        self,
+        path: str | Path,
+    ) -> xr.Dataset:
         ds = xr.Dataset()
         if isinstance(path, (str, Path)):
             ipath = Path(path)
             if ipath.exists():
                 dt = xr.open_datatree(ipath)
-                ds = xr.combine_by_coords([dt[key].to_dataset() for key in dt.groups], compat="override")
+                ds_temp = xr.combine_by_coords([dt[key].to_dataset() for key in dt.groups], compat="override")
+                ds = ds_temp if isinstance(ds_temp, xr.Dataset) else ds_temp.to_dataset()
                 newattrs = {}
                 for attr in ds.attrs:
                     if isinstance(ds.attrs[attr], str):
@@ -472,7 +496,12 @@ class torax_io(io):
         return ds
 
 
-    def _write_torax_file(self, path, data, overwrite=False):
+    def _write_torax_file(
+        self,
+        path: str | Path,
+        data: xr.Dataset,
+        overwrite: bool = False
+    ) -> None:
         if isinstance(path, (str, Path)):
             opath = Path(path)
             if overwrite or not opath.exists():
@@ -492,44 +521,57 @@ class torax_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
-    def add_hydrogenic_minority_species(self, sname, sfrac):
-        if sname in ['H', 'D', 'T'] and sname not in self.input.get('main_ion', []):
+    def add_hydrogenic_minority_species(
+        self,
+        sname: str,
+        sfrac: float,
+    ) -> None:
+        if sname in ['H', 'D', 'T'] and sname not in self.input.to_dataset().get('main_ion', xr.DataArray()):
             data = self.input.to_dataset()
-            coords = {'main_ion': [sname], 'time': np.atleast_1d(data.get('time').to_numpy())}
+            coords = {'main_ion': np.array([sname]), 'time': np.atleast_1d(data.get('time', xr.DataArray()).to_numpy())}
             data_vars = {}
             if 'plasma_composition.main_ion' in data:
-                total = np.atleast_1d(data.get('plasma_composition.main_ion').sum('main_ion').to_numpy())
+                total = np.atleast_1d(data['plasma_composition.main_ion'].sum('main_ion').to_numpy())
                 data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(sfrac / (total - sfrac), axis=0))
             newdata = xr.Dataset(coords=coords, data_vars=data_vars)
             self.input = xr.concat([data, newdata], dim='main_ion', data_vars='minimal', coords='different', join='outer')
-            if 'plasma_composition.main_ion' in self.input:
-                val = self.input['plasma_composition.main_ion']
+            if 'plasma_composition.main_ion' in self.input.to_dataset():
+                val = self.input.to_dataset()['plasma_composition.main_ion']
                 newvars = {}
                 newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], (val / val.sum('main_ion')).to_numpy())
                 self.update_input_data_vars(newvars)
 
 
-    def set_constant_flat_effective_charge(self, zeff):
-        shape = (self.input.get('time').size, self.input.get('rho').size)
+    def set_constant_flat_effective_charge(
+        self,
+        zeff: float,
+    ) -> None:
+        data = self.input.to_dataset()
+        shape = (data.get('time', xr.DataArray()).size, data.get('rho', xr.DataArray()).size)
         newvars = {}
         newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.full(shape, float(zeff)))
         self.update_input_data_vars(newvars)
 
 
-    def add_geometry(self, geotype, geofiles, geodir=None):
-        newattrs = {}
+    def add_geometry(
+        self,
+        geotype: str,
+        geofiles: str | Mapping[str, str],
+        geodir: str | None = None,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
         #newattrs['geometry.hires_factor'] = 4
         #newattrs['profile_conditions.initial_psi_from_j'] = True
         #newattrs['profile_conditions.initial_j_is_total_current'] = True
-        newattrs['geometry.Ip_from_parameters'] = bool(self.input.attrs.get('profile_conditions.Ip_tot', False))
+        newattrs['geometry.Ip_from_parameters'] = bool(self.input.to_dataset().attrs.get('profile_conditions.Ip_tot', False))
         newattrs['geometry.geometry_type'] = f'{geotype}'
         if geodir is not None:
             newattrs['geometry.geometry_directory'] = f'{geodir}'
         if isinstance(geofiles, dict):
             geoconfig = {}
             for time, geofile in geofiles.items():
-                geotime = {}
+                geotime: MutableMapping[str, Any] = {}
                 geotime['geometry_file'] = f'{geofile}'
                 if geotype == 'eqdsk':
                     geotime['n_surfaces'] = 251
@@ -544,15 +586,21 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_pedestal_by_pressure(self, pped, nped, tpedratio, wrho):
-        time = self.input.get('time').to_numpy().flatten()
+    def add_pedestal_by_pressure(
+        self,
+        pped: float,
+        nped: float,
+        tpedratio: float,
+        wrho: float,
+    ) -> None:
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
         newvars['pedestal.P_ped'] = (['time'], np.zeros_like(time) + pped)
         newvars['pedestal.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
         newvars['pedestal.T_i_T_e_ratio'] = (['time'], np.zeros_like(time) + tpedratio)
         newvars['pedestal.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
         self.update_input_data_vars(newvars)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['pedestal.set_pedestal'] = True
         newattrs['pedestal.model_name'] = 'set_P_ped_n_ped'
         newattrs['pedestal.n_e_ped_is_fGW'] = False
@@ -562,8 +610,13 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_pedestal_by_temperature(self, nped, tped, wrho):
-        time = self.input.get('time').to_numpy().flatten()
+    def add_pedestal_by_temperature(
+        self,
+        nped: float,
+        tped: float,
+        wrho: float,
+    ) -> None:
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         tref = 1.0e3
         newvars = {}
         newvars['pedestal.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
@@ -571,7 +624,7 @@ class torax_io(io):
         newvars['pedestal.T_i_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
         newvars['pedestal.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
         self.update_input_data_vars(newvars)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['pedestal.set_pedestal'] = True
         newattrs['pedestal.model_name'] = 'set_T_ped_n_ped'
         newattrs['pedestal.n_e_ped_is_fGW'] = False
@@ -581,11 +634,17 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_pedestal_exponential_transport(self, chiscale, chidecay, dscale, ddecay):
-        time = self.input.get('time').to_numpy().flatten()
+    def add_pedestal_exponential_transport(
+        self,
+        chiscale: float,
+        chidecay: float,
+        dscale: float,
+        ddecay: float,
+    ) -> None:
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newcoords = {}
         newvars = {}
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         wrho_array = self.input.get('pedestal.rho_norm_ped_top', None)
         if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
             models = self.input.attrs.get('map_combined_models', {})
@@ -615,24 +674,32 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_neoclassical_transport(self):
-        newattrs = {}
+    def add_neoclassical_transport(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['neoclassical.conductivity.model_name'] = 'sauter'
         self.update_input_attrs(newattrs)
         self.add_neoclassical_bootstrap_current()
 
 
-    def add_neoclassical_bootstrap_current(self):
-        newattrs = {}
+    def add_neoclassical_bootstrap_current(
+        self,
+    ) -> None:
+        data = self.input.to_dataset()
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['neoclassical.bootstrap_current.model_name'] = 'sauter'
         newattrs['neoclassical.bootstrap_current.bootstrap_multiplier'] = 1.0
         self.update_input_attrs(newattrs)
-        if 'sources.generic_current.prescribed_values' in self.input and 'profile_conditions.j_bootstrap' in self.input:
-            self.input['sources.generic_current.prescribed_values'] = self.input['sources.generic_current.prescribed_values'] - self.input['profile_conditions.j_bootstrap']
+        if 'sources.generic_current.prescribed_values' in data and 'profile_conditions.j_bootstrap' in data:
+            self.input['sources.generic_current.prescribed_values'] = data['sources.generic_current.prescribed_values'] - data['profile_conditions.j_bootstrap']
 
 
-    def add_combined_transport(self):
-        newattrs = {}
+    def add_combined_transport(
+        self,
+    ) -> None:
+        data = self.input.to_dataset()
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['transport.model_name'] = 'combined'
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
@@ -641,32 +708,39 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
-        newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
+        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
         #newattrs['transport.predict_pedestal'] = (self.input.attrs.get('pedestal.set_pedestal', False))
         #if 'transport.apply_inner_patch' not in self.input.attrs:
         #    newattrs['transport.apply_inner_patch'] = {0.0: False}
         #if 'transport.apply_outer_patch' not in self.input.attrs:
         #    newattrs['transport.apply_outer_patch'] = {0.0: False}
-        newattrs['map_combined_models'] = self.input.attrs.get('map_combined_models', {})
+        newattrs['map_combined_models'] = data.attrs.get('map_combined_models', {})
         self.update_input_attrs(newattrs)
 
 
-    def add_qualikiz_transport(self):
+    def add_qualikiz_transport(
+        self,
+        rho_min: float | None = None,
+        rho_max: float | None = None,
+    ) -> None:
+        data = self.input.to_dataset()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
-        if self.input.attrs.get('transport.model_name', '') == 'combined':
-            time = self.input.get('time').to_numpy().flatten()
-            models = self.input.attrs.get('map_combined_models', {})
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_models', {})
             prefix = f'transport.transport_models.{len(models):d}'
-            #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
-            if self.input.get('pedestal.rho_norm_ped_top', None) is not None:
-                newvars[f'{prefix}.rho_max'] = (['time'], self.input['pedestal.rho_norm_ped_top'].to_numpy())
-            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + 0.45)
+            if 'pedestal.rho_norm_ped_top' in data:
+                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.update({'qualikiz': len(models)})
             newattrs['map_combined_models'] = models
+        if rho_min is not None:
+            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+        if rho_max is not None:
+            newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
         newattrs[f'{prefix}.model_name'] = 'qualikiz'
         newattrs[f'{prefix}.n_max_runs'] = 1
         newattrs[f'{prefix}.n_processes'] = 60
@@ -683,41 +757,55 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
-        newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
-        #if 'transport.apply_inner_patch' not in self.input.attrs:
+        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
+        #if 'transport.apply_inner_patch' not in data.attrs:
         #    newattrs['transport.apply_inner_patch'] = {0.0: False}
-        #if 'transport.apply_outer_patch' not in self.input.attrs:
+        #if 'transport.apply_outer_patch' not in data.attrs:
         #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
 
-    def set_qualikiz_model_path(self, path):
-        newattrs = {}
-        if self.input.attrs.get('transport.model_name', '') == 'combined':
-            models = self.input.attrs.get('map_combined_models', {})
+    def set_qualikiz_model_path(
+        self,
+        path: str | Path,
+    ) -> None:
+        data = self.input.to_dataset()
+        newattrs: MutableMapping[str, Any] = {}
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_models', {})
             for n in range(len(models)):
-                if self.input.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qualikiz':
+                if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qualikiz':
                     newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
-        elif self.input.attrs.get('transport.model_name', '') == 'qualikiz':
+        elif data.attrs.get('transport.model_name', '') == 'qualikiz':
             newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
         self.update_input_attrs(newattrs)
 
 
-    def add_qlknn_transport(self):
+    def add_qlknn_transport(
+        self,
+        rho_min: float | None = None,
+        rho_max: float | None = None,
+    ) -> None:
+        data = self.input.to_dataset()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
-        if self.input.attrs.get('transport.model_name', '') == 'combined':
-            models = self.input.attrs.get('map_combined_models', {})
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_models', {})
             prefix = f'transport.transport_models.{len(models):d}'
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
-            if self.input.get('pedestal.rho_norm_ped_top', None) is not None:
-                newvars[f'{prefix}.rho_max'] = (['time'], self.input['pedestal.rho_norm_ped_top'].to_numpy())
+            if 'pedestal.rho_norm_ped_top' in data:
+                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.update({'qlknn': len(models)})
             newattrs['map_combined_models'] = models
+        if rho_min is not None:
+            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+        if rho_max is not None:
+            newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
         newattrs[f'{prefix}.model_name'] = 'qlknn'
         newattrs[f'{prefix}.model_path'] = ''
         newattrs[f'{prefix}.include_ITG'] = True
@@ -740,29 +828,42 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.0
-        newattrs['transport.smooth_everywhere'] = (not self.input.attrs.get('pedestal.set_pedestal', False))
-        #if 'transport.apply_inner_patch' not in self.input.attrs:
+        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
+        #if 'transport.apply_inner_patch' not in data.attrs:
         #    newattrs['transport.apply_inner_patch'] = {0.0: False}
-        #if 'transport.apply_outer_patch' not in self.input.attrs:
+        #if 'transport.apply_outer_patch' not in data.attrs:
         #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
 
-    def set_qlknn_model_path(self, path):
-        newattrs = {}
-        if self.input.attrs.get('transport.model_name', '') == 'combined':
-            models = self.input.attrs.get('map_combined_models', {})
+    def set_qlknn_model_path(
+        self,
+        path: str | Path,
+    ) -> None:
+        data = self.input.to_dataset()
+        newattrs: MutableMapping[str, Any] = {}
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_models', {})
             for n in range(len(models)):
-                if self.input.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qlknn':
+                if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qlknn':
                     newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
-        if self.input.attrs.get('transport.model_name', '') == 'qlknn':
+        if data.attrs.get('transport.model_name', '') == 'qlknn':
             newattrs['transport.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
 
-    def add_transport_inner_patch(self, de, ve, chii, chie, rho, tstart=None, tend=None):
-        time = self.input.get('time').to_numpy().flatten()
+    def add_transport_inner_patch(
+        self,
+        de: float,
+        ve: float,
+        chii: float,
+        chie: float,
+        rho: float,
+        tstart: float | None = None,
+        tend: float | None = None,
+    ) -> None:
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         trigger = np.isfinite(time)
         if isinstance(tstart, (float, int)):
             trigger &= (time >= tstart)
@@ -775,13 +876,22 @@ class torax_io(io):
         newvars['transport.chi_i_inner'] = (['time'], np.zeros_like(time) + chii)
         newvars['transport.chi_e_inner'] = (['time'], np.zeros_like(time) + chie)
         self.update_input_data_vars(newvars)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['transport.rho_inner'] = float(rho)
         self.update_input_attrs(newattrs)
 
 
-    def add_transport_outer_patch(self, de, ve, chii, chie, rho, tstart=None, tend=None):
-        time = self.input.get('time').to_numpy().flatten()
+    def add_transport_outer_patch(
+        self, 
+        de: float,
+        ve: float,
+        chii: float,
+        chie: float,
+        rho: float,
+        tstart: float | None = None,
+        tend: float | None = None
+    ) -> None:
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         trigger = np.isfinite(time)
         if isinstance(tstart, (float, int)):
             trigger &= (time >= tstart)
@@ -799,7 +909,9 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def reset_mhd_sawtooth_trigger(self):
+    def reset_mhd_sawtooth_trigger(
+        self,
+    ) -> None:
         delvars = [
             'mhd.sawtooth.trigger_model.minimum_radius',
             'mhd.sawtooth.trigger_model.s_critical',
@@ -815,23 +927,32 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def set_mhd_sawtooth_trigger(self, rmin, scrit, flat=1.01, rmult=1.1, deltat=1.0e-3):
-        time = self.input.get('time').to_numpy().flatten()
+    def set_mhd_sawtooth_trigger(
+        self,
+        rmin: float,
+        scrit: float,
+        flat: float = 1.01,
+        rmult: float = 1.1,
+        deltat: float = 1.0e-3
+    ) -> None:
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
         newvars['mhd.sawtooth.trigger_model.minimum_radius'] = (['time'], np.zeros_like(time) + rmin)
         newvars['mhd.sawtooth.trigger_model.s_critical'] = (['time'], np.zeros_like(time) + scrit)
         newvars['mhd.sawtooth.redistribution_model.flattening_factor'] = (['time'], np.zeros_like(time) + flat)
         newvars['mhd.sawtooth.redistribution_model.mixing_radius_multiplier'] = (['time'], np.zeros_like(time) + rmult)
         self.update_input_data_vars(newvars)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['mhd.sawtooth.crash_step_duration'] = float(deltat)
         newattrs['mhd.sawtooth.trigger_model.model_name'] = 'simple'
         newattrs['mhd.sawtooth.redistribution_model.model_name'] = 'simple'
         self.update_input_attrs(newattrs)
 
 
-    def set_exchange_source(self):
-        newattrs = {}
+    def set_exchange_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.ei_exchange.mode'] = 'MODEL_BASED'
         newattrs['sources.ei_exchange.Qei_multiplier'] = 1.0
         self.update_input_attrs(newattrs)
@@ -841,8 +962,10 @@ class torax_io(io):
         self.delete_input_data_vars(delvars)
 
 
-    def set_ohmic_source(self):
-        newattrs = {}
+    def set_ohmic_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.ohmic.mode'] = 'MODEL_BASED'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -851,8 +974,10 @@ class torax_io(io):
         self.delete_input_data_vars(delvars)
 
 
-    def set_fusion_source(self):
-        newattrs = {}
+    def set_fusion_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.fusion.mode'] = 'MODEL_BASED'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -861,8 +986,10 @@ class torax_io(io):
         self.delete_input_data_vars(delvars)
 
 
-    def reset_gas_puff_source(self):
-        newattrs = {}
+    def reset_gas_puff_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.gas_puff.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -872,23 +999,31 @@ class torax_io(io):
         self.delete_input_data_vars(delvars)
 
 
-    def set_gas_puff_source(self, length, total):
-        time = self.input.get('time').to_numpy().flatten()
+    def set_gas_puff_source(
+        self, 
+        length: float,
+        total: float
+    ) -> None:
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
         newvars['sources.gas_puff.puff_decay_length'] = (['time'], np.zeros_like(time) + length)
         newvars['sources.gas_puff.S_total'] = (['time'], np.zeros_like(time) + total)
         self.update_input_data_vars(newvars)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.gas_puff.mode'] = 'MODEL_BASED'
         self.update_input_attrs(newattrs)
 
 
-    def set_bootstrap_current_source(self):
+    def set_bootstrap_current_source(
+        self,
+    ) -> None:
         self.add_neoclassical_bootstrap_current()
 
 
-    def reset_bremsstrahlung_source(self):
-        newattrs = {}
+    def reset_bremsstrahlung_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.bremsstrahlung.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -901,16 +1036,20 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def set_bremsstrahlung_source(self):
+    def set_bremsstrahlung_source(
+        self,
+    ) -> None:
         self.reset_bremsstrahlung_source()
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.bremsstrahlung.mode'] = 'MODEL_BASED'
         newattrs['sources.bremsstrahlung.use_relativistic_correction'] = True
         self.update_input_attrs(newattrs)
 
 
-    def reset_line_radiation_source(self):
-        newattrs = {}
+    def reset_line_radiation_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.impurity_radiation.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -924,9 +1063,11 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def set_mavrin_line_radiation_source(self):
+    def set_mavrin_line_radiation_source(
+        self,
+    ) -> None:
         self.reset_line_radiation_source()
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.impurity_radiation.mode'] = 'MODEL_BASED'
         newattrs['sources.impurity_radiation.model_name'] = 'mavrin_fit'
         newattrs['sources.impurity_radiation.radiation_multiplier'] = 1.0
@@ -935,8 +1076,10 @@ class torax_io(io):
         self.reset_bremsstrahlung_source()
 
 
-    def reset_synchrotron_source(self):
-        newattrs = {}
+    def reset_synchrotron_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.cyclotron_radiation.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -952,9 +1095,11 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def set_synchrotron_source(self):
+    def set_synchrotron_source(
+        self,
+    ) -> None:
         self.reset_synchrotron_source()
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.cyclotron_radiation.mode'] = 'MODEL_BASED'
         newattrs['sources.cyclotron_radiation.wall_reflection_coeff'] = 0.9
         newattrs['sources.cyclotron_radiation.beta_min'] = 0.5
@@ -963,14 +1108,21 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_toricnn_icrh_source(self, freq, mfrac, total, iwall=1.24, owall=2.43):
-        time = self.input.get('time').to_numpy().flatten()
+    def add_toricnn_icrh_source(
+        self,
+        freq: float,
+        mfrac: float,
+        total: float,
+        iwall: float = 1.24,
+        owall: float = 2.43,
+    ) -> None:
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
         newvars['sources.icrh.frequency'] = (['time'], np.zeros_like(time) + freq)
         newvars['sources.icrh.minority_concentration'] = (['time'], np.zeros_like(time) + mfrac)
         newvars['sources.icrh.P_total'] = (['time'], np.zeros_like(time) + total)
         self.update_input_data_vars(newvars)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.icrh.mode'] = 'MODEL_BASED'
         newattrs['sources.icrh.model_path'] = ''
         newattrs['sources.icrh.wall_inner'] = iwall
@@ -978,15 +1130,21 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def set_toricnn_model_path(self, path):
-        newattrs = {}
+    def set_toricnn_model_path(
+        self,
+        path: str | Path
+    ) -> None:
+        data = self.input.to_dataset()
+        newattrs: MutableMapping[str, Any] = {}
         if self.input.attrs.get('sources.icrh.mode', 'ZERO') == 'MODEL_BASED':
             newattrs['sources.icrh.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
 
-    def reset_generic_heat_source(self):
-        newattrs = {}
+    def reset_generic_heat_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_heat.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -1005,8 +1163,10 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def reset_generic_particle_source(self):
-        newattrs = {}
+    def reset_generic_particle_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_particle.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -1021,8 +1181,10 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def reset_generic_current_source(self):
-        newattrs = {}
+    def reset_generic_current_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_current.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
@@ -1039,9 +1201,16 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def set_gaussian_generic_heat_source(self, mu, sigma, total, efrac=0.5, afrac=1.0):
+    def set_gaussian_generic_heat_source(
+        self,
+        mu: float,
+        sigma: float,
+        total: float,
+        efrac: float = 0.5,
+        afrac: float = 1.0,
+    ) -> None:
         self.reset_generic_heat_source()
-        time = self.input.get('time').to_numpy().flatten()
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
         newvars['sources.generic_heat.gaussian_location'] = (['time'], np.zeros_like(time) + mu)
         newvars['sources.generic_heat.gaussian_width'] = (['time'], np.zeros_like(time) + sigma)
@@ -1049,28 +1218,38 @@ class torax_io(io):
         newvars['sources.generic_heat.electron_heat_fraction'] = (['time'], np.zeros_like(time) + efrac)
         newvars['sources.generic_heat.absorption_fraction'] = (['time'], np.zeros_like(time) + afrac)
         self.update_input_data_vars(newvars)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_heat.mode'] = 'MODEL_BASED'
         self.update_input_attrs(newattrs)
 
 
-    def set_gaussian_generic_particle_source(self, mu, sigma, total):
+    def set_gaussian_generic_particle_source(
+        self,
+        mu: float,
+        sigma: float,
+        total: float,
+    ) -> None:
         self.reset_generic_particle_source()
-        time = self.input.get('time').to_numpy().flatten()
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
         newvars['sources.generic_particle.deposition_location'] = (['time'], np.zeros_like(time) + mu)
         newvars['sources.generic_particle.particle_width'] = (['time'], np.zeros_like(time) + sigma)
         newvars['sources.generic_particle.S_total'] = (['time'], np.zeros_like(time) + total)
         self.update_input_data_vars(newvars)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_particle.mode'] = 'MODEL_BASED'
         self.update_input_attrs(newattrs)
 
 
-    def set_gaussian_generic_current_source(self, mu, sigma, total):
+    def set_gaussian_generic_current_source(
+        self,
+        mu: float,
+        sigma: float,
+        total: float,
+    ) -> None:
         self.reset_generic_current_source()
-        time = self.input.get('time').to_numpy().flatten()
-        newattrs = {}
+        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_current.mode'] = 'MODEL_BASED'
         newattrs['sources.generic_current.gaussian_location'] = (['time'], np.zeros_like(time) + mu)
         newattrs['sources.generic_current.gaussian_width'] = (['time'], np.zeros_like(time) + sigma)
@@ -1080,10 +1259,16 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def set_prescribed_generic_heat_source(self, rho, eheat, iheat):
+    def set_prescribed_generic_heat_source(
+        self,
+        rho: NDArray,
+        eheat: NDArray,
+        iheat: NDArray,
+    ) -> None:
         self.reset_generic_heat_source()
-        time = self.input.get('time').to_numpy().flatten()
-        newrho = self.input.get('rho').to_numpy().flatten()
+        data = self.input.to_dataset()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         neweheat = np.interp(newrho, rho, eheat)
         newiheat = np.interp(newrho, rho, iheat)
         newattrs = {}
@@ -1095,12 +1280,17 @@ class torax_io(io):
         self.update_input_data_vars(newvars)
 
 
-    def set_prescribed_generic_particle_source(self, rho, particle):
+    def set_prescribed_generic_particle_source(
+        self,
+        rho: NDArray,
+        particle: NDArray,
+    ) -> None:
         self.reset_generic_particle_source()
-        time = self.input.get('time').to_numpy().flatten()
-        newrho = self.input.get('rho').to_numpy().flatten()
+        data = self.input.to_dataset()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newparticle = np.interp(newrho, rho, particle)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_particle.mode'] = 'PRESCRIBED'
         self.update_input_attrs(newattrs)
         newvars = {}
@@ -1108,11 +1298,17 @@ class torax_io(io):
         self.update_input_data_vars(newvars)
 
 
-    def set_prescribed_generic_current_source(self, rho, current):
+    def set_prescribed_generic_current_source(
+        self,
+        rho: NDArray,
+        current: NDArray,
+    ) -> None:
         self.reset_generic_current_source()
-        newrho = self.input.get('rho').to_numpy().flatten()
+        data = self.input.to_dataset()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newcurrent = np.interp(newrho, rho, current)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_current.mode'] = 'PRESCRIBED'
         self.update_input_attrs(newattrs)
         newvars = {}
@@ -1120,8 +1316,12 @@ class torax_io(io):
         self.update_input_data_vars(newvars)
 
 
-    def add_fixed_linear_solver(self, dt_fixed=None, single=False):
-        newattrs = {}
+    def add_fixed_linear_solver(
+        self,
+        dt_fixed: float | None = None,
+        single: bool = False,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['solver.solver_type'] = 'linear'
         newattrs['solver.theta_implicit'] = 1.0
         newattrs['solver.use_predictor_corrector'] = True
@@ -1135,8 +1335,12 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_adaptive_linear_solver(self, dt_mult=None, single=False):
-        newattrs = {}
+    def add_adaptive_linear_solver(
+        self,
+        dt_mult: float | None = None,
+        single: bool = False,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['solver.solver_type'] = 'linear'
         newattrs['solver.theta_implicit'] = 1.0
         newattrs['solver.use_predictor_corrector'] = True
@@ -1150,8 +1354,12 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_fixed_newton_raphson_solver(self, dt_fixed=None, single=False):
-        newattrs = {}
+    def add_fixed_newton_raphson_solver(
+        self,
+        dt_fixed: float | None = None,
+        single: bool = False,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['solver.solver_type'] = 'newton_raphson'
         newattrs['solver.theta_implicit'] = 1.0
         newattrs['solver.use_predictor_corrector'] = True
@@ -1172,8 +1380,12 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def add_adaptive_newton_raphson_solver(self, dt_mult=None, single=False):
-        newattrs = {}
+    def add_adaptive_newton_raphson_solver(
+        self,
+        dt_mult: float | None = None,
+        single: bool = False,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['solver.solver_type'] = 'newton_raphson'
         newattrs['solver.theta_implicit'] = 1.0
         newattrs['solver.use_predictor_corrector'] = True
@@ -1194,8 +1406,13 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def set_numerics(self, t_initial, t_final, eqs=['te', 'ti', 'ne', 'j']):
-        newattrs = {}
+    def set_numerics(
+        self,
+        t_initial: float,
+        t_final: float,
+        eqs: Sequence[str] = ['te', 'ti', 'ne', 'j'],
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['geometry.n_rho'] = 25
         newattrs['numerics.t_initial'] = float(t_initial)
         newattrs['numerics.t_final'] = float(t_final)
@@ -1210,7 +1427,9 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def print_summary(self):
+    def print_summary(
+        self,
+    ) -> None:
         if self.has_output:
             fields = {
                 'Bt': ('B_0', 1.0, 'T'),
@@ -1241,76 +1460,64 @@ class torax_io(io):
                 'nu_Te': ('T_e', 0, 'T_e_volume_avg', ''),
                 'nu_Ti': ('T_i', 0, 'T_i_volume_avg', ''),
             }
-            data = self.output.isel(time=-1)
-            for key, specs in fields.items():
-                var, scale, units = specs
+            data = self.output.to_dataset().isel(time=-1)
+            for key, sspecs in fields.items():
+                var, scale, units = sspecs
                 val = data[var] / scale
                 print(f'{key:10}: {val:.2f} {units}')
-            for key, specs in radial_fields.items():
-                var, idx, scale, units = specs
-                if isinstance(scale, str):
-                    val = data.isel(rho_norm=idx)[var] / data[scale]
+            for key, rspecs in radial_fields.items():
+                var, idx, rscale, units = rspecs
+                if isinstance(rscale, str):
+                    val = data.isel(rho_norm=idx)[var] / data[rscale]
                 else:
-                    val = data.isel(rho_norm=idx)[var] / scale
+                    val = data.isel(rho_norm=idx)[var] / rscale
                 print(f'{key:10}: {val:.2f} {units}')
 
 
-    def to_dict(self):
-        datadict = {}
-        ds = self.input
+    def to_dict(
+        self,
+    ) -> MutableMapping[str, Any]:
+        datadict: MutableMapping[str, Any] = {}
+        ds = self.input.to_dataset()
         datadict.update(ds.attrs)
         for key in ds.data_vars:
             dims = ds[key].dims
-            ttag = 'time' if 'time' in dims else None
+            ttag: str | None = 'time' if 'time' in dims else None
             if ttag is None:
                 for dim in dims:
-                    if dim.startswith('time_'):
-                        ttag = dim
+                    if str(dim).startswith('time_'):
+                        ttag = str(dim)
                         break
-            rtag = 'rho' if 'rho' in dims else None
+            rtag: str | None = 'rho' if 'rho' in dims else None
             if rtag is None:
                 for dim in dims:
-                    if dim.startswith('rho_'):
-                        rtag = dim
+                    if str(dim).startswith('rho_'):
+                        rtag = str(dim)
                         break
             if ttag is not None and ttag in ds[key].dims:
                 time = ds[ttag].to_numpy().flatten()
-                time_dependent_var = None
                 if 'main_ion' in ds[key].dims:
-                    time_dependent_var = {}
                     for species in ds['main_ion'].to_numpy().flatten():
                         da = ds[key].dropna(ttag).sel(main_ion=species)
                         if rtag in da:
                             da = da.rename({rtag: 'rho_norm'})
                         if da.size > 0:
-                            #time_dependent_var[str(species)] = {float(t): v for t, v in zip(da[ttag].to_numpy().flatten(), da.to_numpy().flatten())}
-                            time_dependent_var[str(species)] = da
+                            datadict[f'{key}.{species}'] = da
                 elif 'impurity' in ds[key].dims:
-                    time_dependent_var = {}
                     for species in ds['impurity'].to_numpy().flatten():
                         da = ds[key].dropna(ttag).sel(impurity=species)
                         if rtag in da:
                             da = da.rename({rtag: 'rho_norm'})
                         if da.size > 0:
-                            time_dependent_var[str(species)] = da
+                            datadict[f'{key}.{species}'] = da
                 elif rtag is not None and rtag in ds[key].dims:
-                    #for ii in range(len(time)):
-                    #    da = ds[key].isel(time=ii).dropna(rtag)
-                    #    if da.size > 0:
-                    #        time_dependent_var[float(time[ii])] = (da[rtag].to_numpy().flatten(), da.to_numpy().flatten())
                     da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'})
                     if da.size > 0:
-                        time_dependent_var = da
+                        datadict[f'{key}'] = da
                 else:
-                    #for ii in range(len(time)):
-                    #    da = ds[key].isel(time=ii)
-                    #    if np.all(np.isfinite(da.values)):
-                    #        time_dependent_var[float(time[ii])] = float(da.to_numpy())
                     da = ds[key].dropna(ttag)
                     if da.size > 0:
-                        time_dependent_var = da
-                if time_dependent_var is not None:
-                    datadict[key] = time_dependent_var
+                        datadict[f'{key}'] = da
         models = datadict.pop('map_combined_models', {})
         if datadict.get('transport.model_name', '') == 'combined':
             datadict['transport.transport_models'] = []
@@ -1371,7 +1578,7 @@ class torax_io(io):
             self.reset_generic_current_source()
         use_fusion = datadict.pop('use_fusion', True)
         if not use_fusion:
-            self.reset_fusion_source()
+            self.set_fusion_source()
         datadict.pop('profile_conditions.n_i', None)
         datadict.pop('profile_conditions.q', None)
         datadict.pop('profile_conditions.j_ohmic', None)
@@ -1383,23 +1590,33 @@ class torax_io(io):
 
 
     @classmethod
-    def from_file(cls, path=None, input=None, output=None):
+    def from_file(
+        cls,
+        path: str | Path | None = None,
+        input: str | Path | None = None,
+        output: str | Path | None = None,
+    ) -> Self:
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
     @classmethod
-    def from_gacode(cls, obj, side='output', n=0):
+    def from_gacode(
+        cls,
+        obj: io,
+        side: str = 'output',
+        item: int = 0,
+    ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
             data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
             if 'n' in data.coords and 'rho' in data.coords:
                 coords = {}
                 data_vars = {}
-                attrs = {}
-                data = data.sel(n=n)
+                attrs: MutableMapping[str, Any] = {}
+                data = data.sel(n=item)
                 time = data.get('time', 0.0)
                 attrs['numerics.t_initial'] = float(time)
-                coords['time'] = np.array([time])
+                coords['time'] = np.array([time]).flatten()
                 coords['rho'] = data['rho'].to_numpy().flatten()
                 if 'z' in data and 'name' in data and 'type' in data and 'ni' in data:
                     species = []
@@ -1412,11 +1629,11 @@ class torax_io(io):
                             sdata = data['ni'].sel(name=namelist[ii])
                             species.append(namelist[ii])
                             density.append(np.expand_dims((sdata / nfuelsum).mean('rho').to_numpy().flatten(), axis=0))
-                        coords['main_ion'] = species
+                        coords['main_ion'] = np.array(species).flatten()
                     else:
                         species = ['D']
                         density = [np.atleast_2d([1.0])]
-                    coords['main_ion'] = species
+                    coords['main_ion'] = np.array(species).flatten()
                     data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.concatenate(density, axis=0))
                 if 'z' in data and 'mass' in data and 'ni' in data and 'ne' in data:
                     nfilt = (~np.isclose(data['z'], 1.0))
@@ -1427,11 +1644,11 @@ class torax_io(io):
                         zeff = xr.zeros_like(data['ne'])
                         nsum = xr.zeros_like(data['ne'])
                         for ii in range(len(data['name'])):
-                            sdata = data.isel(name=ii)
-                            nz = sdata['ni']
-                            if sdata['name'] in namelist and 'therm' in str(sdata['type'].to_numpy()):
-                                sname = str(sdata['name'].to_numpy())
-                                scharge = float(sdata['z'].to_numpy())
+                            #sdata = data.isel(name=ii)
+                            nz = data['ni'].isel(name=ii)
+                            if str(data['name'].isel(name=ii).to_numpy()) in namelist and 'therm' in str(data['type'].isel(name=ii).to_numpy()):
+                                sname = str(data['name'].isel(name=ii).to_numpy())
+                                scharge = float(data['z'].isel(name=ii).to_numpy())
                                 if sname not in newobj.allowed_radiation_species:
                                     sn, sa, sz = define_ion_species(short_name=sname)
                                     if sz > 2.0:
@@ -1453,13 +1670,13 @@ class torax_io(io):
                                 # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
                                 impcomp[sname] = nz
                                 nsum += nz
-                            zeff += sdata['ni'] * sdata['z'] ** 2.0 / data['ne']
+                            zeff += (data['ni'] * sdata['z'] ** 2.0 / data['ne']).isel(name=ii)
                         total = 0.0
                         impcoord = []
                         impfracs = []
                         for key in impcomp:
                             impcomp[key] = (impcomp[key] / nsum).mean('rho')
-                            total += impcomp[key]
+                            total += float(impcomp[key].to_numpy())
                         for key in impcomp:
                             impval = (impcomp[key] / total).to_numpy().flatten()
                             impcoord.append(key)
@@ -1469,7 +1686,7 @@ class torax_io(io):
                             impfracs = [np.atleast_2d([1.0])]
                         if 'z_eff' in data:
                             zeff = data['z_eff']
-                        coords['impurity'] = impcoord
+                        coords['impurity'] = np.array(impcoord).flatten()
                         data_vars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(impfracs, axis=0))
                     data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], np.expand_dims(zeff.to_numpy().flatten(), axis=0))
                 if 'current' in data:
@@ -1576,8 +1793,11 @@ class torax_io(io):
                 if external_el_heat_source is not None:
                     attrs['use_generic_heat'] = True
                     attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
-                    data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], np.expand_dims(external_ion_heat_source, axis=0))
-                    data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], np.expand_dims(external_el_heat_source, axis=0))
+                    data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], np.expand_dims(external_el_heat_source, axis=0))
+                if external_ion_heat_source is not None:
+                    attrs['use_generic_heat'] = True
+                    attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
+                    data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], np.expand_dims(external_ion_heat_source, axis=0))
                 if external_particle_source is not None:
                     attrs['use_generic_particle'] = True
                     attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
@@ -1596,7 +1816,12 @@ class torax_io(io):
 
 
     @classmethod
-    def from_omas(cls, obj, side='output', time=None):
+    def from_omas(
+        cls,
+        obj,
+        side: str = 'output',
+        window: float | None = None,
+    ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
             data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
@@ -1606,15 +1831,15 @@ class torax_io(io):
                 coords = {}
                 data_vars = {}
                 attrs = {}
-                coords['time'] = data.get('time_cp').to_numpy().flatten()
-                coords['rho'] = data.get('rho_cp').to_numpy().flatten()
+                coords['time'] = data.get('time_cp', xr.DataArray()).to_numpy().flatten()
+                coords['rho'] = data.get('rho_cp', xr.DataArray()).to_numpy().flatten()
                 #if 'ion_cp' in data:
                 #    #sn, sa, sz = define_ion_species(short_name=sname)
                 #    coords['main_ion'] = data.get('ion_cp').to_numpy().flatten()
                 attrs['numerics.t_initial'] = coords['time'][0]
                 omas_tag = 'core_profiles.profiles_1d.ion.density'
                 if omas_tag in data and 'ion_cp' in data:
-                    namelist = data.get('ion_cp').to_numpy().tolist()
+                    namelist = data.get('ion_cp', xr.DataArray()).to_numpy().tolist()
                     mainlist = []
                     for ii in range(len(namelist)):
                         if namelist[ii] in ['H', 'D', 'T']:
@@ -1628,10 +1853,10 @@ class torax_io(io):
                     if len(mainlist) == 0:
                         maincoord = ['D']
                         mainfracs = [np.atleast_2d([1.0])]
-                    coords['main_ion'] = maincoord
+                    coords['main_ion'] = np.array(maincoord).flatten()
                     data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.concatenate(mainfracs, axis=0))
                 if omas_tag in data and 'core_profiles.profiles_1d.electrons.density' in data:
-                    namelist = data.get('ion_cp').to_numpy().tolist()
+                    namelist = data.get('ion_cp', xr.DataArray()).to_numpy().tolist()
                     implist = []
                     zeff = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     nsum = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
@@ -1667,7 +1892,7 @@ class torax_io(io):
                     total = 0.0
                     for key in impcomp:
                         impcomp[key] = (impcomp[key] / nsum).mean('rho_cp')
-                        total += impcomp[key]
+                        total += float(impcomp[key].to_numpy())
                     impcoord = []
                     impfracs = []
                     for key in impcomp:
@@ -1676,7 +1901,7 @@ class torax_io(io):
                     if not impcomp:
                         impcoord = ['Ne']
                         impfracs = [np.atleast_2d([1.0])]
-                    coords['impurity'] = impcoord
+                    coords['impurity'] = np.array(impcoord).flatten()
                     data_vars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(impfracs, axis=0))
                     data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 omas_tag = 'core_profiles.global_quantities.ip'
@@ -1713,8 +1938,8 @@ class torax_io(io):
                 coords = {}
                 data_vars = {}
                 attrs = {}
-                coords['time'] = data.get('time_cs').to_numpy().flatten()
-                coords['rho'] = data.get('rho_cs').to_numpy().flatten()
+                coords['time'] = data.get('time_cs', xr.DataArray()).to_numpy().flatten()
+                coords['rho'] = data.get('rho_cs', xr.DataArray()).to_numpy().flatten()
                 # Place the sources
                 external_el_heat_source = None
                 external_ion_heat_source = None
@@ -1777,8 +2002,8 @@ class torax_io(io):
                 coords = {}
                 data_vars = {}
                 attrs = {}
-                coords['time'] = data.get('time_eq').to_numpy().flatten()
-                coords['rho'] = data.get('rho_eq').to_numpy().flatten()
+                coords['time'] = data.get('time_eq', xr.DataArray()).to_numpy().flatten()
+                coords['rho'] = data.get('rho_eq', xr.DataArray()).to_numpy().flatten()
                 omas_tag = 'equilibrium.time_slice.profiles_1d.psi'
                 if omas_tag in data:
                     data_vars['profile_conditions.psi'] = (['time', 'rho'], data[omas_tag].to_numpy())
