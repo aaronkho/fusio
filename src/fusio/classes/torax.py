@@ -439,6 +439,27 @@ class torax_io(io):
         return odict
 
 
+    def _clean(
+        self,
+    ) -> None:
+        data = self.input.to_dataset()
+        use_psi = data.attrs.get('use_psi', True)
+        if not use_psi:
+            self.reset_psi()
+        use_generic_heat = data.attrs.get('use_generic_heat', True)
+        if not use_generic_heat:
+            self.reset_generic_heat_source()
+        use_generic_particle = data.attrs.get('use_generic_particle', True)
+        if not use_generic_particle:
+            self.reset_generic_particle_source()
+        use_generic_current = data.attrs.get('use_generic_current', True)
+        if not use_generic_current:
+            self.reset_generic_current_source()
+        use_fusion = data.attrs.get('use_fusion', True)
+        if not use_fusion:
+            self.set_fusion_source()
+
+
     def read(
         self,
         path: str | Path,
@@ -500,7 +521,7 @@ class torax_io(io):
         self,
         path: str | Path,
         data: xr.Dataset,
-        overwrite: bool = False
+        overwrite: bool = False,
     ) -> None:
         if isinstance(path, (str, Path)):
             opath = Path(path)
@@ -584,6 +605,15 @@ class torax_io(io):
                 newattrs['geometry.n_surfaces'] = 251
                 newattrs['geometry.last_surface_factor'] = 0.9999
         self.update_input_attrs(newattrs)
+
+
+    def reset_psi(
+        self,
+    ) -> None:
+        delvars = [
+            'profile_conditions.psi',
+        ]
+        self.delete_input_data_vars(delvars)
 
 
     def add_pedestal_by_pressure(
@@ -972,6 +1002,8 @@ class torax_io(io):
             'sources.ohmic.prescribed_values',
         ]
         self.delete_input_data_vars(delvars)
+        if 'sources.generic_current.prescribed_values' in self.input and 'profile_conditions.j_ohmic' in self.input:
+            self.input['sources.generic_current.prescribed_values'] = self.input['sources.generic_current.prescribed_values'] - self.input['profile_conditions.j_ohmic']
 
 
     def set_fusion_source(
@@ -1478,6 +1510,7 @@ class torax_io(io):
         self,
     ) -> MutableMapping[str, Any]:
         datadict: MutableMapping[str, Any] = {}
+        self._clean()
         ds = self.input.to_dataset()
         datadict.update(ds.attrs)
         for key in ds.data_vars:
@@ -1564,21 +1597,11 @@ class torax_io(io):
             'sources.generic_current.prescribed_values' in datadict
         ):
             datadict['sources.generic_current.prescribed_values'] = (datadict.pop('sources.generic_current.prescribed_values'), )
-        use_psi = datadict.pop('use_psi', True)
-        if not use_psi:
-            datadict.pop('profile_conditions.psi', None)
-        use_generic_heat = datadict.pop('use_generic_heat', True)
-        if not use_generic_heat:
-            self.reset_generic_heat_source()
-        use_generic_particle = datadict.pop('use_generic_particle', True)
-        if not use_generic_particle:
-            self.reset_generic_particle_source()
-        use_generic_current = datadict.pop('use_generic_current', True)
-        if not use_generic_current:
-            self.reset_generic_current_source()
-        use_fusion = datadict.pop('use_fusion', True)
-        if not use_fusion:
-            self.set_fusion_source()
+        datadict.pop('use_psi', None)
+        datadict.pop('use_generic_heat', None)
+        datadict.pop('use_generic_particle', None)
+        datadict.pop('use_generic_current', None)
+        datadict.pop('use_fusion', None)
         datadict.pop('profile_conditions.n_i', None)
         datadict.pop('profile_conditions.q', None)
         datadict.pop('profile_conditions.j_ohmic', None)
@@ -1626,9 +1649,8 @@ class torax_io(io):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
                         nfuelsum = data['ni'].sel(name=namelist).sum('name')
                         for ii in range(len(namelist)):
-                            sdata = data['ni'].sel(name=namelist[ii])
                             species.append(namelist[ii])
-                            density.append(np.expand_dims((sdata / nfuelsum).mean('rho').to_numpy().flatten(), axis=0))
+                            density.append(np.expand_dims((data['ni'].sel(name=namelist[ii]) / nfuelsum).mean('rho').to_numpy().flatten(), axis=0))
                         coords['main_ion'] = np.array(species).flatten()
                     else:
                         species = ['D']
@@ -1644,7 +1666,6 @@ class torax_io(io):
                         zeff = xr.zeros_like(data['ne'])
                         nsum = xr.zeros_like(data['ne'])
                         for ii in range(len(data['name'])):
-                            #sdata = data.isel(name=ii)
                             nz = data['ni'].isel(name=ii)
                             if str(data['name'].isel(name=ii).to_numpy()) in namelist and 'therm' in str(data['type'].isel(name=ii).to_numpy()):
                                 sname = str(data['name'].isel(name=ii).to_numpy())
@@ -1670,7 +1691,7 @@ class torax_io(io):
                                 # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
                                 impcomp[sname] = nz
                                 nsum += nz
-                            zeff += (data['ni'] * sdata['z'] ** 2.0 / data['ne']).isel(name=ii)
+                            zeff += (data['ni'] * data['z'] ** 2.0 / data['ne']).isel(name=ii)
                         total = 0.0
                         impcoord = []
                         impfracs = []
