@@ -457,7 +457,7 @@ class torax_io(io):
             self.reset_generic_current_source()
         use_fusion = data.attrs.get('use_fusion', True)
         if not use_fusion:
-            self.reset_fusion_source()
+            self.set_fusion_source()
 
 
     def read(
