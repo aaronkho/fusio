@@ -1,20 +1,14 @@
+from .. import Version, __python_version_object__
 import importlib
 import copy
 import logging
 from pathlib import Path
-try:
-    from typing import Any
-except ImportError:
-    from typing_extensions import Any
-Final: Any
-try:
-    from typing import Final
-except ImportError:
-    from typing_extensions import Final
+from typing import Any      # Available in Python 3.5+
+from typing import Final    # Available in Python 3.8+
 Self: Any
-try:
+if __python_version_object__ > Version("3.10"):
     from typing import Self
-except ImportError:
+else:
     from typing_extensions import Self
 from collections.abc import Mapping, Sequence, Iterable
 import xarray as xr
