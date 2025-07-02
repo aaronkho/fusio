@@ -1649,9 +1649,8 @@ class torax_io(io):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
                         nfuelsum = data['ni'].sel(name=namelist).sum('name')
                         for ii in range(len(namelist)):
-                            sdata = data['ni'].sel(name=namelist[ii])
                             species.append(namelist[ii])
-                            density.append(np.expand_dims((sdata / nfuelsum).mean('rho').to_numpy().flatten(), axis=0))
+                            density.append(np.expand_dims((data['ni'].sel(name=namelist[ii]) / nfuelsum).mean('rho').to_numpy().flatten(), axis=0))
                         coords['main_ion'] = np.array(species).flatten()
                     else:
                         species = ['D']
@@ -1667,7 +1666,6 @@ class torax_io(io):
                         zeff = xr.zeros_like(data['ne'])
                         nsum = xr.zeros_like(data['ne'])
                         for ii in range(len(data['name'])):
-                            #sdata = data.isel(name=ii)
                             nz = data['ni'].isel(name=ii)
                             if str(data['name'].isel(name=ii).to_numpy()) in namelist and 'therm' in str(data['type'].isel(name=ii).to_numpy()):
                                 sname = str(data['name'].isel(name=ii).to_numpy())
@@ -1693,7 +1691,7 @@ class torax_io(io):
                                 # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
                                 impcomp[sname] = nz
                                 nsum += nz
-                            zeff += (data['ni'] * sdata['z'] ** 2.0 / data['ne']).isel(name=ii)
+                            zeff += (data['ni'] * data['z'] ** 2.0 / data['ne']).isel(name=ii)
                         total = 0.0
                         impcoord = []
                         impfracs = []
