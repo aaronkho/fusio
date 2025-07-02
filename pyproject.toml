@@ -43,3 +43,8 @@ build = ["build", "twine"]
 
 [tool.setuptools.dynamic]
 version = {attr = "fusio.__version__"}
+
+[tool.mypy]
+no_incremental = true
+exclude_gitignore = true
+check_untyped_defs = true

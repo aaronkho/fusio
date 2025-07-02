@@ -38,5 +38,5 @@ jobs:
 
     - name: run-mypy
       run: |
-        mypy --check-untyped-defs src
+        mypy src
 
