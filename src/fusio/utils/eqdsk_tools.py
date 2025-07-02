@@ -1,13 +1,18 @@
+import logging
 import copy
 from pathlib import Path
+from ..classes.io import Any, Final, Self
+from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, Iterable
+from numpy.typing import ArrayLike, NDArray
 import numpy as np
-from scipy.integrate import quad
+from scipy.integrate import quad  # type: ignore[import-untyped]
 import contourpy
 import cv2
-import logging
+
+logger = logging.getLogger('fusio')
 
 
-def define_cocos(cocos_number):
+def define_cocos(cocos_number: int) -> MutableMapping[str, int]:
     # Default dictionary returns COCOS=1
     sign_dict = {
         'eBp': 0,   # Normalization of flux by 2 pi
@@ -31,7 +36,7 @@ def define_cocos(cocos_number):
     return sign_dict
 
 
-def define_cocos_converter(cocos_in, cocos_out):
+def define_cocos_converter(cocos_in: int, cocos_out: int) -> MutableMapping[str, int]:
     in_dict = define_cocos(cocos_in)
     out_dict = define_cocos(cocos_out)
     for key in out_dict:
@@ -42,7 +47,7 @@ def define_cocos_converter(cocos_in, cocos_out):
     return out_dict
 
 
-def determine_cocos(sign_dict):
+def determine_cocos(sign_dict: MutableMapping[str, int]) -> int:
     cocos_number = 0  # Signifies unknown
     fcomplete = True
     for var in ['eBp', 'sBp', 'scyl', 'spol', 'srel']:
@@ -69,7 +74,7 @@ def determine_cocos(sign_dict):
     return cocos_number
 
 
-def detect_cocos(eqdsk):
+def detect_cocos(eqdsk: MutableMapping[str, Any]) -> int:
     sign_dict = {}
     sIp = int(np.sign(eqdsk['cpasma'])) if 'cpasma' in eqdsk else 0
     sBt = int(np.sign(eqdsk['bcentr'])) if 'bcentr' in eqdsk else 0
@@ -84,7 +89,7 @@ def detect_cocos(eqdsk):
     return determine_cocos(sign_dict)
 
 
-def convert_cocos(eqdsk, cocos_in, cocos_out, bt_sign_out=None, ip_sign_out=None):
+def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int, bt_sign_out: int | None = None, ip_sign_out: int | None = None) -> MutableMapping[str, Any]:
     out = {
         'nr': eqdsk.get('nr', None),
         'nz': eqdsk.get('nz', None),
@@ -136,21 +141,23 @@ def convert_cocos(eqdsk, cocos_in, cocos_out, bt_sign_out=None, ip_sign_out=None
     return out
 
 
-def trace_flux_surfaces(r, z, psi, levels, axis=None):
-    check = tuple([np.float32(i) for i in axis]) if isinstance(axis, (list, tuple)) else (np.mean(r).astype(np.float32), np.mean(z).astype(np.float32))
+def trace_flux_surfaces(r: NDArray, z: NDArray, psi: NDArray, levels: NDArray, axis: Sequence[float] | None = None) -> MutableMapping[float, Any]:
+    check = tuple([float(i) for i in axis]) if isinstance(axis, (list, tuple)) else (np.mean(r), np.mean(z))
     cg_psi = contourpy.contour_generator(r, z, psi)
     contours = {}
     for level in levels:
         vertices = cg_psi.create_contour(level)
         for i in range(len(vertices)):
-            enclosed = cv2.pointPolygonTest(cv2.UMat(vertices[i].astype(np.float32)), check, False)
-            if enclosed > 0:
-                contours[float(level)] = vertices[i].copy()
-                break
+            if vertices[i] is not None:
+                segment = np.array(vertices[i])
+                enclosed = cv2.pointPolygonTest(segment.reshape(-1, 1, 2), check, False)
+                if enclosed > 0:
+                    contours[float(level)] = vertices[i].copy()
+                    break
     return contours
 
 
-def calculate_mxh_coefficients(r, z, n=5):
+def calculate_mxh_coefficients(r: NDArray, z: NDArray, n: int = 5) -> Sequence[Sequence[float]]:
 
     z = np.roll(z, -np.argmax(r))
     r = np.roll(r, -np.argmax(r))
@@ -208,7 +215,7 @@ def calculate_mxh_coefficients(r, z, n=5):
     return c, s, bbox
 
 
-def read_eqdsk(path):
+def read_eqdsk(path: str | Path) -> MutableMapping[str, Any]:
     ''' Read an eqdsk file '''
 
     def _sep_eq_line(line, float_width=16, floats_per_line=5, sep=' '):
@@ -233,7 +240,7 @@ def read_eqdsk(path):
             with open(geqdsk_path, 'r') as ff:
                 lines = ff.readlines()
 
-    data = {}
+    data: MutableMapping[str, Any] = {}
     if len(lines) > 0:
 
         data['case'] = lines[0][:48].strip()
@@ -267,9 +274,9 @@ def read_eqdsk(path):
         data['qpsi'] = np.concatenate(_read_chunk(lines, data['nr']))
 
         # Read sizes of boundary vector and limiter vector
-        header = lines.pop(0)
-        data['nbdry'] = int(header[:5])
-        data['nlim'] = int(header[5:])
+        cheader = lines.pop(0)
+        data['nbdry'] = int(cheader[:5])
+        data['nlim'] = int(cheader[5:])
 
         # Read boundary vector
         if data['nbdry'] > 0:
@@ -294,7 +301,7 @@ def read_eqdsk(path):
     return data
 
 
-def write_eqdsk(data, path):
+def write_eqdsk(data: MutableMapping[str, Any], path: str | Path) -> None:
 
     if isinstance(path, (str, Path)) and isinstance(data, dict):
         geqdsk_path = Path(path)

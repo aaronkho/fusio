@@ -1,46 +1,48 @@
-#from getpass import getuser
+# type: ignore
+import logging
+from pathlib import Path
+from .io import Any, Final, Self
+from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, Iterable
+from numpy.typing import ArrayLike, NDArray
+import numpy as np
+import xarray as xr
+
 import datetime
 import re
 import struct
-#import shutil
 import copy
-#import collections
 from itertools import tee
-
-from pathlib import Path
-import logging
-import numpy as np
-import xarray as xr
 from .io import io
+from ..utils.plasma_tools import define_ion_species
 
 logger = logging.getLogger('fusio')
 
 
 class jintrac_io(io):
 
-    dtypes = {
+    dtypes: Final[Mapping[str, Any]] = {
         'int': 'i',
         'float': 'f',
         'double': 'd',
         'char': None,
     }
-    dsizes = {
+    dsizes: Final[Mapping[str, int]] = {
         'int': 4,
         'float': 4,
         'double': 8,
     }
-    byte_orderingtag = {
+    byte_orderingtag: Final[Mapping[str, str]] = {
         '>': 'Big-endian',
         '<': 'Little-endian',
     }
-    byte_ordering = {
+    byte_ordering: Final[Mapping[str, str]] = {
         'b': '>',
         'l': '<',
     }
 
-    header_finder = re.compile(b'\*\n\*[\w, \d]+\n')
-    spec_finder = re.compile(b'#\w+;\d+;\d+;[\w, \d\-]+;\d+\n')
-    tracking_conversion = {
+    header_finder: Final[re.Pattern] = re.compile(r'\*\n\*[\w, \d]+\n'.encode('utf-8'))
+    spec_finder: Final[re.Pattern] = re.compile(r'#\w+;\d+;\d+;[\w, \d\-]+;\d+\n'.encode('utf-8'))
+    tracking_conversion: Final[str, int] = {
         'File Header': 0,
         'General Info': 0,
         'PPF Attributes': 1,
@@ -49,12 +51,45 @@ class jintrac_io(io):
         'Traces': -1,
         '': -1,
     }
-    tracking_tags = [' in file header', ' in provenance section', ' in base vector section', ' in time slice', '']
-    supported_file_extensions = ['.ex', '.ext', '.jsp', '.jst', '.jss', '.jse', '.jhp', '.jht', '.ssp', '.sst', '.jasp', '.jast', '.jsd']
-    metadata_tags = ['units', 'desc', 'scstr', 'xbase', 'uid', 'dda', 'dtype', 'seq']
+    tracking_tags: Final[Sequence[str]] = [
+        ' in file header',
+        ' in provenance section',
+        ' in base vector section',
+        ' in time slice',
+        '',
+    ]
+    supported_file_extensions: Final[Sequence[str]] = [
+        '.ex',
+        '.ext',
+        '.jsp',
+        '.jst',
+        '.jss',
+        '.jse',
+        '.jhp',
+        '.jht',
+        '.ssp',
+        '.sst',
+        '.jasp',
+        '.jast',
+        '.jsd',
+    ]
+    metadata_tags: Final[Sequence[str]] = [
+        'units',
+        'desc',
+        'scstr',
+        'xbase',
+        'uid',
+        'dda',
+        'dtype',
+        'seq',
+    ]
 
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         ipath = None
         opath = None
@@ -75,13 +110,19 @@ class jintrac_io(io):
         self.autoformat()
 
 
-    def _pairwise(self, iterable):
+    def _pairwise(
+        self,
+        iterable: Iterable,
+    ) -> Iterable:
         a, b = tee(iterable)
         next(b, None)
         return zip(a, b)
 
 
-    def _decode_spec(self, spec):
+    def _decode_spec(
+        self,
+        spec: str,
+    ) -> Sequence[str, str, int, int]:
         if not spec.startswith('#'):
             logger.error(f'{spec} is not a spec line')
         splitted = spec[1:-1].split(';')
@@ -95,7 +136,10 @@ class jintrac_io(io):
         return label, dformat, npoints, nlines
 
 
-    def _decode_metadata(self, raw):
+    def _decode_metadata(
+        self,
+        raw: Sequence[bytes],
+    ) -> MutableMapping[str, Any]:
         itag = None
         decoded = list(map(lambda x: x.decode('latin-1').strip(), raw))
         meta = dict(zip(self.metadata_tags, decoded))
@@ -107,7 +151,12 @@ class jintrac_io(io):
         return meta
 
 
-    def _decode_block(self, block, endianness='>', track_num=-1):
+    def _decode_block(
+        self,
+        block: Sequence[bytes],
+        endianness: str = '>',
+        track_num: int = -1,
+    ) -> Sequence[str, Any, Any, bool]:
         # A block is the entire portion between spec lines, and typically contain the data for a single variable
         loc = self.tracking_tags[track_num] if track_num < 3 else self.tracking_tags[3]
         if track_num >= 3:
@@ -239,6 +288,7 @@ class jintrac_io(io):
             #if isinstance(output_file,str):
             #    convert_binary_file(str(ipath.absolute()), output_file)
 
+            data = {}
             data['info'] = {}
 
             with open(ipath, 'rb') as bf:

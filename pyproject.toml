@@ -25,15 +25,17 @@ classifiers = [
 dynamic = ["version"]
 
 dependencies = [
+  "typing-extensions; python_version < '3.11'",
   "numpy",
   "scipy",
+  "xarray",
   "h5py",
   "contourpy",
   "opencv-python",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "mypy", "pylint"]
 build = ["build", "twine"]
 
 [project.urls]
@@ -41,3 +43,8 @@ build = ["build", "twine"]
 
 [tool.setuptools.dynamic]
 version = {attr = "fusio.__version__"}
+
+[tool.mypy]
+no_incremental = true
+exclude_gitignore = true
+check_untyped_defs = true
