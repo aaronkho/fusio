@@ -18,10 +18,10 @@ class imas_io(io):
 
     empty_int: Final[int] = -999999999
     empty_float: Final[float] = -9.0e40
-    empty_complex: Final[complex] = -9.0e40-9.0e40j
+    #empty_complex: Final[complex] = -9.0e40-9.0e40j  # Removed since complex type cannot be JSON serialized
     int_types: Final[Sequence[Any]] = (int, np.int8, np.int16, np.int32, np.int64)
     float_types: Final[Sequence[Any]] = (float, np.float16, np.float32, np.float64, np.float128)
-    complex_types: Final[Sequence[Any]] = (complex, np.complex64, np.complex128, np.complex256)
+    #complex_types: Final[Sequence[Any]] = (complex, np.complex64, np.complex128, np.complex256)
 
 
     def __init__(
@@ -117,8 +117,8 @@ class imas_io(io):
                                         val = np.where(val == self.empty_int, np.nan, val)
                                     if val.dtype in self.float_types:
                                         val = np.where(val == self.empty_float, np.nan, val)
-                                    if val.dtype in self.complex_types:
-                                        val = np.where(val == self.empty_complex, np.nan, val)
+                                    #if val.dtype in self.complex_types:
+                                    #    val = np.where(val == self.empty_complex, np.nan, val)
                                 dims = []
                                 components = key.split('&')
                                 if 'profiles_1d[]' in components:
@@ -187,8 +187,8 @@ class imas_io(io):
                                         val = np.where(val == self.empty_int, np.nan, val)
                                     if val.dtype in self.float_types:
                                         val = np.where(val == self.empty_float, np.nan, val)
-                                    if val.dtype in self.complex_types:
-                                        val = np.where(val == self.empty_complex, np.nan, val)
+                                    #if val.dtype in self.complex_types:
+                                    #    val = np.where(val == self.empty_complex, np.nan, val)
                                 dims = []
                                 components = key.split('&')
                                 if components[0] == 'source[]':
@@ -267,8 +267,8 @@ class imas_io(io):
                                         val = np.where(val == self.empty_int, np.nan, val)
                                     if val.dtype in self.float_types:
                                         val = np.where(val == self.empty_float, np.nan, val)
-                                    if val.dtype in self.complex_types:
-                                        val = np.where(val == self.empty_complex, np.nan, val)
+                                    #if val.dtype in self.complex_types:
+                                    #    val = np.where(val == self.empty_complex, np.nan, val)
                                 dims = []
                                 components = key.split('&')
                                 if 'time_slice[]' in components:
@@ -328,8 +328,8 @@ class imas_io(io):
                                         val = np.where(val == self.empty_int, np.nan, val)
                                     if val.dtype in self.float_types:
                                         val = np.where(val == self.empty_float, np.nan, val)
-                                    if val.dtype in self.complex_types:
-                                        val = np.where(val == self.empty_complex, np.nan, val)
+                                    #if val.dtype in self.complex_types:
+                                    #    val = np.where(val == self.empty_complex, np.nan, val)
                                 dims = []
                                 components = key.split('&')
                                 if components[0] == 'heating_current_drive' and components[1][:-2] in hcdtags:
