@@ -2,7 +2,7 @@
 import logging
 from pathlib import Path
 from .io import Any, Final, Self
-from collections.abc import MutableMapping, Mapping, Sequence, Iterable
+from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, Iterable
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
