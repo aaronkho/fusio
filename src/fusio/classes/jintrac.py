@@ -40,8 +40,8 @@ class jintrac_io(io):
         'l': '<',
     }
 
-    header_finder: Final[re.Pattern] = re.compile(b'\*\n\*[\w, \d]+\n')
-    spec_finder: Final[re.Pattern] = re.compile(b'#\w+;\d+;\d+;[\w, \d\-]+;\d+\n')
+    header_finder: Final[re.Pattern] = re.compile(r'\*\n\*[\w, \d]+\n'.encode('utf-8'))
+    spec_finder: Final[re.Pattern] = re.compile(r'#\w+;\d+;\d+;[\w, \d\-]+;\d+\n'.encode('utf-8'))
     tracking_conversion: Final[str, int] = {
         'File Header': 0,
         'General Info': 0,
@@ -288,6 +288,7 @@ class jintrac_io(io):
             #if isinstance(output_file,str):
             #    convert_binary_file(str(ipath.absolute()), output_file)
 
+            data = {}
             data['info'] = {}
 
             with open(ipath, 'rb') as bf:
