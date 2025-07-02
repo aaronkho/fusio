@@ -38,5 +38,5 @@ jobs:
 
     - name: run-mypy
       run: |
-        mypy -p fusio
+        mypy --check-untyped-defs src
 
