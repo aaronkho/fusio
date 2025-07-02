@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any      # Available in Python 3.5+
 from typing import Final    # Available in Python 3.8+
 Self: Any
-if __python_version_object__ > Version("3.10"):
+if __python_version_object__ > Version("3.11"):
     from typing import Self
 else:
     from typing_extensions import Self
