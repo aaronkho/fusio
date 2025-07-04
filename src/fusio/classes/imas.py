@@ -19,7 +19,6 @@ logger = logging.getLogger('fusio')
 
 class imas_io(io):
 
-
     ids_top_levels: Final[Sequence[str]] = [
         'amns_data',
         'barometry',
@@ -101,6 +100,49 @@ class imas_io(io):
         'wall',
         'waves',
         'workflow',
+    ]
+    source_names: Final[Sequence[str]] = [
+        'total',
+        'nbi',
+        'ec',
+        'lh',
+        'ic',
+        'fusion',
+        'ohmic',
+        'bremsstrahlung',
+        'synchrotron_radiation',
+        'line_radiation',
+        'collisional_equipartition',
+        'cold_neutrals',
+        'bootstrap_current',
+        'pellet',
+        'auxiliary',
+        'ic_nbi',
+        'ic_fusion',
+        'ic_nbi_fusion',
+        'ec_lh',
+        'ec_ic',
+        'lh_ic',
+        'ec_lh_ic',
+        'gas_puff',
+        'killer_gas_puff',
+        'radiation',
+        'cyclotron_radiation',
+        'cyclotron_synchrotron_radiation',
+        'impurity_radiation',
+        'particles_to_wall',
+        'particles_to_pump',
+        'charge_exchange',
+        'transport',
+        'neoclassical',
+        'equipartition',
+        'turbulent_equipartition',
+        'runaways',
+        'ionisation',
+        'recombination',
+        'excitation',
+        'database',
+        'gaussian',
     ]
 
     empty_int: Final[int] = -999999999
@@ -470,6 +512,18 @@ class imas_io(io):
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
+    @classmethod
+    def from_imas(
+        cls,
+        obj: io,
+        side: str = 'output',
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+        return newobj
+
+
     # Assumed that the self creation method transfers output to input
     @classmethod
     def from_gacode(
@@ -479,6 +533,6 @@ class imas_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
         return newobj
 
