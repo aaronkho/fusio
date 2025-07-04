@@ -142,7 +142,7 @@ def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int
 
 
 def trace_flux_surfaces(r: NDArray, z: NDArray, psi: NDArray, levels: NDArray, axis: Sequence[float] | None = None) -> MutableMapping[float, Any]:
-    check = tuple([float(i) for i in axis]) if isinstance(axis, (list, tuple)) else (np.mean(r), np.mean(z))
+    check = tuple([np.float32(i) for i in axis]) if isinstance(axis, (list, tuple)) else (np.mean(r).astype(np.float32), np.mean(z).astype(float32))
     cg_psi = contourpy.contour_generator(r, z, psi)
     contours = {}
     for level in levels:
@@ -150,7 +150,7 @@ def trace_flux_surfaces(r: NDArray, z: NDArray, psi: NDArray, levels: NDArray, a
         for i in range(len(vertices)):
             if vertices[i] is not None:
                 segment = np.array(vertices[i])
-                enclosed = cv2.pointPolygonTest(segment.reshape(-1, 1, 2), check, False)
+                enclosed = cv2.pointPolygonTest(segment.reshape(-1, 1, 2).astype(np.float32), check, False)
                 if enclosed > 0:
                     contours[float(level)] = vertices[i].copy()
                     break
