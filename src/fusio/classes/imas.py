@@ -517,6 +517,7 @@ class imas_io(io):
         cls,
         obj: io,
         side: str = 'output',
+        **kwargs: Any,
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
@@ -530,6 +531,7 @@ class imas_io(io):
         cls,
         obj: io,
         side: str = 'output',
+        **kwargs: Any,
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):

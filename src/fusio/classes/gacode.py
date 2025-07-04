@@ -549,6 +549,7 @@ class gacode_io(io):
         cls,
         obj: io,
         side: str = 'output',
+        **kwargs: Any,
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
@@ -1095,6 +1096,7 @@ class gacode_io(io):
         obj: io,
         side: str = 'output',
         window: Sequence[int | float] | None = None,
+        **kwargs: Any,
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):

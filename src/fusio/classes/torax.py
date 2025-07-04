@@ -1628,6 +1628,7 @@ class torax_io(io):
         obj: io,
         side: str = 'output',
         item: int = 0,
+        **kwargs: Any,
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
@@ -1842,6 +1843,7 @@ class torax_io(io):
         obj,
         side: str = 'output',
         window: float | None = None,
+        **kwargs: Any,
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
