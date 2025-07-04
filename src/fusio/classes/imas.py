@@ -197,86 +197,45 @@ class imas_io(io):
         overwrite: bool = False,
     ) -> None:
         if side == 'input':
-            self._write_imas_file(path, self.input.to_dataset(), overwrite=overwrite)
+            self._write_imas_directory(path, self.input.to_dataset(), overwrite=overwrite)
         else:
-            self._write_imas_file(path, self.output.to_dataset(), overwrite=overwrite)
+            self._write_imas_directory(path, self.output.to_dataset(), overwrite=overwrite)
 
 
-    def _read_imas_directory(
+    def _convert_to_ids_structure(
         self,
-        path: str | Path,
-    ) -> xr.Dataset:
-        if self.has_imas:
-            return self._read_imas_directory_from_netcdf(path)
-        else:
-            return self._read_imas_directory_from_hdf5_without_core(path)
-
-
-    def _read_imas_directory_from_netcdf(
-        self,
-        path: str | Path,
-        version: str | None = None,
-    ) -> xr.Dataset:
-
-        dsvec = []
-
-        if isinstance(path, (str, Path)):
-            ipath = Path(path)
-            if ipath.is_dir():
-                for ids in self.ids_top_levels:
-                    top_level_path = ipath / f'{ids}.nc'
-                    if top_level_path.is_file():
-                        ds_ids = xr.load_dataset(top_level_path, group=f'{ids}/0')
-                        unique_names = list(set(
-                            [k for k in ds_ids.dims] +
-                            [k for k in ds_ids.coords] +
-                            [k for k in ds_ids.data_vars] +
-                            [k for k in ds_ids.attrs]
-                        ))
-                        dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}))
-
-        ds = xr.Dataset()
-        for dss in dsvec:
-            ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
-
-        return ds
-
-
-    def _read_imas_directory_from_hdf5_without_core(
-        self,
-        path: str | Path,
-        version: str | None = None,
-    ) -> xr.Dataset:
+        ids_name: str,
+        data: MutableMapping[str, Any],
+        delimiter: str,
+    ) -> IDSStructure:
 
         def _recursive_resize_struct_array(
             ids: IDSBase,
-            tag: str,
+            components: list[str],
             size: list[Any],
         ) -> None:
-            components = tag.split('&')
             if len(components) > 0:
                 if isinstance(ids, IDSStructArray) and len(components) > 1:
                     for ii in range(ids.size):
                         if isinstance(size, np.ndarray) and ii < size.shape[0]:
-                            _recursive_resize_struct_array(ids[ii], '&'.join(components), size[ii])
+                            _recursive_resize_struct_array(ids[ii], components, size[ii])
                 elif isinstance(ids, IDSStructArray) and components[0] == 'AOS_SHAPE':
                     ids.resize(size[0])
                 else:
-                    _recursive_resize_struct_array(ids[f'{components[0]}'], '&'.join(components[1:]), size)
+                    _recursive_resize_struct_array(ids[f'{components[0]}'], components[1:], size)
 
         def _expanded_data_insertion(
             ids: IDSBase,
-            tag: str,
+            components: list[str],
             data: Any,
         ) -> None:
-            components = tag.split('&')
             if len(components) > 0:
                 if isinstance(ids, IDSStructArray):
                     for ii in range(ids.size):
                         if isinstance(data, np.ndarray) and ii < data.shape[0]:
-                            _expanded_data_insertion(ids[ii], '&'.join(components), data[ii])
+                            _expanded_data_insertion(ids[ii], components, data[ii])
                         elif not isinstance(data, np.ndarray):
-                            _expanded_data_insertion(ids[ii], '&'.join(components), data)
+                            _expanded_data_insertion(ids[ii], components, data)
                 elif len(components) == 1:
                     val = data if not isinstance(data, bytes) else data.decode('utf-8')
                     if isinstance(val, np.ndarray):
@@ -286,47 +245,106 @@ class imas_io(io):
                             val = np.where(val == self.empty_float, np.nan, val)
                         #if val.dtype in self.complex_types:
                         #    val = np.where(val == self.empty_complex, np.nan, val)
+                        if val.ndim == 0:
+                            val = val.item()
                     ids[f'{components[0]}'] = val
                 else:
-                    _expanded_data_insertion(ids[f'{components[0]}'], '&'.join(components[1:]), data)
+                    _expanded_data_insertion(ids[f'{components[0]}'], components[1:], data)
+
+        dd_version: Any = None
+        if f'ids_properties{delimiter}version_put{delimiter}data_dictionary' in data:
+            dd_version = data[f'ids_properties{delimiter}version_put{delimiter}data_dictionary']
+            if isinstance(dd_version, bytes):
+                dd_version = dd_version.decode('utf-8')
+            elif isinstance(dd_version, np.ndarray):
+                dd_version = dd_version.item()
+        ids_struct = getattr(imas.IDSFactory(version=dd_version), f'{ids_name}')()
+        index_data = {}
+        for key in list(data.keys()):
+            if key.endswith(':i'):
+                vector = data.pop(key)
+                index_data[f'{key[:-2]}'] = vector.size
+        for key in sorted(index_data.keys(), key=len):
+            zeros = np.array([0])
+            prev_key = delimiter.join(key.split(delimiter)[:-1]) if delimiter in key else ''
+            if prev_key in index_data and f'{prev_key}{delimiter}AOS_SHAPE' in data:
+                zeros = np.repeat(np.expand_dims(np.zeros(np.array(data[f'{prev_key}{delimiter}AOS_SHAPE']).shape), axis=-1), index_data[prev_key], axis=-1)
+            data[f'{key}{delimiter}AOS_SHAPE'] = zeros.astype(int) + index_data[key]
+        shape_data = {}
+        for key in list(data.keys()):
+            if key.endswith(f'{delimiter}AOS_SHAPE'):
+                shape_data[key] = data.pop(key)
+            elif key.endswith('_SHAPE'):
+                data.pop(key)
+        for key in sorted(shape_data.keys(), key=len):
+            _recursive_resize_struct_array(ids_struct, key.replace('[]', '').split(delimiter), shape_data[key])
+        for key in data:
+            _expanded_data_insertion(ids_struct, key.replace('[]', '').split(delimiter), data[key])
+
+        return ids_struct
+
+
+    def _read_imas_directory(
+        self,
+        path: str | Path,
+        version: str | None = None,
+    ) -> xr.Dataset:
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)
+            if ipath.is_dir():
+                interface = 'netcdf'
+                if (ipath / 'master.h5').is_file():
+                    interface = 'hdf5'
+                if interface == 'netcdf':
+                    return self._read_imas_netcdf_files(ipath, version=version)
+                if interface == 'hdf5':
+                    if self.has_imas:
+                        return self._read_imas_hdf5_files_with_core(ipath, version=version)
+                    else:
+                        return self._read_imas_hdf5_files_without_core(ipath, version=version)
+
+
+    def _read_imas_netcdf_files(
+        self,
+        path: str | Path,
+        version: str | None = None,
+    ) -> xr.Dataset:
 
         dsvec = []
 
         if isinstance(path, (str, Path)):
-            data: MutableMapping[str, Any] = {}
-            ipath = Path(path)
+            ipath = Path(path)  # TODO: Add consideration for db paths
             if ipath.is_dir():
-
+                idsmap = {}
                 for ids in self.ids_top_levels:
-                    top_level_path = ipath / f'{ids}.h5'
+                    top_level_path = ipath / f'{ids}.nc'
                     if top_level_path.is_file():
-                        idsdata = h5py.File(top_level_path)
-                        if f'{ids}' in idsdata:
-                            data = {k: v[()] for k, v in idsdata[f'{ids}'].items()}
-                            dd_version = None
-                            if 'ids_properties&version_put&data_dictionary' in data:
-                                dd_version = data['ids_properties&version_put&data_dictionary'].decode('utf-8')
-                            ids_struct = getattr(imas.IDSFactory(version=dd_version), f'{ids}')()
-                            shape_data = {}
-                            for key in list(data.keys()):
-                                if key.endswith('&AOS_SHAPE'):
-                                    shape_data[key] = data.pop(key)
-                                elif key.endswith('_SHAPE'):
-                                    data.pop(key)
-                            for key in sorted(shape_data.keys(), key=len):
-                                _recursive_resize_struct_array(ids_struct, key.replace('[]', ''), shape_data[key])
-                            for key in data:
-                                _expanded_data_insertion(ids_struct, key.replace('[]', ''), data[key])
-                            if ids_struct.has_value:
-                                ids_struct.validate()
-                                ds_ids = imas.util.to_xarray(ids_struct)
-                                unique_names = list(set(
-                                    [k for k in ds_ids.dims] +
-                                    [k for k in ds_ids.coords] +
-                                    [k for k in ds_ids.data_vars] +
-                                    [k for k in ds_ids.attrs]
-                                ))
-                                dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}))
+                        root = xr.load_dataset(ipath / f'{ids}.nc')
+                        dd_version = root.attrs.get('data_dictionary_version', None)
+                        with imas.DBEntry(ipath / f'{ids}.nc', 'r', dd_version=dd_version) as netcdf_entry:
+                            idsmap[f'{ids}'] = netcdf_entry.get(f'{ids}')
+                for ids, ids_struct in idsmap.items():
+                    if ids_struct.has_value:
+                        ids_struct.validate()
+                        ds_ids = imas.util.to_xarray(ids_struct)
+                        unique_names = list(set(
+                            [k for k in ds_ids.dims] +
+                            [k for k in ds_ids.coords] +
+                            [k for k in ds_ids.data_vars] +
+                            [k for k in ds_ids.attrs]
+                        ))
+                        newcoords = {}
+                        if ids == 'core_profiles' and 'profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_sources' and 'source.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.source.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_transport' and 'model.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.model.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'equilibrium' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'ntms' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
 
         ds = xr.Dataset()
         for dss in dsvec:
@@ -335,22 +353,149 @@ class imas_io(io):
         return ds
 
 
-    def _write_imas_file(
+    def _read_imas_hdf5_files_with_core(
+        self,
+        path: str | Path,
+        version: str | None = None,
+    ) -> xr.Dataset:
+
+        dsvec = []
+
+        ds = xr.Dataset()
+        for dss in dsvec:
+            ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
+
+        return ds
+
+
+    def _read_imas_hdf5_files_without_core(
+        self,
+        path: str | Path,
+        version: str | None = None,
+    ) -> xr.Dataset:
+
+        dsvec = []
+
+        if isinstance(path, (str, Path)):
+            data: MutableMapping[str, Any] = {}
+            ipath = Path(path)
+            if ipath.is_dir():
+
+                idsmap = {}
+                for ids in self.ids_top_levels:
+                    top_level_path = ipath / f'{ids}.h5'
+                    if top_level_path.is_file():
+                        h5_data = h5py.File(top_level_path)
+                        if f'{ids}' in h5_data:
+                            idsmap[f'{ids}'] = {k: v[()] for k, v in h5_data[f'{ids}'].items()}
+                for ids, idsdata in idsmap.items():
+                    ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='&')
+                    if ids_struct.has_value:
+                        ids_struct.validate()
+                        ds_ids = imas.util.to_xarray(ids_struct)
+                        unique_names = list(set(
+                            [k for k in ds_ids.dims] +
+                            [k for k in ds_ids.coords] +
+                            [k for k in ds_ids.data_vars] +
+                            [k for k in ds_ids.attrs]
+                        ))
+                        newcoords = {}
+                        if ids == 'core_profiles' and 'profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_sources' and 'source.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.source.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_transport' and 'model.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.model.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'equilibrium' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'ntms' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
+
+        ds = xr.Dataset()
+        for dss in dsvec:
+            ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
+
+        return ds
+
+
+    def _write_imas_directory(
         self,
         path: str | Path,
         data: xr.Dataset | xr.DataArray,
-        window: ArrayLike | None = None,
         overwrite: bool = False,
+        window: ArrayLike | None = None,
     ) -> None:
-
-        if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
-            wdata = data.sel(time=-1)
+        if isinstance(path, (str, Path)):
             opath = Path(path)
-            logger.info(f'Saved {self.format} data into {opath.resolve()}')
-            #else:
-            #    logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
+            interface = 'netcdf'
+            if interface == 'netcdf':
+                return self._write_imas_netcdf_files(opath, data, overwrite=overwrite, window=window)
+            if interface == 'hdf5':
+                if self.has_imas:
+                    self._write_imas_hdf5_files_with_core(opath, data, overwrite=overwrite, window=window)
+                else:
+                    self._write_imas_hdf5_files_without_core(opath, data, overwrite=overwrite, window=window)
+
+
+    def _write_imas_netcdf_files(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        overwrite: bool = False,
+        window: ArrayLike | None = None,
+    ) -> None:
+        if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
+            opath = Path(path)
+            if not (opath.exists() and not overwrite):
+                opath.mkdir(parents=True, exist_ok=True)
+                datadict = {}
+                datadict.update({k: np.arange(v).astype(int) for k, v in data.sizes.items()})
+                datadict.update({k: v.values for k, v in data.coords.items()})
+                datadict.update({k: v.values for k, v in data.data_vars.items()})
+                datadict.pop('core_profiles.profiles_1d.grid.rho_tor_norm:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_1d.psi:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim1:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim2:i', None)
+                datadict.pop('equilibrium.time_slice.boundary.outline.r:i', None)
+                idsmap = {}
+                dd_version = None
+                for ids in self.ids_top_levels:
+                    idsdata = {k[len(ids) + 1:]: v for k, v in datadict.items() if k.startswith(f'{ids}.')}
+                    if idsdata:
+                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
+                        if ids_struct.has_value:
+                            ids_struct.validate()
+                            idsmap[f'{ids}'] = ids_struct
+                            dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
+                for ids, ids_struct in idsmap.items():
+                    with imas.DBEntry(opath / f'{ids}.nc', 'w', dd_version=dd_version) as netcdf_entry:
+                        netcdf_entry.put(ids_struct)
+                logger.info(f'Saved {self.format} data into {opath.resolve()}')
+            else:
+                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
         else:
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
+
+
+    def _write_imas_hdf5_files_with_core(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        overwrite: bool = False,
+        window: ArrayLike | None = None,
+    ) -> None:
+        pass
+
+
+    def _write_imas_hdf5_files_without_core(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        overwrite: bool = False,
+        window: ArrayLike | None = None,
+    ) -> None:
+        pass
 
 
     def to_eqdsk(
