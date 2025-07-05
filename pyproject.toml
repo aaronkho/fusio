@@ -33,6 +33,7 @@ dependencies = [
   "contourpy",
   "opencv-python",
   "imas-python[netcdf,xarray]",
+  "omas",
 ]
 
 [project.optional-dependencies]
