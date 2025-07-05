@@ -502,7 +502,7 @@ class torax_io(io):
                 dt = xr.open_datatree(ipath)
                 ds_temp = xr.combine_by_coords([dt[key].to_dataset() for key in dt.groups], compat="override")
                 ds = ds_temp if isinstance(ds_temp, xr.Dataset) else ds_temp.to_dataset()
-                newattrs = {}
+                newattrs: MutableMapping[str, Any] = {}
                 for attr in ds.attrs:
                     if isinstance(ds.attrs[attr], str):
                         if ds.attrs[attr].startswith('dict'):
@@ -527,7 +527,7 @@ class torax_io(io):
             opath = Path(path)
             if overwrite or not opath.exists():
                 if isinstance(data, (xr.Dataset, xr.DataTree)):
-                    newattrs = {}
+                    newattrs: MutableMapping[str, Any] = {}
                     for attr in data.attrs:
                         if isinstance(data.attrs[attr], dict):
                             newattrs[attr] = 'dict' + json.dumps(data.attrs[attr])

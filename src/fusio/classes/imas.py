@@ -7,10 +7,10 @@ import numpy as np
 import xarray as xr
 
 import h5py  # type: ignore[import-untyped]
-import imas
-from imas.ids_base import IDSBase
-from imas.ids_structure import IDSStructure
-from imas.ids_struct_array import IDSStructArray
+import imas  # type: ignore[import-untyped]
+from imas.ids_base import IDSBase  # type: ignore[import-untyped]
+from imas.ids_structure import IDSStructure  # type: ignore[import-untyped]
+from imas.ids_struct_array import IDSStructArray  # type: ignore[import-untyped]
 from .io import io
 from ..utils.eqdsk_tools import write_eqdsk
 
@@ -304,6 +304,7 @@ class imas_io(io):
                         return self._read_imas_hdf5_files_without_core(ipath, version=version)
             elif ipath.is_file() and ipath.suffix.lower() in ['.nc', '.ncdf', '.cdf']:
                 return self._read_imas_netcdf_file(ipath, version=version)
+        return xr.Dataset()
 
 
     def _read_imas_netcdf_file(
@@ -411,11 +412,11 @@ class imas_io(io):
         version: str | None = None,
     ) -> xr.Dataset:
 
-        dsvec = []
+        #dsvec = []
 
         ds = xr.Dataset()
-        for dss in dsvec:
-            ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
+        #for dss in dsvec:
+        #    ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
 
         return ds
 
@@ -517,7 +518,7 @@ class imas_io(io):
                 idsmap = {}
                 dd_version = None
                 for ids in self.ids_top_levels:
-                    idsdata = {k[len(ids) + 1:]: v for k, v in datadict.items() if k.startswith(f'{ids}.')}
+                    idsdata = {f'{k}'[len(ids) + 1:]: v for k, v in datadict.items() if f'{k}'.startswith(f'{ids}.')}
                     if idsdata:
                         ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
                         if ids_struct.has_value:
@@ -557,7 +558,7 @@ class imas_io(io):
                 idsmap = {}
                 dd_version = None
                 for ids in self.ids_top_levels:
-                    idsdata = {k[len(ids) + 1:]: v for k, v in datadict.items() if k.startswith(f'{ids}.')}
+                    idsdata = {f'{k}'[len(ids) + 1:]: v for k, v in datadict.items() if f'{k}'.startswith(f'{ids}.')}
                     if idsdata:
                         ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
                         if ids_struct.has_value:

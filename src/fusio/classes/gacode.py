@@ -360,7 +360,7 @@ class gacode_io(io):
 
         coords = {}
         data_vars = {}
-        attrs = {}
+        attrs: MutableMapping[str, Any] = {}
 
         if isinstance(path, (str, Path)):
             ipath = Path(path)
@@ -573,7 +573,7 @@ class gacode_io(io):
                 zeros = np.zeros_like(data.coords['rho_norm'].to_numpy().flatten())
                 coords = {}
                 data_vars = {}
-                attrs = {}
+                attrs: MutableMapping[str, Any] = {}
                 name: list[str] = []
                 coords['n'] = np.array([0], dtype=int)
                 if 'rho_norm' in data.coords:
@@ -825,7 +825,7 @@ class gacode_io(io):
 
                     coords = {}
                     data_vars = {}
-                    attrs = {}
+                    attrs: MutableMapping[str, Any] = {}
 
                     if rho_cp_i in data.dims and rho_cp in data:
                         data = data.isel({time_cp: time_index}).swap_dims({rho_cp_i: rho_cp})
@@ -1103,7 +1103,7 @@ class gacode_io(io):
             data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
             coords = {}
             data_vars = {}
-            attrs = {}
+            attrs: MutableMapping[str, Any] = {}
             if 'xrho' in data.coords:
                 data = data.isel(time=-1)
                 zeros = np.zeros_like(data.coords['xrho'].to_numpy().flatten())
