@@ -7,6 +7,10 @@ import numpy as np
 import xarray as xr
 
 import h5py  # type: ignore[import-untyped]
+import imas  # type: ignore[import-untyped]
+from imas.ids_base import IDSBase  # type: ignore[import-untyped]
+from imas.ids_structure import IDSStructure  # type: ignore[import-untyped]
+from imas.ids_struct_array import IDSStructArray  # type: ignore[import-untyped]
 from .io import io
 from ..utils.eqdsk_tools import write_eqdsk
 
@@ -15,6 +19,131 @@ logger = logging.getLogger('fusio')
 
 class imas_io(io):
 
+    ids_top_levels: Final[Sequence[str]] = [
+        'amns_data',
+        'barometry',
+        'b_field_non_axisymmetric',
+        'bolometer',
+        'bremsstrahlung_visible',
+        'camera_ir',
+        'camera_visible',
+        'camera_x_rays',
+        'charge_exchange',
+        'coils_non_axisymmetric',
+        'controllers',
+        'core_instant_changes',
+        'core_profiles',
+        'core_sources',
+        'core_transport',
+        'cryostat',
+        'dataset_description',
+        'dataset_fair',
+        'disruption',
+        'distributions_sources',
+        'distributions',
+        'divertors',
+        'ec_launchers',
+        'ece',
+        'edge_profiles',
+        'edge_sources',
+        'edge_transport',
+        'em_coupling',
+        'equilibrium',
+        'ferritic',
+        'focs',
+        'gas_injection',
+        'gas_pumping',
+        'gyrokinetics_local',
+        'hard_x_rays',
+        'ic_antennas',
+        'interferometer',
+        'iron_core',
+        'langmuir_probes',
+        'lh_antennas',
+        'magnetics',
+        'operational_instrumentation',
+        'mhd',
+        'mhd_linear',
+        'mse',
+        'nbi',
+        'neutron_diagnostic',
+        'ntms',
+        'pellets',
+        'pf_active',
+        'pf_passive',
+        'pf_plasma',
+        'plasma_initiation',
+        'plasma_profiles',
+        'plasma_sources',
+        'plasma_transport',
+        'polarimeter',
+        'pulse_schedule',
+        'radiation',
+        'real_time_data',
+        'reflectometer_profile',
+        'reflectometer_fluctuation',
+        'refractometer',
+        'runaway_electrons',
+        'sawteeth',
+        'soft_x_rays',
+        'spectrometer_mass',
+        'spectrometer_uv',
+        'spectrometer_visible',
+        'spectrometer_x_ray_crystal',
+        'spi',
+        'summary',
+        'temporary',
+        'thomson_scattering',
+        'tf',
+        'transport_solver_numerics',
+        'turbulence',
+        'wall',
+        'waves',
+        'workflow',
+    ]
+    source_names: Final[Sequence[str]] = [
+        'total',
+        'nbi',
+        'ec',
+        'lh',
+        'ic',
+        'fusion',
+        'ohmic',
+        'bremsstrahlung',
+        'synchrotron_radiation',
+        'line_radiation',
+        'collisional_equipartition',
+        'cold_neutrals',
+        'bootstrap_current',
+        'pellet',
+        'auxiliary',
+        'ic_nbi',
+        'ic_fusion',
+        'ic_nbi_fusion',
+        'ec_lh',
+        'ec_ic',
+        'lh_ic',
+        'ec_lh_ic',
+        'gas_puff',
+        'killer_gas_puff',
+        'radiation',
+        'cyclotron_radiation',
+        'cyclotron_synchrotron_radiation',
+        'impurity_radiation',
+        'particles_to_wall',
+        'particles_to_pump',
+        'charge_exchange',
+        'transport',
+        'neoclassical',
+        'equipartition',
+        'turbulent_equipartition',
+        'runaways',
+        'ionisation',
+        'recombination',
+        'excitation',
+        'database',
+        'gaussian',
+    ]
 
     empty_int: Final[int] = -999999999
     empty_float: Final[float] = -9.0e40
@@ -30,6 +159,7 @@ class imas_io(io):
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        self.has_imas: bool = imas.backends.imas_core.imas_interface.has_imas
         ipath = None
         opath = None
         for arg in args:
@@ -67,287 +197,158 @@ class imas_io(io):
         overwrite: bool = False,
     ) -> None:
         if side == 'input':
-            self._write_imas_file(path, self.input.to_dataset(), overwrite=overwrite)
+            self._write_imas_directory(path, self.input.to_dataset(), overwrite=overwrite)
         else:
-            self._write_imas_file(path, self.output.to_dataset(), overwrite=overwrite)
+            self._write_imas_directory(path, self.output.to_dataset(), overwrite=overwrite)
+
+
+    def _convert_to_ids_structure(
+        self,
+        ids_name: str,
+        data: MutableMapping[str, Any],
+        delimiter: str,
+    ) -> IDSStructure:
+
+        def _recursive_resize_struct_array(
+            ids: IDSBase,
+            components: list[str],
+            size: list[Any],
+        ) -> None:
+            if len(components) > 0:
+                if isinstance(ids, IDSStructArray) and len(components) > 1:
+                    for ii in range(ids.size):
+                        if isinstance(size, np.ndarray) and ii < size.shape[0]:
+                            _recursive_resize_struct_array(ids[ii], components, size[ii])
+                elif isinstance(ids, IDSStructArray) and components[0] == 'AOS_SHAPE':
+                    ids.resize(size[0])
+                else:
+                    _recursive_resize_struct_array(ids[f'{components[0]}'], components[1:], size)
+
+        def _expanded_data_insertion(
+            ids: IDSBase,
+            components: list[str],
+            data: Any,
+        ) -> None:
+            if len(components) > 0:
+                if isinstance(ids, IDSStructArray):
+                    for ii in range(ids.size):
+                        if isinstance(data, np.ndarray) and ii < data.shape[0]:
+                            _expanded_data_insertion(ids[ii], components, data[ii])
+                        elif not isinstance(data, np.ndarray):
+                            _expanded_data_insertion(ids[ii], components, data)
+                elif len(components) == 1:
+                    val = data if not isinstance(data, bytes) else data.decode('utf-8')
+                    if isinstance(val, np.ndarray):
+                        if val.dtype in self.int_types:
+                            val = np.where(val == self.empty_int, np.nan, val)
+                        if val.dtype in self.float_types:
+                            val = np.where(val == self.empty_float, np.nan, val)
+                        #if val.dtype in self.complex_types:
+                        #    val = np.where(val == self.empty_complex, np.nan, val)
+                        if val.ndim == 0:
+                            val = val.item()
+                    ids[f'{components[0]}'] = val
+                else:
+                    _expanded_data_insertion(ids[f'{components[0]}'], components[1:], data)
+
+        dd_version: Any = None
+        if f'ids_properties{delimiter}version_put{delimiter}data_dictionary' in data:
+            dd_version = data[f'ids_properties{delimiter}version_put{delimiter}data_dictionary']
+            if isinstance(dd_version, bytes):
+                dd_version = dd_version.decode('utf-8')
+            elif isinstance(dd_version, np.ndarray):
+                dd_version = dd_version.item()
+        ids_struct = getattr(imas.IDSFactory(version=dd_version), f'{ids_name}')()
+        index_data = {}
+        for key in list(data.keys()):
+            if key.endswith(':i'):
+                vector = data.pop(key)
+                index_data[f'{key[:-2]}'] = vector.size
+        for key in sorted(index_data.keys(), key=len):
+            zeros = np.array([0])
+            prev_key = delimiter.join(key.split(delimiter)[:-1]) if delimiter in key else ''
+            if prev_key in index_data and f'{prev_key}{delimiter}AOS_SHAPE' in data:
+                zeros = np.repeat(np.expand_dims(np.zeros(np.array(data[f'{prev_key}{delimiter}AOS_SHAPE']).shape), axis=-1), index_data[prev_key], axis=-1)
+            data[f'{key}{delimiter}AOS_SHAPE'] = zeros.astype(int) + index_data[key]
+        shape_data = {}
+        for key in list(data.keys()):
+            if key.endswith(f'{delimiter}AOS_SHAPE'):
+                shape_data[key] = data.pop(key)
+            elif key.endswith('_SHAPE'):
+                data.pop(key)
+        for key in sorted(shape_data.keys(), key=len):
+            _recursive_resize_struct_array(ids_struct, key.replace('[]', '').split(delimiter), shape_data[key])
+        for key in data:
+            _expanded_data_insertion(ids_struct, key.replace('[]', '').split(delimiter), data[key])
+
+        return ids_struct
 
 
     def _read_imas_directory(
         self,
         path: str | Path,
+        version: str | None = None,
+    ) -> xr.Dataset:
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)
+            if ipath.is_dir():
+                interface = 'netcdf'
+                if (ipath / 'master.h5').is_file():
+                    interface = 'hdf5'
+                if interface == 'netcdf':
+                    return self._read_imas_netcdf_files(ipath, version=version)
+                if interface == 'hdf5':
+                    if self.has_imas:
+                        return self._read_imas_hdf5_files_with_core(ipath, version=version)
+                    else:
+                        return self._read_imas_hdf5_files_without_core(ipath, version=version)
+            elif ipath.is_file() and ipath.suffix.lower() in ['.nc', '.ncdf', '.cdf']:
+                return self._read_imas_netcdf_file(ipath, version=version)
+        return xr.Dataset()
+
+
+    def _read_imas_netcdf_file(
+        self,
+        path: str | Path,
+        version: str | None = None,
     ) -> xr.Dataset:
 
         dsvec = []
 
         if isinstance(path, (str, Path)):
-            ipath = Path(path)
-            if ipath.is_dir():
-
-                core_profiles_path = ipath / 'core_profiles.h5'
-                core_profiles_data = {}
-                if core_profiles_path.exists():
-                    core_profiles_data = h5py.File(ipath / 'core_profiles.h5')
-                if 'core_profiles' in core_profiles_data:
-                    data = {k: v[()] for k, v in core_profiles_data['core_profiles'].items()}
-                    cp_coords = {}
-                    cp_data_vars = {}
-                    cp_attrs: MutableMapping[str, Any] = {}
-                    if 'time' in data:
-                        cp_coords['time_cp'] = np.atleast_1d(data.pop('time')).flatten()
-                    for key in list(data.keys()):
-                        if key.endswith('&AOS_SHAPE'):
-                            val = data.pop(key)
-                            if key == 'profiles_1d[]&ion[]&AOS_SHAPE' and 'profiles_1d[]&ion[]&label' in data:
-                                cp_coords['ion_cp'] = np.atleast_1d([label.decode('utf-8') for label in data['profiles_1d[]&ion[]&label'][0]]).flatten()
-                                data.pop('profiles_1d[]&ion[]&label')
-                            if key == 'profiles_1d[]&neutral[]&AOS_SHAPE' and 'profiles_1d[]&neutral[]&label' in data:
-                                cp_coords['neut_cp'] = np.atleast_1d([label.decode('utf-8') for label in data['profiles_1d[]&neutral[]&label'][0]]).flatten()
-                                data.pop('profiles_1d[]&neutral[]&label')
-                        elif 'state[]' in key:
-                            data.pop(key)
-                        elif key == 'profiles_1d[]&grid&rho_tor_norm':  # Assumes rho_tor_norm is the constant radial coordinate
-                            cp_coords['rho_cp'] = data.pop(key)[0].flatten()
-                            data.pop(f'{key}_SHAPE')
-                    if 'time_cp' in cp_coords and 'rho_cp' in cp_coords:
-                        timevec = cp_coords['time_cp']
-                        for key, val in data.items():
-                            if not key.endswith('_SHAPE'):
-                                if isinstance(val, np.ndarray):
-                                    if val.dtype in self.int_types:
-                                        val = np.where(val == self.empty_int, np.nan, val)
-                                    if val.dtype in self.float_types:
-                                        val = np.where(val == self.empty_float, np.nan, val)
-                                    #if val.dtype in self.complex_types:
-                                    #    val = np.where(val == self.empty_complex, np.nan, val)
-                                dims = []
-                                components = key.split('&')
-                                if 'profiles_1d[]' in components:
-                                    dims.append('time_cp')
-                                if 'ion[]' in components:
-                                    dims.append('ion_cp')
-                                if 'neutral[]' in components:
-                                    dims.append('neut_cp')
-                                if 'global_quantities' in components:
-                                    dims.append('time_cp')
-                                if 'element[]' in components:
-                                    val = val.squeeze(axis=2) if val.ndim == 3 else None
-                                if f'{key}_SHAPE' in data:
-                                    dims.append('rho_cp')
-                                if isinstance(val, bytes):
-                                    cp_attrs[f'core_profiles&{key}'] = val.decode('utf-8')
-                                elif key == 'ids_properties&homogeneous_time':
-                                    cp_attrs[f'core_profiles&{key}'] = val
-                                elif key == 'vacuum_toroidal_field&b0':
-                                    cp_data_vars[f'core_profiles&{key}'] = (['time_cp'], val)
-                                elif key == 'vacuum_toroidal_field&r0':
-                                    cp_data_vars[f'core_profiles&{key}'] = (['time_cp'], np.repeat(np.atleast_1d([val]), len(timevec), axis=0))
-                                elif isinstance(val, np.ndarray):
-                                    cp_data_vars[f'core_profiles&{key}'] = (dims, val)
-                    if cp_data_vars:
-                        cp_ds = xr.Dataset(coords=cp_coords, data_vars=cp_data_vars, attrs=cp_attrs)
-                        dsvec.append(cp_ds)
-
-                core_sources_path = ipath / 'core_sources.h5'
-                core_sources_data = {}
-                if core_sources_path.exists():
-                    core_sources_data = h5py.File(core_sources_path)
-                if 'core_sources' in core_sources_data:
-                    data = {k: v[()] for k, v in core_sources_data['core_sources'].items()}
-                    cs_coords = {}
-                    cs_data_vars = {}
-                    cs_attrs: MutableMapping[str, Any] = {}
-                    srctags = {}
-                    if 'time' in data:
-                        cs_coords['time_cs'] = np.atleast_1d(data.pop('time')).flatten()
-                    for key in list(data.keys()):
-                        if key.endswith('&AOS_SHAPE'):
-                            val = data.pop(key)
-                            if key == 'source[]&AOS_SHAPE' and 'source[]&identifier&name' in data:
-                                srctags.update({name.decode('utf-8'): ii for ii, name in enumerate(data.pop('source[]&identifier&name'))})
-                                data.pop('source[]&identifier&index')
-                                data.pop('source[]&identifier&description')
-                            if key == 'source[]&profiles_1d[]&ion[]&AOS_SHAPE' and 'source[]&profiles_1d[]&ion[]&label' in data:
-                                cp_coords['ion_cs'] = np.atleast_1d([label.decode('utf-8') for label in data['source[]&profiles_1d[]&ion[]&label'][0, 0, :]]).flatten()
-                                data.pop('source[]&profiles_1d[]&ion[]&label')
-                            if key == 'source[]&profiles_1d[]&neutral[]&AOS_SHAPE' and 'source[]&profiles_1d[]&neutral[]&label' in data:
-                                cp_coords['neut_cs'] = np.atleast_1d([label.decode('utf-8') for label in data['source[]&profiles_1d[]&neutral[]&label'][0]]).flatten()
-                                data.pop('source[]&profiles_1d[]&neutral[]&label')
-                        elif 'state[]' in key:
-                            data.pop(key)
-                        elif key == 'source[]&profiles_1d[]&grid&rho_tor_norm':  # Assumes rho_tor_norm is the constant radial coordinate
-                            cs_coords['rho_cs'] = data.pop(key)[0, 0].flatten()
-                            data.pop(f'{key}_SHAPE')
-                    if 'time_cs' in cs_coords and 'rho_cs' in cs_coords:
-                        timevec = cs_coords['time_cs']
-                        cs_attrs['sources'] = list(srctags.keys())
-                        for key, val in data.items():
-                            if not key.endswith('_SHAPE'):
-                                if isinstance(val, np.ndarray):
-                                    if val.dtype in self.int_types:
-                                        val = np.where(val == self.empty_int, np.nan, val)
-                                    if val.dtype in self.float_types:
-                                        val = np.where(val == self.empty_float, np.nan, val)
-                                    #if val.dtype in self.complex_types:
-                                    #    val = np.where(val == self.empty_complex, np.nan, val)
-                                dims = []
-                                components = key.split('&')
-                                if components[0] == 'source[]':
-                                    if 'element[]' in components:
-                                        val = val.squeeze(axis=2) if val.ndim == 3 else None
-                                    for srctag, ii in srctags.items():
-                                        dims = []
-                                        if 'profiles_1d[]' in components:
-                                            dims.append('time_cs')
-                                        if 'ion[]' in components:
-                                            dims.append('ion_cs')
-                                        if 'neutral[]' in components:
-                                            dims.append('neut_cs')
-                                        if f'{key}_SHAPE' in data:
-                                            dims.append('rho_cs')
-                                        newkey = '&'.join(components[1:])
-                                        if isinstance(val, np.ndarray):
-                                            cs_data_vars[f'core_sources&{srctag}&{newkey}'] = (dims, val[ii, ...])
-                                else:
-                                    if isinstance(val, bytes):
-                                        cs_attrs[f'core_sources&{key}'] = val.decode('utf-8')
-                                    elif key == 'ids_properties&homogeneous_time':
-                                        cs_attrs[f'core_sources&{key}'] = val
-                                    elif key == 'vacuum_toroidal_field&b0':
-                                        cs_data_vars[f'core_sources&{key}'] = (['time_cs'], val)
-                                    elif key == 'vacuum_toroidal_field&r0':
-                                        cs_data_vars[f'core_sources&{key}'] = (['time_cs'], np.repeat(np.atleast_1d([val]), len(timevec), axis=0))
-                                    elif isinstance(val, np.ndarray):
-                                        cs_data_vars[f'core_sources&{key}'] = (dims, val)
-                    if cs_data_vars:
-                        cs_ds = xr.Dataset(coords=cs_coords, data_vars=cs_data_vars, attrs=cs_attrs)
-                        dsvec.append(cs_ds)
-
-                equilibrium_path = ipath / 'equilibrium.h5'
-                equilibrium_data = {}
-                if equilibrium_path.exists():
-                    equilibrium_data = h5py.File(equilibrium_path)
-                if 'equilibrium' in equilibrium_data:
-                    data = {k: v[()] for k, v in equilibrium_data['equilibrium'].items()}
-                    eq_coords = {}
-                    eq_data_vars = {}
-                    eq_attrs: MutableMapping[str, Any] = {}
-                    if 'time' in data:
-                        eq_coords['time_eq'] = np.atleast_1d(data.pop('time')).flatten()
-                    rect2d_idx = None
-                    for key in list(data.keys()):
-                        if key.endswith('&AOS_SHAPE'):
-                            val = data.pop(key)
-                            if key == 'time_slice[]&profiles_2d[]&AOS_SHAPE' and 'time_slice[]&profiles_2d[]&grid_type&name' in data:
-                                for ii, label in enumerate(data.pop('time_slice[]&profiles_2d[]&grid_type&name')[0]):
-                                    if label.decode('utf-8') == 'rectangular':
-                                        rect2d_idx = ii
-                                data.pop('time_slice[]&profiles_2d[]&grid_type&index')
-                                data.pop('time_slice[]&profiles_2d[]&grid_type&description')
-                                if rect2d_idx is not None:
-                                    eq_coords['r_eq'] = data.pop('time_slice[]&profiles_2d[]&grid&dim1')[0, rect2d_idx].flatten()
-                                    data.pop('time_slice[]&profiles_2d[]&grid&dim1_SHAPE')
-                                    eq_coords['z_eq'] = data.pop('time_slice[]&profiles_2d[]&grid&dim2')[0, rect2d_idx].flatten()
-                                    data.pop('time_slice[]&profiles_2d[]&grid&dim2_SHAPE')
-                        elif key == 'time_slice[]&profiles_1d&psi_norm':
-                            eq_coords['psin_eq'] = data.pop('time_slice[]&profiles_1d&psi_norm')[0].flatten()
-                        elif key == 'time_slice[]&profiles_1d&rho_tor_norm' and 'time_slice[]&profiles_1d&psi_norm' not in data:
-                            eq_coords['rho_eq'] = data.pop('time_slice[]&profiles_1d&rho_tor_norm')[0].flatten()
-                        elif key == 'time_slice[]&boundary&outline&r':
-                            if 'i_bdry_eq' not in eq_coords:
-                                eq_coords['i_bdry_eq'] = np.array([j for j in range(len(data['time_slice[]&boundary&outline&r'][0]))], dtype=int).flatten()
-                        elif key == 'time_slice[]&boundary&outline&z':
-                            if 'i_bdry_eq' not in eq_coords:
-                                eq_coords['i_bdry_eq'] = np.array([j for j in range(len(data['time_slice[]&boundary&outline&z'][0]))], dtype=int).flatten()
-                    if 'time_eq' in eq_coords and ('psin_eq' in eq_coords or 'rho_eq' in eq_coords):
-                        timevec = eq_coords['time_eq']
-                        for key, val in data.items():
-                            if not key.endswith('_SHAPE'):
-                                if isinstance(val, np.ndarray):
-                                    if val.dtype in self.int_types:
-                                        val = np.where(val == self.empty_int, np.nan, val)
-                                    if val.dtype in self.float_types:
-                                        val = np.where(val == self.empty_float, np.nan, val)
-                                    #if val.dtype in self.complex_types:
-                                    #    val = np.where(val == self.empty_complex, np.nan, val)
-                                dims = []
-                                components = key.split('&')
-                                if 'time_slice[]' in components:
-                                    dims.append('time_eq')
-                                if 'profiles_1d' in components:
-                                    dims.extend(['psin_eq' if 'psin_eq' in eq_coords else 'rho_eq'])
-                                if 'profiles_2d[]' in components:
-                                    dims.extend(['r_eq', 'z_eq'])
-                                    if rect2d_idx is not None and isinstance(val, np.ndarray):
-                                        components[components.index('profiles_2d[]')] = 'profiles_2d'
-                                        newkey = '&'.join(components)
-                                        eq_data_vars[f'equilibrium&{newkey}'] = (dims, val[:, rect2d_idx, ...])
-                                else:
-                                    if isinstance(val, bytes):
-                                        eq_attrs[f'equilibrium&{key}'] = val.decode('utf-8')
-                                    elif key == 'ids_properties&homogeneous_time':
-                                        eq_attrs[f'equilibrium&{key}'] = val
-                                    elif key == 'vacuum_toroidal_field&b0':
-                                        eq_data_vars[f'equilibrium&{key}'] = (['time_eq'], val)
-                                    elif key == 'vacuum_toroidal_field&r0':
-                                        eq_data_vars[f'equilibrium&{key}'] = (['time_eq'], np.repeat(np.atleast_1d([val]), len(timevec), axis=0))
-                                    elif key == 'time_slice[]&boundary&outline&r' or key == 'time_slice[]&boundary&outline&z':
-                                        dims.append('i_bdry_eq')
-                                        eq_data_vars[f'equilibrium&{key}'] = (dims, val)
-                                    elif isinstance(val, np.ndarray):
-                                        eq_data_vars[f'equilibrium&{key}'] = (dims, val)
-                    if eq_data_vars:
-                        eq_ds = xr.Dataset(coords=eq_coords, data_vars=eq_data_vars, attrs=eq_attrs)
-                        dsvec.append(eq_ds)
-
-                summary_path = ipath / 'summary.h5'
-                summary_data = {}
-                if summary_path.exists():
-                    summary_data = h5py.File(summary_path)
-                if 'summary' in summary_data:
-                    data = {k: v[()] for k, v in summary_data['summary'].items()}
-                    sm_coords = {}
-                    sm_data_vars = {}
-                    sm_attrs: MutableMapping[str, Any] = {}
-                    hcdtags = []
-                    if 'time' in data:
-                        sm_coords['time_sm'] = np.atleast_1d(data.pop('time')).flatten()
-                    for key in list(data.keys()):
-                        if key.endswith('&AOS_SHAPE'):
-                            val = data.pop(key)
-                            components = key.split('&')
-                            if components[0] == 'heating_current_drive' and components[1].endswith('[]'):
-                                hcdtag = components[1][:-2]
-                                sm_coords[f'i_{hcdtag}_sm'] = np.array([j for j in range(val[0])], dtype=int).flatten()
-                                hcdtags.append(hcdtag)
-                    if 'time_sm' in sm_coords:
-                        timevec = sm_coords['time_sm']
-                        for key, val in data.items():
-                            if not key.endswith('_SHAPE'):
-                                if isinstance(val, np.ndarray):
-                                    if val.dtype in self.int_types:
-                                        val = np.where(val == self.empty_int, np.nan, val)
-                                    if val.dtype in self.float_types:
-                                        val = np.where(val == self.empty_float, np.nan, val)
-                                    #if val.dtype in self.complex_types:
-                                    #    val = np.where(val == self.empty_complex, np.nan, val)
-                                dims = []
-                                components = key.split('&')
-                                if components[0] == 'heating_current_drive' and components[1][:-2] in hcdtags:
-                                    dims.append(f'i_{components[1][:-2]}_sm')
-                                if isinstance(val, bytes):
-                                    sm_attrs[f'summary&{key}'] = val.decode('utf-8')
-                                elif key == 'ids_properties&homogeneous_time':
-                                    sm_attrs[f'summary&{key}'] = val
-                                elif key == 'vacuum_toroidal_field&b0':
-                                    sm_data_vars[f'summary&{key}'] = (['time_sm'], val)
-                                elif key == 'vacuum_toroidal_field&r0':
-                                    sm_data_vars[f'summary&{key}'] = (['time_sm'], np.repeat(np.atleast_1d([val]), len(timevec), axis=0))
-                                elif isinstance(val, np.ndarray):
-                                    dims.append('time_sm')
-                                    sm_data_vars[f'summary&{key}'] = (dims, val)
-                    if sm_data_vars:
-                        sm_ds = xr.Dataset(coords=sm_coords, data_vars=sm_data_vars, attrs=sm_attrs)
-                        dsvec.append(sm_ds)
+            ipath = Path(path)  # TODO: Add consideration for db paths
+            if ipath.is_file():
+                idsmap = {}
+                root = xr.load_dataset(ipath)
+                dd_version = root.attrs.get('data_dictionary_version', None)
+                for ids in self.ids_top_levels:
+                    try:
+                        with imas.DBEntry(ipath, 'r', dd_version=dd_version) as netcdf_entry:
+                            idsmap[f'{ids}'] = netcdf_entry.get(f'{ids}')
+                    except Exception:
+                        idsmap.pop(f'{ids}', None)
+                for ids, ids_struct in idsmap.items():
+                    if ids_struct.has_value:
+                        ids_struct.validate()
+                        ds_ids = imas.util.to_xarray(ids_struct)
+                        unique_names = list(set(
+                            [k for k in ds_ids.dims] +
+                            [k for k in ds_ids.coords] +
+                            [k for k in ds_ids.data_vars] +
+                            [k for k in ds_ids.attrs]
+                        ))
+                        newcoords = {}
+                        if ids == 'core_profiles' and 'profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_sources' and 'source.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.source.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_transport' and 'model.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.model.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'equilibrium' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'ntms' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
 
         ds = xr.Dataset()
         for dss in dsvec:
@@ -356,22 +357,242 @@ class imas_io(io):
         return ds
 
 
-    def _write_imas_file(
+    def _read_imas_netcdf_files(
+        self,
+        path: str | Path,
+        version: str | None = None,
+    ) -> xr.Dataset:
+
+        dsvec = []
+
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)  # TODO: Add consideration for db paths
+            if ipath.is_dir():
+                idsmap = {}
+                for ids in self.ids_top_levels:
+                    top_level_path = ipath / f'{ids}.nc'
+                    if top_level_path.is_file():
+                        root = xr.load_dataset(ipath / f'{ids}.nc')
+                        dd_version = root.attrs.get('data_dictionary_version', None)
+                        with imas.DBEntry(ipath / f'{ids}.nc', 'r', dd_version=dd_version) as netcdf_entry:
+                            idsmap[f'{ids}'] = netcdf_entry.get(f'{ids}')
+                for ids, ids_struct in idsmap.items():
+                    if ids_struct.has_value:
+                        ids_struct.validate()
+                        ds_ids = imas.util.to_xarray(ids_struct)
+                        unique_names = list(set(
+                            [k for k in ds_ids.dims] +
+                            [k for k in ds_ids.coords] +
+                            [k for k in ds_ids.data_vars] +
+                            [k for k in ds_ids.attrs]
+                        ))
+                        newcoords = {}
+                        if ids == 'core_profiles' and 'profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_sources' and 'source.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.source.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_transport' and 'model.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.model.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'equilibrium' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'ntms' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
+
+        ds = xr.Dataset()
+        for dss in dsvec:
+            ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
+
+        return ds
+
+
+    def _read_imas_hdf5_files_with_core(
+        self,
+        path: str | Path,
+        version: str | None = None,
+    ) -> xr.Dataset:
+
+        #dsvec = []
+
+        ds = xr.Dataset()
+        #for dss in dsvec:
+        #    ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
+
+        return ds
+
+
+    def _read_imas_hdf5_files_without_core(
+        self,
+        path: str | Path,
+        version: str | None = None,
+    ) -> xr.Dataset:
+
+        dsvec = []
+
+        if isinstance(path, (str, Path)):
+            data: MutableMapping[str, Any] = {}
+            ipath = Path(path)
+            if ipath.is_dir():
+
+                idsmap = {}
+                for ids in self.ids_top_levels:
+                    top_level_path = ipath / f'{ids}.h5'
+                    if top_level_path.is_file():
+                        h5_data = h5py.File(top_level_path)
+                        if f'{ids}' in h5_data:
+                            idsmap[f'{ids}'] = {k: v[()] for k, v in h5_data[f'{ids}'].items()}
+                for ids, idsdata in idsmap.items():
+                    ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='&')
+                    if ids_struct.has_value:
+                        ids_struct.validate()
+                        ds_ids = imas.util.to_xarray(ids_struct)
+                        unique_names = list(set(
+                            [k for k in ds_ids.dims] +
+                            [k for k in ds_ids.coords] +
+                            [k for k in ds_ids.data_vars] +
+                            [k for k in ds_ids.attrs]
+                        ))
+                        newcoords = {}
+                        if ids == 'core_profiles' and 'profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_sources' and 'source.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.source.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'core_transport' and 'model.profiles_1d:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.model.profiles_1d:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'equilibrium' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        if ids == 'ntms' and 'time_slice:i' not in unique_names and 'time' in unique_names:
+                            newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
+                        dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
+
+        ds = xr.Dataset()
+        for dss in dsvec:
+            ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
+
+        return ds
+
+
+    def _write_imas_directory(
         self,
         path: str | Path,
         data: xr.Dataset | xr.DataArray,
-        window: ArrayLike | None = None,
         overwrite: bool = False,
+        window: ArrayLike | None = None,
     ) -> None:
-
-        if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
-            wdata = data.sel(time=-1)
+        if isinstance(path, (str, Path)):
             opath = Path(path)
-            logger.info(f'Saved {self.format} data into {opath.resolve()}')
-            #else:
-            #    logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
+            if opath.suffix.lower() in ['.nc', '.ncdf', '.cdf']:
+                logger.warning(f'Writing multiple IDS structures into a single netcdf file not supported by imas-python. Aborting write...')
+                #self._write_imas_netcdf_file(opath, data, overwrite=overwrite, window=window)
+            else:
+                interface = 'netcdf'
+                if interface == 'netcdf':
+                    self._write_imas_netcdf_files(opath, data, overwrite=overwrite, window=window)
+                if interface == 'hdf5':
+                    if self.has_imas:
+                        self._write_imas_hdf5_files_with_core(opath, data, overwrite=overwrite, window=window)
+                    else:
+                        self._write_imas_hdf5_files_without_core(opath, data, overwrite=overwrite, window=window)
+
+
+    def _write_imas_netcdf_file(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        overwrite: bool = False,
+        window: ArrayLike | None = None,
+    ) -> None:
+        if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
+            opath = Path(path)
+            if not (opath.exists() and not overwrite):
+                opath.parent.mkdir(parents=True, exist_ok=True)
+                datadict = {}
+                datadict.update({k: np.arange(v).astype(int) for k, v in data.sizes.items()})
+                datadict.update({k: v.values for k, v in data.coords.items()})
+                datadict.update({k: v.values for k, v in data.data_vars.items()})
+                datadict.pop('core_profiles.profiles_1d.grid.rho_tor_norm:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_1d.psi:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim1:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim2:i', None)
+                datadict.pop('equilibrium.time_slice.boundary.outline.r:i', None)
+                idsmap = {}
+                dd_version = None
+                for ids in self.ids_top_levels:
+                    idsdata = {f'{k}'[len(ids) + 1:]: v for k, v in datadict.items() if f'{k}'.startswith(f'{ids}.')}
+                    if idsdata:
+                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
+                        if ids_struct.has_value:
+                            ids_struct.validate()
+                            idsmap[f'{ids}'] = ids_struct
+                            dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
+                for ids, ids_struct in idsmap.items():
+                    with imas.DBEntry(opath, 'w', dd_version=dd_version) as netcdf_entry:
+                        netcdf_entry.put(ids_struct)
+                logger.info(f'Saved {self.format} data into {opath.resolve()}')
+            else:
+                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
         else:
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
+
+
+    def _write_imas_netcdf_files(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        overwrite: bool = False,
+        window: ArrayLike | None = None,
+    ) -> None:
+        if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
+            opath = Path(path)
+            if not (opath.exists() and not overwrite):
+                opath.mkdir(parents=True, exist_ok=True)
+                datadict = {}
+                datadict.update({k: np.arange(v).astype(int) for k, v in data.sizes.items()})
+                datadict.update({k: v.values for k, v in data.coords.items()})
+                datadict.update({k: v.values for k, v in data.data_vars.items()})
+                datadict.pop('core_profiles.profiles_1d.grid.rho_tor_norm:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_1d.psi:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim1:i', None)
+                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim2:i', None)
+                datadict.pop('equilibrium.time_slice.boundary.outline.r:i', None)
+                idsmap = {}
+                dd_version = None
+                for ids in self.ids_top_levels:
+                    idsdata = {f'{k}'[len(ids) + 1:]: v for k, v in datadict.items() if f'{k}'.startswith(f'{ids}.')}
+                    if idsdata:
+                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
+                        if ids_struct.has_value:
+                            ids_struct.validate()
+                            idsmap[f'{ids}'] = ids_struct
+                            dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
+                for ids, ids_struct in idsmap.items():
+                    with imas.DBEntry(opath / f'{ids}.nc', 'w', dd_version=dd_version) as netcdf_entry:
+                        netcdf_entry.put(ids_struct)
+                logger.info(f'Saved {self.format} data into {opath.resolve()}')
+            else:
+                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
+        else:
+            logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
+
+
+    def _write_imas_hdf5_files_with_core(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        overwrite: bool = False,
+        window: ArrayLike | None = None,
+    ) -> None:
+        pass
+
+
+    def _write_imas_hdf5_files_without_core(
+        self,
+        path: str | Path,
+        data: xr.Dataset | xr.DataArray,
+        overwrite: bool = False,
+        window: ArrayLike | None = None,
+    ) -> None:
+        pass
 
 
     def to_eqdsk(
@@ -381,93 +602,108 @@ class imas_io(io):
         transpose: bool = False,
     ) -> MutableMapping[str, Any]:
         eqdata: MutableMapping[str, Any] = {}
-        data = self.input.to_dataset().isel(time_eq=time_index) if side == 'input' else self.output.to_dataset().isel(time_eq=time_index)
-        psinvec = data['psin_eq'].to_numpy().flatten() if 'psin_eq' in data else None
-        conversion = None
-        ikwargs = {'fill_value': 'extrapolate'}
-        if psinvec is None:
-            conversion = ((data['equilibrium&time_slice[]&profiles_1d&psi'] - data['equilibrium&time_slice[]&global_quantities&psi_axis']) / (data['equilibrium&time_slice[]&global_quantities&psi_boundary'] - data['equilibrium&time_slice[]&global_quantities&psi_axis'])).to_numpy().flatten()
-        tag = 'r_eq'
+        data = (
+            self.input.to_dataset().isel({'equilibrium.time': time_index})
+            if side == 'input' else
+            self.output.to_dataset().isel({'equilibrium.time': time_index})
+        )
+        rectangular_index = []
+        tag = 'equilibrium.time_slice.profiles_2d.grid_type.name'
         if tag in data:
-            rvec = data[tag].to_numpy().flatten()
-            eqdata['nr'] = rvec.size
-            eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
-            eqdata['rleft'] = float(np.nanmin(rvec))
-            psinvec = np.linspace(0.0, 1.0, len(rvec)).flatten()
-        tag = 'z_eq'
-        if tag in data:
-            zvec = data[tag].to_numpy().flatten()
-            eqdata['nz'] = zvec.size
-            eqdata['zdim'] = float(np.nanmax(zvec) - np.nanmin(zvec))
-            eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
-        tag = 'equilibrium&vacuum_toroidal_field&r0'
-        if tag in data:
-            eqdata['rcentr'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium&vacuum_toroidal_field&b0'
-        if tag in data:
-            eqdata['bcentr'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium&time_slice[]&global_quantities&magnetic_axis&r'
-        if tag in data:
-            eqdata['rmagx'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium&time_slice[]&global_quantities&magnetic_axis&z'
-        if tag in data:
-            eqdata['zmagx'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium&time_slice[]&global_quantities&psi_axis'
-        if tag in data:
-            eqdata['simagx'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium&time_slice[]&global_quantities&psi_boundary'
-        if tag in data:
-            eqdata['sibdry'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium&time_slice[]&global_quantities&ip'
-        if tag in data:
-            eqdata['cpasma'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium&time_slice[]&profiles_1d&f'
-        if tag in data:
-            if conversion is None:
-                eqdata['fpol'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-            else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
-                eqdata['fpol'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
-        tag = 'equilibrium&time_slice[]&profiles_1d&pressure'
-        if tag in data:
-            if conversion is None:
-                eqdata['pres'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-            else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
-                eqdata['pres'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
-        tag = 'equilibrium&time_slice[]&profiles_1d&f_df_dpsi'
-        if tag in data:
-            if conversion is None:
-                eqdata['ffprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-            else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
-                eqdata['ffprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
-        tag = 'equilibrium&time_slice[]&profiles_1d&dpressure_dpsi'
-        if tag in data:
-            if conversion is None:
-                eqdata['pprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-            else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
-                eqdata['pprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
-        tag = 'equilibrium&time_slice[]&profiles_2d&psi'
-        if tag in data:
-            eqdata['psi'] = data[tag].to_numpy() if transpose else data[tag].to_numpy().T
-        tag = 'equilibrium&time_slice[]&profiles_1d&q'
-        if tag in data:
-            if conversion is None:
-                eqdata['qpsi'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-            else:
-                ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
-                eqdata['qpsi'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
-        rtag = 'equilibrium&time_slice[]&boundary&outline&r'
-        ztag = 'equilibrium&time_slice[]&boundary&outline&z'
-        if rtag in data and ztag in data:
-            rdata = data[rtag].dropna('i_bdry_eq').to_numpy().flatten()
-            zdata = data[ztag].dropna('i_bdry_eq').to_numpy().flatten()
-            if len(rdata) == len(zdata):
-                eqdata['nbdry'] = len(rdata)
-                eqdata['rbdry'] = rdata
-                eqdata['zbdry'] = zdata
+            rectangular_index = [i for i, name in enumerate(data[tag]) if name == 'rectangular']
+        if len(rectangular_index) > 0:
+            data = data.isel({'equilibrium.time_slice.profiles_2d:i': rectangular_index[0]})
+            psin_eq = 'equilibrium.time_slice.profiles_1d.psi_norm'
+            psinvec = data[psin_eq].to_numpy().flatten() if psin_eq in data else None
+            conversion = None
+            ikwargs = {'fill_value': 'extrapolate'}
+            if psinvec is None:
+                conversion = (
+                    (data['equilibrium.time_slice.profiles_1d.psi'] - data['equilibrium.time_slice.global_quantities.psi_axis']) /
+                    (data['equilibrium.time_slice.global_quantities.psi_boundary'] - data['equilibrium.time_slice.global_quantities.psi_axis'])
+                ).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_2d.grid.dim1'
+            if tag in data:
+                rvec = data[tag].to_numpy().flatten()
+                eqdata['nr'] = rvec.size
+                eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
+                eqdata['rleft'] = float(np.nanmin(rvec))
+                if psinvec is None:
+                    psinvec = np.linspace(0.0, 1.0, len(rvec)).flatten()
+            tag = 'equilibrium.time_slice.profiles_2d.grid.dim2'
+            if tag in data:
+                zvec = data[tag].to_numpy().flatten()
+                eqdata['nz'] = zvec.size
+                eqdata['zdim'] = float(np.nanmax(zvec) - np.nanmin(zvec))
+                eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
+            tag = 'equilibrium.vacuum_toroidal_field.r0'
+            if tag in data:
+                eqdata['rcentr'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.vacuum_toroidal_field.b0'
+            if tag in data:
+                eqdata['bcentr'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.r'
+            if tag in data:
+                eqdata['rmagx'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
+            if tag in data:
+                eqdata['zmagx'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.psi_axis'
+            if tag in data:
+                eqdata['simagx'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.psi_boundary'
+            if tag in data:
+                eqdata['sibdry'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.ip'
+            if tag in data:
+                eqdata['cpasma'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.profiles_1d.f'
+            if tag in data:
+                if conversion is None:
+                    eqdata['fpol'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['fpol'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_1d.pressure'
+            if tag in data:
+                if conversion is None:
+                    eqdata['pres'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['pres'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
+            if tag in data:
+                if conversion is None:
+                    eqdata['ffprime'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['ffprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
+            if tag in data:
+                if conversion is None:
+                    eqdata['pprime'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['pprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_2d.psi'
+            if tag in data:
+                eqdata['psi'] = data[tag].to_numpy() if transpose else data[tag].to_numpy().T
+            tag = 'equilibrium.time_slice.profiles_1d.q'
+            if tag in data:
+                if conversion is None:
+                    eqdata['qpsi'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['qpsi'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+            rtag = 'equilibrium.time_slice.boundary.outline.r'
+            ztag = 'equilibrium.time_slice.boundary.outline.z'
+            if rtag in data and ztag in data:
+                rdata = data[rtag].dropna('equilibrium.time_slice.boundary.outline.r:i').to_numpy().flatten()
+                zdata = data[ztag].dropna('equilibrium.time_slice.boundary.outline.r:i').to_numpy().flatten()
+                if len(rdata) == len(zdata):
+                    eqdata['nbdry'] = len(rdata)
+                    eqdata['rbdry'] = rdata
+                    eqdata['zbdry'] = zdata
         return eqdata
 
 
@@ -518,15 +754,29 @@ class imas_io(io):
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
+    @classmethod
+    def from_imas(
+        cls,
+        obj: io,
+        side: str = 'output',
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+        return newobj
+
+
     # Assumed that the self creation method transfers output to input
     @classmethod
     def from_gacode(
         cls,
         obj: io,
         side: str = 'output',
+        **kwargs: Any,
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
         return newobj
 

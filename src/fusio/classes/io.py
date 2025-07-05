@@ -109,23 +109,23 @@ class io():
 
     # These functions always assume data is placed on input side of target format
 
-    def to(self, fmt: str) -> Self:
+    def to(self, fmt: str, **kwargs: Any) -> Self:
         try:
             mod = importlib.import_module(f'fusio.classes.{fmt}')
             cls = getattr(mod, f'{fmt}_io')
-            return cls._from(self)
+            return cls._from(self, **kwargs)
         except:
             raise NotImplementedError(f'Direct conversion to {fmt} not implemented.')
 
     @classmethod
-    def _from(cls, obj: Self, side: str = 'output') -> Self | None:
+    def _from(cls, obj: Self, side: str = 'output', **kwargs: Any) -> Self | None:
         newobj = None
         if isinstance(obj, io):
             if hasattr(cls, f'from_{obj.format}'):
                 generator = getattr(cls, f'from_{obj.format}')
                 checker = getattr(cls, f'has_{side}')
                 if checker:
-                    newobj = generator(obj, side=side)
+                    newobj = generator(obj, side=side, **kwargs)
             else:
                 raise NotImplementedError(f'Direct conversion from {obj.format} to {cls.__name__} not implemented.')
         return newobj
