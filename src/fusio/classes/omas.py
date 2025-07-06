@@ -7,6 +7,8 @@ import numpy as np
 import xarray as xr
 
 import json
+import omas
+from omas.omas_core import ODS
 from .io import io
 from ..utils.eqdsk_tools import write_eqdsk
 
@@ -64,6 +66,93 @@ class omas_io(io):
             self._write_omas_json_file(path, self.output.to_dataset(), overwrite=overwrite)
 
 
+    def _convert_to_imas_like_dataset(
+        self,
+        data: ODS,
+    ) -> xr.Dataset:
+
+        def _recursive_array_structure_search(
+            ods: ODS,
+        ) -> MutableMapping[str, Any], MutableMapping[str, Any]:
+            struct_names: MutableMapping[str, Any] = {}
+            field_names: MutableMapping[str, Any] = {}
+            for key, val in ods.items():
+                if isinstance(val, ODS):
+                    if 0 in val:
+                        struct_names[f'{key}'] = len(val)
+                    next_struct_names, next_field_names = _recursive_array_structure_search(val, newtag)
+                    if isinstance(key, int):
+                        struct_names.update({f'{name}': length for name, length in next_struct_names.items() if f'{name}' not in struct_names})
+                        field_names.update({f'{name}': length for name, length in next_field_names.items() if f'{name}' not in field_names})
+                    else:
+                        struct_names.update({f'{key}.{name}': length for name, length in next_struct_names.items() if f'{key}.{name}' not in struct_names})
+                        field_names.update({f'{key}.{name}': length for name, length in next_field_names.items() if f'{key}.{name}' not in field_names})
+                elif isinstance(val, np.ndarray):
+                    field_names[f'{key}'] = [i for i in val.shape]
+                else:
+                    field_names[f'{key}'] = None
+            return struct_names, field_names
+
+        def _recursive_array_field_stack(
+            ods: ODS,
+            field: str,
+        ) -> NDArray:
+            out = np.array([])
+            components = field.split('.')
+            if len(components) > 0:
+                if f'{components[0]}' in ods:
+                    if 0 in ods[f'{components[0]}']:
+                        dvec = []
+                        for ii in range(len(ods[f'{components[0]}'])):
+                            dvec.append(_recursive_array_field_stack(ods[f'{components[0]}'][ii], '.'.join(components[1:])))
+                        out = np.stack(dvec, axis=0)
+                    elif len(components) > 1:
+                        out = _recursive_array_field_stack(ods[f'{components[0]}'], '.'.join(components[1:])))
+                    else:
+                        out = ods[f'{components[0]}'] if isinstance(ods[f'{components[0]}'], np.ndarray) else np.array(ods[f'{components[0]}'])
+            return out
+
+        coords = {}
+        data_vars = {}
+        attrs: MutableMapping[str, Any] = {}
+
+        aos_sizes, data_sizes = _recursive_array_structure_search(data)
+        for key, size in aos_sizes.items():
+            coords[f'{key}:i'] = np.arange(size).astype(int)
+        # TODO: Add data array sizes to data_coordinates list, not determined by structures
+        data_coordinates = [
+            'core_profiles.profiles_1d.grid.rho_tor_norm',
+            'equilibrium.time_slice.profiles_1d.psi',
+            'equilibrium.time_slice.profiles_2d.grid.dim1',
+            'equilibrium.time_slice.profiles_2d.grid.dim2',
+        ]
+        for ctag in data_coordinates:
+            if ctag in data_sizes:
+                coords[f'{ctag}:i'] = np.arange(data_sizes[ctag]).astype(int)
+
+        for key, size in data_sizes.items():
+            dims = []
+            components = key.split('.')
+            long_key = ''
+            for ii in range(len(components)):
+                long_key = '.'.join([comp for i, comp in enumerate(components) if i <= ii])
+                if f'{long_key}:i' in aos_sizes:
+                    dims.append(f'{long_key}:i')
+            # TODO: Use size and components[0] to append data array dims manually added to data_coordinates list
+            if size is not None:
+                if components[0] == 'core_profiles' and 'profiles_1d' in components:
+                    dims.append('core_profiles.profiles_1d.grid.rho_tor_norm:i')
+            val = _recursive_array_field_stack(data, key)
+            if len(components) == 2 and components[-1] == 'time':
+                coords[f'{key}'] = val
+            else:
+                data_vars['f{key}'] = (dims, val)
+                if components[-1] == 'data_dictionary' and components[-2] == 'version_put' and 'data_dictionary_version' not in attrs:
+                    attrs['data_dictionary_version'] = val
+
+        return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+
+
     def _read_omas_json_file(
         self,
         path: str | Path,
@@ -75,8 +164,9 @@ class omas_io(io):
             ipath = Path(path)
             if ipath.exists():
 
-                with open(ipath, 'r') as jsonfile:
-                    data = json.load(jsonfile)
+                #with open(ipath, 'r') as jsonfile:
+                #    data = json.load(jsonfile)
+                data = omas.load_omas_json(ipath)
 
                 if 'core_profiles' in data:
                     cp_coords = {}
