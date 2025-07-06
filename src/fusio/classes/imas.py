@@ -314,6 +314,7 @@ class imas_io(io):
     ) -> xr.Dataset:
 
         dsvec = []
+        attrs: MutableMapping[str, Any] = {}
 
         if isinstance(path, (str, Path)):
             ipath = Path(path)  # TODO: Add consideration for db paths
@@ -321,6 +322,8 @@ class imas_io(io):
                 idsmap = {}
                 root = xr.load_dataset(ipath)
                 dd_version = root.attrs.get('data_dictionary_version', None)
+                if isinstance(dd_version, str) and 'data_dictionary_version' not in attrs:
+                    attrs['data_dictionary_version'] = dd_version
                 for ids in self.ids_top_levels:
                     try:
                         with imas.DBEntry(ipath, 'r', dd_version=dd_version) as netcdf_entry:
@@ -350,7 +353,7 @@ class imas_io(io):
                             newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
                         dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
 
-        ds = xr.Dataset()
+        ds = xr.Dataset(attrs=attrs)
         for dss in dsvec:
             ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
 
@@ -364,6 +367,7 @@ class imas_io(io):
     ) -> xr.Dataset:
 
         dsvec = []
+        attrs: MutableMapping[str, Any] = {}
 
         if isinstance(path, (str, Path)):
             ipath = Path(path)  # TODO: Add consideration for db paths
@@ -374,6 +378,8 @@ class imas_io(io):
                     if top_level_path.is_file():
                         root = xr.load_dataset(ipath / f'{ids}.nc')
                         dd_version = root.attrs.get('data_dictionary_version', None)
+                        if isinstance(dd_version, str) and 'data_dictionary_version' not in attrs:
+                            attrs['data_dictionary_version'] = dd_version
                         with imas.DBEntry(ipath / f'{ids}.nc', 'r', dd_version=dd_version) as netcdf_entry:
                             idsmap[f'{ids}'] = netcdf_entry.get(f'{ids}')
                 for ids, ids_struct in idsmap.items():
@@ -399,7 +405,7 @@ class imas_io(io):
                             newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
                         dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
 
-        ds = xr.Dataset()
+        ds = xr.Dataset(attrs=attrs)
         for dss in dsvec:
             ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
 
@@ -428,6 +434,7 @@ class imas_io(io):
     ) -> xr.Dataset:
 
         dsvec = []
+        attrs: MutableMapping[str, Any] = {}
 
         if isinstance(path, (str, Path)):
             data: MutableMapping[str, Any] = {}
@@ -436,11 +443,14 @@ class imas_io(io):
 
                 idsmap = {}
                 for ids in self.ids_top_levels:
+                    dd_version_tag = 'ids_properties&verions_put&data_dictionary'
                     top_level_path = ipath / f'{ids}.h5'
                     if top_level_path.is_file():
                         h5_data = h5py.File(top_level_path)
                         if f'{ids}' in h5_data:
                             idsmap[f'{ids}'] = {k: v[()] for k, v in h5_data[f'{ids}'].items()}
+                            if isinstance(idsmap[f'{ids}'].get(dd_version_tag, None), bytes) and 'data_dictionary_version' not in attrs:
+                                attrs['data_dictionary_version'] = idsmap[f'{ids}'][dd_version_tag].decode('utf-8')
                 for ids, idsdata in idsmap.items():
                     ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='&')
                     if ids_struct.has_value:
