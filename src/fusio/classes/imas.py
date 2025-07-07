@@ -152,6 +152,19 @@ class imas_io(io):
     float_types: Final[Sequence[Any]] = (float, np.float16, np.float32, np.float64, np.float128)
     #complex_types: Final[Sequence[Any]] = (complex, np.complex64, np.complex128, np.complex256)
 
+    last_index_fields: Final[Sequence[str]] = [
+        'core_profiles.profiles_1d.grid.rho_tor_norm',
+        'core_sources.source.profiles_1d.grid.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_flux.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_d.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_v.rho_tor_norm',
+        'equilibrium.time_slice.profiles_1d.psi',
+        'equilibrium.time_slice.profiles_2d.grid.dim1',
+        'equilibrium.time_slice.profiles_2d.grid.dim2',
+        'equilibrium.time_slice.boundary.outline.r',
+        'wall.description_2d.limiter.unit.outline.r',
+    ]
+
 
     def __init__(
         self,
@@ -207,6 +220,7 @@ class imas_io(io):
         ids_name: str,
         data: MutableMapping[str, Any],
         delimiter: str,
+        version: str | None = None,
     ) -> IDSStructure:
 
         def _recursive_resize_struct_array(
@@ -258,6 +272,8 @@ class imas_io(io):
                 dd_version = dd_version.decode('utf-8')
             elif isinstance(dd_version, np.ndarray):
                 dd_version = dd_version.item()
+        if dd_version is None and isinstance(version, str):
+            dd_version = version
         ids_struct = getattr(imas.IDSFactory(version=dd_version), f'{ids_name}')()
         index_data = {}
         for key in list(data.keys()):
@@ -452,7 +468,7 @@ class imas_io(io):
                             if isinstance(idsmap[f'{ids}'].get(dd_version_tag, None), bytes) and 'data_dictionary_version' not in attrs:
                                 attrs['data_dictionary_version'] = idsmap[f'{ids}'][dd_version_tag].decode('utf-8')
                 for ids, idsdata in idsmap.items():
-                    ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='&')
+                    ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='&', version=attrs.get('data_dictionary_version', None))
                     if ids_struct.has_value:
                         ids_struct.validate()
                         ds_ids = imas.util.to_xarray(ids_struct)
@@ -520,21 +536,19 @@ class imas_io(io):
                 datadict.update({k: np.arange(v).astype(int) for k, v in data.sizes.items()})
                 datadict.update({k: v.values for k, v in data.coords.items()})
                 datadict.update({k: v.values for k, v in data.data_vars.items()})
-                datadict.pop('core_profiles.profiles_1d.grid.rho_tor_norm:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_1d.psi:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim1:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim2:i', None)
-                datadict.pop('equilibrium.time_slice.boundary.outline.r:i', None)
+                for field_name in self.last_index_fields:
+                    datadict.pop(f'{field_name}:i', None)
                 idsmap = {}
-                dd_version = None
+                dd_version = data.attrs.get('data_dictionary_version', None)
                 for ids in self.ids_top_levels:
                     idsdata = {f'{k}'[len(ids) + 1:]: v for k, v in datadict.items() if f'{k}'.startswith(f'{ids}.')}
                     if idsdata:
-                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
+                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.', version=dd_version)
                         if ids_struct.has_value:
                             ids_struct.validate()
                             idsmap[f'{ids}'] = ids_struct
-                            dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
+                            if dd_version is None:
+                                dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
                 for ids, ids_struct in idsmap.items():
                     with imas.DBEntry(opath, 'w', dd_version=dd_version) as netcdf_entry:
                         netcdf_entry.put(ids_struct)
@@ -560,21 +574,19 @@ class imas_io(io):
                 datadict.update({k: np.arange(v).astype(int) for k, v in data.sizes.items()})
                 datadict.update({k: v.values for k, v in data.coords.items()})
                 datadict.update({k: v.values for k, v in data.data_vars.items()})
-                datadict.pop('core_profiles.profiles_1d.grid.rho_tor_norm:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_1d.psi:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim1:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim2:i', None)
-                datadict.pop('equilibrium.time_slice.boundary.outline.r:i', None)
+                for field_name in self.last_index_fields:
+                    datadict.pop(f'{field_name}:i', None)
                 idsmap = {}
-                dd_version = None
+                dd_version = data.attrs.get('data_dictionary_version', None)
                 for ids in self.ids_top_levels:
                     idsdata = {f'{k}'[len(ids) + 1:]: v for k, v in datadict.items() if f'{k}'.startswith(f'{ids}.')}
                     if idsdata:
-                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
+                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.', version=dd_version)
                         if ids_struct.has_value:
                             ids_struct.validate()
                             idsmap[f'{ids}'] = ids_struct
-                            dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
+                            if dd_version is None:
+                                dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
                 for ids, ids_struct in idsmap.items():
                     with imas.DBEntry(opath / f'{ids}.nc', 'w', dd_version=dd_version) as netcdf_entry:
                         netcdf_entry.put(ids_struct)
@@ -774,6 +786,35 @@ class imas_io(io):
         newobj = cls()
         if isinstance(obj, io):
             newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+        return newobj
+
+
+    @classmethod
+    def from_omas(
+        cls,
+        obj: io,
+        side: str = 'output',
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            # TODO: Should compress down last_index_fields to true coordinates and set rho values as actual dimensions
+            top_levels = {}
+            for key in data.coords:
+                components = key.split('.')
+                if components[0] not in top_levels:
+                    top_levels[f'{components[0]}'] = 1
+            for level in top_levels:
+                n_time_coords = 0
+                for key in data.coords:
+                    components = key.split('.')
+                    if len(components) > 1 and components[0] == level and components[-1] == 'time':
+                        n_time_coords += 1
+                if n_time_coords > 1:
+                    top_levels[level] = 0
+            data = data.assign({f'{k}.ids_properties.homogeneous_time': ([], np.array(v)) for k, v in top_levels.items()})
+            newobj.input = data
         return newobj
 
 
