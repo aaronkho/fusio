@@ -789,6 +789,7 @@ class gacode_io(io):
         side: str = 'output',
         window: Sequence[int | float] | None = None,
         transpose_equilibrium: bool = False,
+        jetto_style: bool = False,
         **kwargs: Any,
     ) -> Self:
 
@@ -796,6 +797,7 @@ class gacode_io(io):
         if isinstance(obj, io):
 
             data: xr.Dataset = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            obj_cocos = obj.input_cocos if side == 'input' else obj.output_cocos
             time_cp = 'core_profiles.time'
             rho_cp_i = 'core_profiles.profiles_1d.grid.rho_tor_norm:i'
             rho_cp = 'core_profiles.profiles_1d.grid.rho_tor_norm'
@@ -812,8 +814,12 @@ class gacode_io(io):
             rho_cs = 'core_sources.source.profiles_1d.grid.rho_tor_norm'
             ion_cs_i = 'core_sources.source.profiles_1d.ion:i'
             ion_cs = 'core_sources.source.profiles_1d.ion.label'
-            cocos = define_cocos_converter(17, 2)  # Assumed IMAS=17 -> GACODE=2
             ikwargs = {'fill_value': 'extrapolate'}
+
+            cocos_out = 2   # Assumed GACODE has COCOS=2
+            if jetto_style and obj_cocos == 11:
+                cocos_out = 8
+            cocos = define_cocos_converter(obj_cocos, cocos_out)
 
             dsvec = []
 
@@ -828,7 +834,7 @@ class gacode_io(io):
                     attrs: MutableMapping[str, Any] = {}
 
                     if rho_cp_i in data.dims and rho_cp in data:
-                        data = data.isel({time_cp: time_index}).swap_dims({rho_cp_i: rho_cp})
+                        data = data.isel({time_cp: time_index}).swap_dims({rho_cp_i: rho_cp}).drop_duplicates(rho_cp)
                         if ion_cp_i in data.dims and ion_cp in data:
                             data = data.swap_dims({ion_cp_i: ion_cp})
                         coords['n'] = np.array([i], dtype=int)
@@ -902,17 +908,20 @@ class gacode_io(io):
                         tag = 'core_profiles.profiles_1d.grid.rho_tor'
                         if tag in data and 'core_profiles.vacuum_toroidal_field.b0' in data:
                             torflux = data[tag].interp({rho_cp: np.array([1.0])}, kwargs=ikwargs) ** 2.0 / (np.pi * data['core_profiles.vacuum_toroidal_field.b0'])
-                            data_vars['torfluxa'] = (['n'], torflux.to_numpy().flatten())
+                            data_vars['torfluxa'] = (['n'], cocos['scyl'] * torflux.to_numpy().flatten())
 
                     if time_eq in data.coords and psi_eq_i in data.dims and rho_eq in data and 'rho' in coords:
-                        data = data.interp({time_eq: time.item(i)}, kwargs=ikwargs).swap_dims({psi_eq_i: rho_eq})
+                        data = data.interp({time_eq: time.item(i)}, kwargs=ikwargs) if data[time_eq].size > 1 else data.isel({time_eq: 0})
+                        data = data.swap_dims({psi_eq_i: rho_eq}).drop_duplicates(rho_eq)
                         eqdsk_data = obj.to_eqdsk(time_index=time_index, side=side, transpose=transpose_equilibrium) if hasattr(obj, 'to_eqdsk') else {}
                         rhovec = data.get(rho_eq, xr.DataArray()).to_numpy().flatten()
+                        psivec = None
                         tag = 'equilibrium.time_slice.profiles_1d.psi'
                         if tag in data:
                             #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'psi': (['rho_int'], data[tag].to_numpy().flatten())})
                             #data_vars['polflux'] = (['n', 'rho'], np.expand_dims(ndata['psi'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['polflux'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            psivec = data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy()
+                            data_vars['polflux'] = (['n', 'rho'], np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * np.expand_dims(psivec, axis=0))
                         tag = 'equilibrium.vacuum_toroidal_field.r0'
                         if tag in data:
                             data_vars['rcentr'] = (['n'], np.atleast_1d(data[tag].to_numpy()))
@@ -923,14 +932,15 @@ class gacode_io(io):
                         if tag in data and 'ptot' not in data_vars:
                             #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'pressure': (['rho_int'], data[tag].to_numpy().flatten())})
                             #data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ndata['pressure'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['ptot'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['ptot'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         tag = 'equilibrium.time_slice.profiles_1d.q'
                         if tag in data and 'q' not in data_vars:
                             #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'q': (['rho_int'], data[tag].to_numpy().flatten())})
                             #data_vars['q'] = (['n', 'rho'], np.expand_dims(ndata['q'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['q'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['q'] = (['n', 'rho'], cocos['spol'] * np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         if eqdsk_data:
-                            psivec = data_vars['polflux'][1].flatten() if 'polflux' in data_vars else np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], len(coords['rho']))
+                            if psivec is None:
+                                psivec = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], len(coords['rho']))
                             mxh_data = newobj._calculate_geometry_from_eqdsk(eqdsk_data, psivec)
                             data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmaj']), axis=0))
                             data_vars['rmin'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmin']), axis=0))
@@ -951,7 +961,7 @@ class gacode_io(io):
                             data_vars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
                         tag = 'equilibrium.time_slice.global_quantities.ip'
                         if tag in data:
-                            data_vars['current'] = (['n'], np.atleast_1d(data[tag].to_numpy()))
+                            data_vars['current'] = (['n'], 1.0e-6 * cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
                         itag = 'equilibrium.time_slice.profiles_1d.r_inboard'
                         otag = 'equilibrium.time_slice.profiles_1d.r_outboard'
                         if itag in data and otag in data and ('rmaj' not in data_vars or 'rmin' not in data_vars):
@@ -983,9 +993,10 @@ class gacode_io(io):
                             #data['delta(-)'] = tri / float(itri) if itri > 0 else tri
 
                     if time_cs in data.coords and src_cs_i in data.dims and src_cs in data and rho_cs_i in data.dims and rho_cs in data and 'rho' in coords:
-                        data = data.interp({time_cs: time.item(i)}, kwargs=ikwargs).swap_dims({src_cs_i: src_cs})
-                        if ion_cs_i in data.dims and ion_cs in data:
-                            data = data.swap_dims({ion_cs_i: ion_cs})
+                        data = data.interp({time_cs: time.item(i)}, kwargs=ikwargs) if data[time_cs].size > 1 else data.isel({time_cs: 0})
+                        data = data.swap_dims({src_cs_i: src_cs})
+                        #if ion_cs_i in data.dims and ion_cs in data:
+                        #    data = data.swap_dims({ion_cs_i: ion_cs})
                         srclist = data[src_cs].to_numpy().tolist()
                         qrfe = np.zeros((len(coords['rho']), ))
                         qrfi = np.zeros((len(coords['rho']), ))
@@ -994,87 +1005,87 @@ class gacode_io(io):
                         if tag in data:
                             srctag = 'ohmic'
                             if srctag in srclist:
-                                data_vars['qohme'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qohme'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'ec'
                             if srctag in srclist:
-                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'ic'
                             if srctag in srclist:
-                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'lh'
                             if srctag in srclist:
-                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'nbi'
                             if srctag in srclist:
-                                data_vars['qbeame'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qbeame'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'synchrotron_radiation'
                             if srctag in srclist:
-                                data_vars['qsync'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qsync'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'radiation'
                             if srctag in srclist:
-                                data_vars['qline'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qline'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'bremsstrahlung'
                             if srctag in srclist:
-                                data_vars['qbrem'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qbrem'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'fusion'
                             if srctag in srclist:
-                                data_vars['qfuse'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qfuse'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'collisional_equipartition'
                             if srctag in srclist:
-                                data_vars['qei'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qei'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         if 'qbrem' not in data_vars:  # Why single this one out randomly?
                             data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(np.zeros_like(coords['rho']), axis=0))
                         tag = 'core_sources.source.profiles_1d.total_ion_energy'
                         if tag in data:
                             srctag = 'ic'
                             if srctag in srclist:
-                                qrfi += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                                qrfi += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'lh'
                             if srctag in srclist:
-                                qrfi += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                                qrfi += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'nbi'
                             if srctag in srclist:
-                                data_vars['qbeami'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qbeami'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'charge_exchange'
                             if srctag in srclist:
-                                data_vars['qcxi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qcxi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'fusion'
                             if srctag in srclist:
-                                data_vars['qfusi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qfusi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         tag = 'core_sources.source.profiles_1d.j_parallel'
                         if tag in data:
                             srctag = 'ohmic'
                             if srctag in srclist and 'johm' not in data_vars:
-                                data_vars['johm'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['johm'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             srctag = 'j_bootstrap'
                             if srctag in srclist and 'jbs' not in data_vars:
-                                data_vars['jbs'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['jbs'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                                 #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
                             srctag = 'ec'
                             if srctag in srclist:
-                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'ic'
                             if srctag in srclist:
-                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'lh'
                             if srctag in srclist:
-                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'nbi'
                             if srctag in srclist:
-                                data_vars['jnb'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['jnb'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         tag = 'core_sources.source.profiles_1d.ion.particles'
-                        if tag in data and ion_cs in data.coords:
+                        if tag in data and ion_cs_i in data.coords:
                             srctag = 'cold_neutrals'
                             if srctag in srclist:
-                                data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs).to_numpy(), axis=0))
+                                data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy(), axis=0))
                             srctag = 'nbi'
                             if srctag in srclist:
-                                data_vars['qpar_beam'] = (['n', 'rho'], np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs).to_numpy(), axis=0))
+                                data_vars['qpar_beam'] = (['n', 'rho'], np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy(), axis=0))
                         tag = 'core_sources.source.profiles_1d.momentum_tor'
                         if tag in data:
                             srctag = 'nbi'
                             if srctag in srclist:
-                                data_vars['qmom'] = (['n', 'rho'], cocos['scyl'] * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qmom'] = (['n', 'rho'], cocos['scyl'] * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         if np.abs(qrfe).sum() > 0.0:
                             data_vars['qrfe'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(qrfe, axis=0))
                         if np.abs(qrfi).sum() > 0.0:
