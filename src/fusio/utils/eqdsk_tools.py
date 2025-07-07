@@ -109,13 +109,13 @@ def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int
     if 'bcentr' in eqdsk:
         out['bcentr'] = copy.deepcopy(eqdsk['bcentr']) * sBt
         if bt_sign_out is not None:
-            out['bcentr'] *= np.sign(out['bcentr']) * np.sign(bt_sign_out)
             sBt *= int(np.sign(out['bcentr']) * np.sign(bt_sign_out))
+            out['bcentr'] *= np.sign(out['bcentr']) * np.sign(bt_sign_out)
     if 'cpasma' in eqdsk:
         out['cpasma'] = copy.deepcopy(eqdsk['cpasma']) * sIp
         if ip_sign_out is not None:
-            out['cpasma'] *= np.sign(out['cpasma']) * np.sign(ip_sign_out)
             sIp *= int(np.sign(out['cpasma']) * np.sign(ip_sign_out))
+            out['cpasma'] *= np.sign(out['cpasma']) * np.sign(ip_sign_out)
     if 'simagx' in eqdsk:
         out['simagx'] = copy.deepcopy(eqdsk['simagx']) * np.power(2.0 * np.pi, sign_dict['eBp']) * sign_dict['sBp'] * sIp
     if 'sibdry' in eqdsk:
@@ -133,9 +133,11 @@ def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int
     if 'qpsi' in eqdsk:
         out['qpsi'] = copy.deepcopy(eqdsk['qpsi']) * sign_dict['spol'] * sIp * sBt
     if 'rlim' in eqdsk and 'zlim' in eqdsk:
+        out['nlim'] = copy.deepcopy(eqdsk['nlim'])
         out['rlim'] = copy.deepcopy(eqdsk['rlim'])
         out['zlim'] = copy.deepcopy(eqdsk['zlim'])
     if 'rbdry' in eqdsk and 'zbdry' in eqdsk:
+        out['nbdry'] = copy.deepcopy(eqdsk['nbdry'])
         out['rbdry'] = copy.deepcopy(eqdsk['rbdry'])
         out['zbdry'] = copy.deepcopy(eqdsk['zbdry'])
     return out
