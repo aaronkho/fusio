@@ -682,38 +682,44 @@ class imas_io(io):
             tag = 'equilibrium.time_slice.profiles_1d.f'
             if tag in data:
                 if conversion is None:
-                    eqdata['fpol'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['fpol'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['fpol'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.pressure'
             if tag in data:
                 if conversion is None:
-                    eqdata['pres'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['pres'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['pres'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
             if tag in data:
                 if conversion is None:
-                    eqdata['ffprime'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['ffprime'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['ffprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
             if tag in data:
                 if conversion is None:
-                    eqdata['pprime'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['pprime'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['pprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_2d.psi'
             if tag in data:
-                eqdata['psi'] = data[tag].to_numpy() if transpose else data[tag].to_numpy().T
+                dims = data[tag].dims
+                dim1_tag = [dim for dim in dims if 'dim1' in dim][0]
+                dim2_tag = [dim for dim in dims if 'dim2' in dim][0]
+                do_transpose = bool(dims.index(dim1_tag) < dims.index(dim2_tag))
+                if transpose:
+                    do_transpose = bool(not do_transpose)
+                eqdata['psi'] = data[tag].to_numpy().T if do_transpose else data[tag].to_numpy()
             tag = 'equilibrium.time_slice.profiles_1d.q'
             if tag in data:
                 if conversion is None:
-                    eqdata['qpsi'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['qpsi'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['qpsi'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
