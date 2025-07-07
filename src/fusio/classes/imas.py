@@ -6,13 +6,17 @@ from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
 
+from packaging.version import Version
 import h5py  # type: ignore[import-untyped]
 import imas  # type: ignore[import-untyped]
 from imas.ids_base import IDSBase  # type: ignore[import-untyped]
 from imas.ids_structure import IDSStructure  # type: ignore[import-untyped]
 from imas.ids_struct_array import IDSStructArray  # type: ignore[import-untyped]
 from .io import io
-from ..utils.eqdsk_tools import write_eqdsk
+from ..utils.eqdsk_tools import (
+    convert_cocos,
+    write_eqdsk,
+)
 
 logger = logging.getLogger('fusio')
 
@@ -144,10 +148,12 @@ class imas_io(io):
         'database',
         'gaussian',
     ]
+    default_cocos_3: Final[int] = 11
+    default_cocos_4: Final[int] = 17
 
-    empty_int: Final[int] = -999999999
-    empty_float: Final[float] = -9.0e40
-    #empty_complex: Final[complex] = -9.0e40-9.0e40j  # Removed since complex type cannot be JSON serialized
+    empty_int: Final[int] = imas.ids_defs.EMPTY_INT
+    empty_float: Final[float] = imas.ids_defs.EMPTY_FLOAT
+    #empty_complex: Final[complex] = imas.ids_defs.EMPTY_COMPLEX  # Removed since complex type cannot be JSON serialized
     int_types: Final[Sequence[Any]] = (int, np.int8, np.int16, np.int32, np.int64)
     float_types: Final[Sequence[Any]] = (float, np.float16, np.float32, np.float64, np.float128)
     #complex_types: Final[Sequence[Any]] = (complex, np.complex64, np.complex128, np.complex256)
@@ -617,10 +623,27 @@ class imas_io(io):
         pass
 
 
+    @property
+    def input_cocos(
+        self,
+    ) -> int:
+        version = self.input.to_dataset().attrs.get('data_dictionary_version', imas.dd_zip.latest_dd_version())
+        return self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
+
+
+    @property
+    def output_cocos(
+        self,
+    ) -> int:
+        version = self.output.to_dataset().attrs.get('data_dictionary_version', imas.dd_zip.latest_dd_version())
+        return self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
+
+
     def to_eqdsk(
         self,
         time_index: int = -1,
         side: str = 'output',
+        cocos: int | None = None,
         transpose: bool = False,
     ) -> MutableMapping[str, Any]:
         eqdata: MutableMapping[str, Any] = {}
@@ -629,6 +652,9 @@ class imas_io(io):
             if side == 'input' else
             self.output.to_dataset().isel({'equilibrium.time': time_index})
         )
+        default_cocos = self.input_cocos if side == 'input' else self.output_cocos
+        if cocos is None:
+            cocos = default_cocos
         rectangular_index = []
         tag = 'equilibrium.time_slice.profiles_2d.grid_type.name'
         if tag in data:
@@ -732,6 +758,7 @@ class imas_io(io):
                     eqdata['nbdry'] = len(rdata)
                     eqdata['rbdry'] = rdata
                     eqdata['zbdry'] = zdata
+            eqdata = convert_cocos(eqdata, cocos_in=default_cocos, cocos_out=cocos, bt_sign_out=None, ip_sign_out=None)
         return eqdata
 
 
@@ -740,13 +767,14 @@ class imas_io(io):
         path: str | Path,
         time_index: int = -1,
         side: str = 'output',
+        cocos: int | None = None,
         transpose: bool = False,
     ) -> None:
         eqpath = None
         if isinstance(path, (str, Path)):
             eqpath = Path(path)
         assert isinstance(eqpath, Path)
-        eqdata = self.to_eqdsk(time_index=time_index, side=side, transpose=transpose)
+        eqdata = self.to_eqdsk(time_index=time_index, side=side, cocos=cocos, transpose=transpose)
         write_eqdsk(eqdata, eqpath)
         logger.info('Successfully generated g-eqdsk file, {path}')
 
@@ -755,13 +783,14 @@ class imas_io(io):
         self,
         basepath: str | Path,
         side: str = 'output',
+        cocos: int | None = None,
         transpose: bool = False,
     ) -> None:
         path = None
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
         assert isinstance(path, Path)
-        data = self.input if side == 'input' else self.output
+        data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
         if 'time_eq' in data.coords:
             for ii, time in enumerate(data['time_eq'].to_numpy().flatten()):
                 stem = f'{path.stem}'
@@ -769,7 +798,7 @@ class imas_io(io):
                     stem = stem[:-6]
                 time_tag = int(np.rint(time * 1000))
                 eqpath = path.parent / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
-                self.generate_eqdsk_file(eqpath, time_index=ii, side=side, transpose=transpose)
+                self.generate_eqdsk_file(eqpath, time_index=ii, side=side, cocos=cocos, transpose=transpose)
 
 
     @classmethod
