@@ -647,10 +647,11 @@ class imas_io(io):
         transpose: bool = False,
     ) -> MutableMapping[str, Any]:
         eqdata: MutableMapping[str, Any] = {}
+        time_eq = 'equilibrium.time'
         data = (
-            self.input.to_dataset().isel({'equilibrium.time': time_index})
+            self.input.to_dataset().isel({time_eq: time_index})
             if side == 'input' else
-            self.output.to_dataset().isel({'equilibrium.time': time_index})
+            self.output.to_dataset().isel({time_eq: time_index})
         )
         default_cocos = self.input_cocos if side == 'input' else self.output_cocos
         if cocos is None:
@@ -791,8 +792,9 @@ class imas_io(io):
             path = Path(basepath)
         assert isinstance(path, Path)
         data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
-        if 'time_eq' in data.coords:
-            for ii, time in enumerate(data['time_eq'].to_numpy().flatten()):
+        time_eq = 'equilibrium.time'
+        if time_eq in data:
+            for ii, time in enumerate(data[time_eq].to_numpy().flatten()):
                 stem = f'{path.stem}'
                 if stem.endswith('_input'):
                     stem = stem[:-6]
