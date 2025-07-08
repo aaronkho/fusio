@@ -7,7 +7,7 @@ from numpy.typing import ArrayLike, NDArray
 import numpy as np
 from scipy.integrate import quad  # type: ignore[import-untyped]
 import contourpy
-import cv2
+from shapely import Point, Polygon  # type: ignore[import-untyped]
 
 logger = logging.getLogger('fusio')
 
@@ -142,16 +142,15 @@ def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int
 
 
 def trace_flux_surfaces(r: NDArray, z: NDArray, psi: NDArray, levels: NDArray, axis: Sequence[float] | None = None) -> MutableMapping[float, Any]:
-    check = tuple([np.float32(i) for i in axis]) if isinstance(axis, (list, tuple)) else (np.mean(r).astype(np.float32), np.mean(z).astype(np.float32))
+    check = Point(axis) if isinstance(axis, (list, tuple, np.ndarray)) else Point(np.mean(r), np.mean(z))
     cg_psi = contourpy.contour_generator(r, z, psi)
     contours = {}
     for level in levels:
         vertices = cg_psi.create_contour(level)
         for i in range(len(vertices)):
             if vertices[i] is not None:
-                segment = np.array(vertices[i])
-                enclosed = cv2.pointPolygonTest(segment.reshape(-1, 1, 2).astype(np.float32), check, False)  # type: ignore[arg-type]
-                if enclosed > 0:
+                polygon = Polygon(np.array(vertices[i]))
+                if polygon.contains(check):
                     contours[float(level)] = vertices[i].copy()
                     break
     return contours

@@ -31,7 +31,7 @@ dependencies = [
   "xarray",
   "h5py",
   "contourpy",
-  "opencv-python",
+  "shapely",
   "imas-python[netcdf,xarray]",
 ]
 
