@@ -532,3 +532,14 @@ class omas_io(io):
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
+    @classmethod
+    def from_omas(
+        cls,
+        obj: io,
+        side: str = 'output',
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+        return newobj
