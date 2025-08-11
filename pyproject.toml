@@ -33,6 +33,7 @@ dependencies = [
   "contourpy",
   "shapely",
   "imas-python[netcdf,xarray]",
+  "omas",
 ]
 
 [project.optional-dependencies]

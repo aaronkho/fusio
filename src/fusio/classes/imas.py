@@ -6,13 +6,17 @@ from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
 
+from packaging.version import Version
 import h5py  # type: ignore[import-untyped]
 import imas  # type: ignore[import-untyped]
 from imas.ids_base import IDSBase  # type: ignore[import-untyped]
 from imas.ids_structure import IDSStructure  # type: ignore[import-untyped]
 from imas.ids_struct_array import IDSStructArray  # type: ignore[import-untyped]
 from .io import io
-from ..utils.eqdsk_tools import write_eqdsk
+from ..utils.eqdsk_tools import (
+    convert_cocos,
+    write_eqdsk,
+)
 
 logger = logging.getLogger('fusio')
 
@@ -144,13 +148,28 @@ class imas_io(io):
         'database',
         'gaussian',
     ]
+    default_cocos_3: Final[int] = 11
+    default_cocos_4: Final[int] = 17
 
-    empty_int: Final[int] = -999999999
-    empty_float: Final[float] = -9.0e40
-    #empty_complex: Final[complex] = -9.0e40-9.0e40j  # Removed since complex type cannot be JSON serialized
+    empty_int: Final[int] = imas.ids_defs.EMPTY_INT
+    empty_float: Final[float] = imas.ids_defs.EMPTY_FLOAT
+    #empty_complex: Final[complex] = imas.ids_defs.EMPTY_COMPLEX  # Removed since complex type cannot be JSON serialized
     int_types: Final[Sequence[Any]] = (int, np.int8, np.int16, np.int32, np.int64)
     float_types: Final[Sequence[Any]] = (float, np.float16, np.float32, np.float64, np.float128)
     #complex_types: Final[Sequence[Any]] = (complex, np.complex64, np.complex128, np.complex256)
+
+    last_index_fields: Final[Sequence[str]] = [
+        'core_profiles.profiles_1d.grid.rho_tor_norm',
+        'core_sources.source.profiles_1d.grid.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_flux.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_d.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_v.rho_tor_norm',
+        'equilibrium.time_slice.profiles_1d.psi',
+        'equilibrium.time_slice.profiles_2d.grid.dim1',
+        'equilibrium.time_slice.profiles_2d.grid.dim2',
+        'equilibrium.time_slice.boundary.outline.r',
+        'wall.description_2d.limiter.unit.outline.r',
+    ]
 
 
     def __init__(
@@ -207,6 +226,7 @@ class imas_io(io):
         ids_name: str,
         data: MutableMapping[str, Any],
         delimiter: str,
+        version: str | None = None,
     ) -> IDSStructure:
 
         def _recursive_resize_struct_array(
@@ -258,6 +278,8 @@ class imas_io(io):
                 dd_version = dd_version.decode('utf-8')
             elif isinstance(dd_version, np.ndarray):
                 dd_version = dd_version.item()
+        if dd_version is None and isinstance(version, str):
+            dd_version = version
         ids_struct = getattr(imas.IDSFactory(version=dd_version), f'{ids_name}')()
         index_data = {}
         for key in list(data.keys()):
@@ -314,6 +336,7 @@ class imas_io(io):
     ) -> xr.Dataset:
 
         dsvec = []
+        attrs: MutableMapping[str, Any] = {}
 
         if isinstance(path, (str, Path)):
             ipath = Path(path)  # TODO: Add consideration for db paths
@@ -321,6 +344,8 @@ class imas_io(io):
                 idsmap = {}
                 root = xr.load_dataset(ipath)
                 dd_version = root.attrs.get('data_dictionary_version', None)
+                if isinstance(dd_version, str) and 'data_dictionary_version' not in attrs:
+                    attrs['data_dictionary_version'] = dd_version
                 for ids in self.ids_top_levels:
                     try:
                         with imas.DBEntry(ipath, 'r', dd_version=dd_version) as netcdf_entry:
@@ -350,7 +375,7 @@ class imas_io(io):
                             newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
                         dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
 
-        ds = xr.Dataset()
+        ds = xr.Dataset(attrs=attrs)
         for dss in dsvec:
             ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
 
@@ -364,6 +389,7 @@ class imas_io(io):
     ) -> xr.Dataset:
 
         dsvec = []
+        attrs: MutableMapping[str, Any] = {}
 
         if isinstance(path, (str, Path)):
             ipath = Path(path)  # TODO: Add consideration for db paths
@@ -374,6 +400,8 @@ class imas_io(io):
                     if top_level_path.is_file():
                         root = xr.load_dataset(ipath / f'{ids}.nc')
                         dd_version = root.attrs.get('data_dictionary_version', None)
+                        if isinstance(dd_version, str) and 'data_dictionary_version' not in attrs:
+                            attrs['data_dictionary_version'] = dd_version
                         with imas.DBEntry(ipath / f'{ids}.nc', 'r', dd_version=dd_version) as netcdf_entry:
                             idsmap[f'{ids}'] = netcdf_entry.get(f'{ids}')
                 for ids, ids_struct in idsmap.items():
@@ -399,7 +427,7 @@ class imas_io(io):
                             newcoords[f'{ids}.time_slice:i'] = np.arange(ds_ids['time'].size).astype(int)
                         dsvec.append(ds_ids.rename({k: f'{ids}.{k}' for k in unique_names}).assign_coords(newcoords))
 
-        ds = xr.Dataset()
+        ds = xr.Dataset(attrs=attrs)
         for dss in dsvec:
             ds = ds.assign_coords(dss.coords).assign(dss.data_vars).assign_attrs(**dss.attrs)
 
@@ -428,6 +456,7 @@ class imas_io(io):
     ) -> xr.Dataset:
 
         dsvec = []
+        attrs: MutableMapping[str, Any] = {}
 
         if isinstance(path, (str, Path)):
             data: MutableMapping[str, Any] = {}
@@ -436,13 +465,16 @@ class imas_io(io):
 
                 idsmap = {}
                 for ids in self.ids_top_levels:
+                    dd_version_tag = 'ids_properties&verions_put&data_dictionary'
                     top_level_path = ipath / f'{ids}.h5'
                     if top_level_path.is_file():
                         h5_data = h5py.File(top_level_path)
                         if f'{ids}' in h5_data:
                             idsmap[f'{ids}'] = {k: v[()] for k, v in h5_data[f'{ids}'].items()}
+                            if isinstance(idsmap[f'{ids}'].get(dd_version_tag, None), bytes) and 'data_dictionary_version' not in attrs:
+                                attrs['data_dictionary_version'] = idsmap[f'{ids}'][dd_version_tag].decode('utf-8')
                 for ids, idsdata in idsmap.items():
-                    ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='&')
+                    ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='&', version=attrs.get('data_dictionary_version', None))
                     if ids_struct.has_value:
                         ids_struct.validate()
                         ds_ids = imas.util.to_xarray(ids_struct)
@@ -510,21 +542,19 @@ class imas_io(io):
                 datadict.update({k: np.arange(v).astype(int) for k, v in data.sizes.items()})
                 datadict.update({k: v.values for k, v in data.coords.items()})
                 datadict.update({k: v.values for k, v in data.data_vars.items()})
-                datadict.pop('core_profiles.profiles_1d.grid.rho_tor_norm:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_1d.psi:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim1:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim2:i', None)
-                datadict.pop('equilibrium.time_slice.boundary.outline.r:i', None)
+                for field_name in self.last_index_fields:
+                    datadict.pop(f'{field_name}:i', None)
                 idsmap = {}
-                dd_version = None
+                dd_version = data.attrs.get('data_dictionary_version', None)
                 for ids in self.ids_top_levels:
                     idsdata = {f'{k}'[len(ids) + 1:]: v for k, v in datadict.items() if f'{k}'.startswith(f'{ids}.')}
                     if idsdata:
-                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
+                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.', version=dd_version)
                         if ids_struct.has_value:
                             ids_struct.validate()
                             idsmap[f'{ids}'] = ids_struct
-                            dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
+                            if dd_version is None:
+                                dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
                 for ids, ids_struct in idsmap.items():
                     with imas.DBEntry(opath, 'w', dd_version=dd_version) as netcdf_entry:
                         netcdf_entry.put(ids_struct)
@@ -550,21 +580,19 @@ class imas_io(io):
                 datadict.update({k: np.arange(v).astype(int) for k, v in data.sizes.items()})
                 datadict.update({k: v.values for k, v in data.coords.items()})
                 datadict.update({k: v.values for k, v in data.data_vars.items()})
-                datadict.pop('core_profiles.profiles_1d.grid.rho_tor_norm:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_1d.psi:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim1:i', None)
-                datadict.pop('equilibrium.time_slice.profiles_2d.grid.dim2:i', None)
-                datadict.pop('equilibrium.time_slice.boundary.outline.r:i', None)
+                for field_name in self.last_index_fields:
+                    datadict.pop(f'{field_name}:i', None)
                 idsmap = {}
-                dd_version = None
+                dd_version = data.attrs.get('data_dictionary_version', None)
                 for ids in self.ids_top_levels:
                     idsdata = {f'{k}'[len(ids) + 1:]: v for k, v in datadict.items() if f'{k}'.startswith(f'{ids}.')}
                     if idsdata:
-                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.')
+                        ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='.', version=dd_version)
                         if ids_struct.has_value:
                             ids_struct.validate()
                             idsmap[f'{ids}'] = ids_struct
-                            dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
+                            if dd_version is None:
+                                dd_version = str(ids_struct['ids_properties']['version_put']['data_dictionary'])
                 for ids, ids_struct in idsmap.items():
                     with imas.DBEntry(opath / f'{ids}.nc', 'w', dd_version=dd_version) as netcdf_entry:
                         netcdf_entry.put(ids_struct)
@@ -595,18 +623,39 @@ class imas_io(io):
         pass
 
 
+    @property
+    def input_cocos(
+        self,
+    ) -> int:
+        version = self.input.to_dataset().attrs.get('data_dictionary_version', imas.dd_zip.latest_dd_version())
+        return self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
+
+
+    @property
+    def output_cocos(
+        self,
+    ) -> int:
+        version = self.output.to_dataset().attrs.get('data_dictionary_version', imas.dd_zip.latest_dd_version())
+        return self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
+
+
     def to_eqdsk(
         self,
         time_index: int = -1,
         side: str = 'output',
+        cocos: int | None = None,
         transpose: bool = False,
     ) -> MutableMapping[str, Any]:
         eqdata: MutableMapping[str, Any] = {}
+        time_eq = 'equilibrium.time'
         data = (
-            self.input.to_dataset().isel({'equilibrium.time': time_index})
+            self.input.to_dataset().isel({time_eq: time_index})
             if side == 'input' else
-            self.output.to_dataset().isel({'equilibrium.time': time_index})
+            self.output.to_dataset().isel({time_eq: time_index})
         )
+        default_cocos = self.input_cocos if side == 'input' else self.output_cocos
+        if cocos is None:
+            cocos = default_cocos
         rectangular_index = []
         tag = 'equilibrium.time_slice.profiles_2d.grid_type.name'
         if tag in data:
@@ -660,38 +709,44 @@ class imas_io(io):
             tag = 'equilibrium.time_slice.profiles_1d.f'
             if tag in data:
                 if conversion is None:
-                    eqdata['fpol'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['fpol'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['fpol'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.pressure'
             if tag in data:
                 if conversion is None:
-                    eqdata['pres'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['pres'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['pres'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
             if tag in data:
                 if conversion is None:
-                    eqdata['ffprime'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['ffprime'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['ffprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
             if tag in data:
                 if conversion is None:
-                    eqdata['pprime'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['pprime'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['pprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_2d.psi'
             if tag in data:
-                eqdata['psi'] = data[tag].to_numpy() if transpose else data[tag].to_numpy().T
+                dims = data[tag].dims
+                dim1_tag = [dim for dim in dims if 'dim1' in f'{dim}'][0]
+                dim2_tag = [dim for dim in dims if 'dim2' in f'{dim}'][0]
+                do_transpose = bool(dims.index(dim1_tag) < dims.index(dim2_tag))
+                if transpose:
+                    do_transpose = bool(not do_transpose)
+                eqdata['psi'] = data[tag].to_numpy().T if do_transpose else data[tag].to_numpy()
             tag = 'equilibrium.time_slice.profiles_1d.q'
             if tag in data:
                 if conversion is None:
-                    eqdata['qpsi'] = data.drop_duplicates(psin_eq)[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+                    eqdata['qpsi'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['qpsi'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
@@ -704,6 +759,7 @@ class imas_io(io):
                     eqdata['nbdry'] = len(rdata)
                     eqdata['rbdry'] = rdata
                     eqdata['zbdry'] = zdata
+            eqdata = convert_cocos(eqdata, cocos_in=default_cocos, cocos_out=cocos, bt_sign_out=None, ip_sign_out=None)
         return eqdata
 
 
@@ -712,13 +768,14 @@ class imas_io(io):
         path: str | Path,
         time_index: int = -1,
         side: str = 'output',
+        cocos: int | None = None,
         transpose: bool = False,
     ) -> None:
         eqpath = None
         if isinstance(path, (str, Path)):
             eqpath = Path(path)
         assert isinstance(eqpath, Path)
-        eqdata = self.to_eqdsk(time_index=time_index, side=side, transpose=transpose)
+        eqdata = self.to_eqdsk(time_index=time_index, side=side, cocos=cocos, transpose=transpose)
         write_eqdsk(eqdata, eqpath)
         logger.info('Successfully generated g-eqdsk file, {path}')
 
@@ -727,21 +784,23 @@ class imas_io(io):
         self,
         basepath: str | Path,
         side: str = 'output',
+        cocos: int | None = None,
         transpose: bool = False,
     ) -> None:
         path = None
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
         assert isinstance(path, Path)
-        data = self.input if side == 'input' else self.output
-        if 'time_eq' in data.coords:
-            for ii, time in enumerate(data['time_eq'].to_numpy().flatten()):
+        data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
+        time_eq = 'equilibrium.time'
+        if time_eq in data:
+            for ii, time in enumerate(data[time_eq].to_numpy().flatten()):
                 stem = f'{path.stem}'
                 if stem.endswith('_input'):
                     stem = stem[:-6]
                 time_tag = int(np.rint(time * 1000))
                 eqpath = path.parent / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
-                self.generate_eqdsk_file(eqpath, time_index=ii, side=side, transpose=transpose)
+                self.generate_eqdsk_file(eqpath, time_index=ii, side=side, cocos=cocos, transpose=transpose)
 
 
     @classmethod
@@ -764,6 +823,35 @@ class imas_io(io):
         newobj = cls()
         if isinstance(obj, io):
             newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+        return newobj
+
+
+    @classmethod
+    def from_omas(
+        cls,
+        obj: io,
+        side: str = 'output',
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            # TODO: Should compress down last_index_fields to true coordinates and set rho values as actual dimensions
+            top_levels = {}
+            for key in data.coords:
+                components = f'{key}'.split('.')
+                if components[0] not in top_levels:
+                    top_levels[f'{components[0]}'] = 1
+            for level in top_levels:
+                n_time_coords = 0
+                for key in data.coords:
+                    components = f'{key}'.split('.')
+                    if len(components) > 1 and components[0] == level and components[-1] == 'time':
+                        n_time_coords += 1
+                if n_time_coords > 1:
+                    top_levels[level] = 0
+            data = data.assign({f'{k}.ids_properties.homogeneous_time': ([], np.array(v)) for k, v in top_levels.items()})
+            newobj.input = data
         return newobj
 
 

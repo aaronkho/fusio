@@ -9,8 +9,10 @@ import xarray as xr
 import copy
 import json
 from .io import io
-from ..utils.json_tools import serialize, deserialize
 from ..utils.plasma_tools import define_ion_species
+from ..utils.eqdsk_tools import (
+    define_cocos_converter,
+)
 
 logger = logging.getLogger('fusio')
 
@@ -482,13 +484,6 @@ class torax_io(io):
             self._write_torax_file(path, self.input.to_dataset(), overwrite=overwrite)
         else:
             self._write_torax_file(path, self.output.to_dataset(), overwrite=overwrite)
-        #if not self.empty:
-        #    odict = self._uncompress(self.input)
-        #    with open(opath, 'w') as jf:
-        #        json.dump(odict, jf, indent=4, default=serialize)
-        #    logger.info(f'Saved {self.format} data into {opath.resolve()}')
-        #else:
-        #    logger.error(f'Attempting to write empty {self.format} class instance... Failed!')
 
 
     def _read_torax_file(
@@ -1845,41 +1840,63 @@ class torax_io(io):
         window: float | None = None,
         **kwargs: Any,
     ) -> Self:
+
         newobj = cls()
         if isinstance(obj, io):
+
             data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
-            dsvec = []
-            struct_index = {}
-            if 'time_cp' in data.coords and 'rho_cp' in data.coords:
-                coords = {}
-                data_vars = {}
-                attrs = {}
-                coords['time'] = data.get('time_cp', xr.DataArray()).to_numpy().flatten()
-                coords['rho'] = data.get('rho_cp', xr.DataArray()).to_numpy().flatten()
-                #if 'ion_cp' in data:
-                #    #sn, sa, sz = define_ion_species(short_name=sname)
-                #    coords['main_ion'] = data.get('ion_cp').to_numpy().flatten()
-                attrs['numerics.t_initial'] = coords['time'][0]
+            time_cp_i = 'core_profiles.profiles_1d:i'
+            time_cp = 'core_profiles.time'
+            rho_cp_i = 'core_profiles.profiles_1d.grid.rho_tor_norm:i'
+            rho_cp = 'core_profiles.profiles_1d.grid.rho_tor_norm'
+            ion_cp_i = 'core_profiles.profiles_1d.ion:i'
+            ion_cp = 'core_profiles.profiles_1d.ion.label'
+            time_eq_i = 'equilibrium.time_slice:i'
+            time_eq = 'equilibrium.time'
+            psi_eq_i = 'equilibrium.time_slice.profiles_1d.psi:i'
+            psi_eq = 'equilibrium.time_slice.profiles_1d.psi'
+            rho_eq = 'equilibrium.time_slice.profiles_1d.rho_tor_norm'
+            time_cs_i = 'core_sources.source.profiles_1d:i'
+            time_cs = 'core_sources.time'
+            src_cs_i = 'core_sources.source:i'
+            src_cs = 'core_sources.source.identifier.name'
+            rho_cs_i = 'core_sources.source.profiles_1d.grid.rho_tor_norm:i'
+            rho_cs = 'core_sources.source.profiles_1d.grid.rho_tor_norm'
+            ion_cs_i = 'core_sources.source.profiles_1d.ion:i'
+            ion_cs = 'core_sources.source.profiles_1d.ion.label'
+            cocos = define_cocos_converter(17, 2)  # Assumed IMAS=17 -> GACODE=2
+            ikwargs = {'fill_value': 'extrapolate'}
+
+            dsmap = {}
+
+            if time_cp_i in data.coords and rho_cp_i in data.coords:
+                cp_coords = {}
+                cp_data_vars = {}
+                cp_attrs: MutableMapping[str, Any] = {}
+                data = data.swap_dims({time_cp_i: time_cp})
+                cp_coords['time'] = data.get(time_cp, xr.DataArray()).to_numpy().flatten()
+                cp_coords['rho'] = data.isel({time_cp: 0}).get(rho_cp, xr.DataArray()).to_numpy().flatten()
+                cp_attrs['numerics.t_initial'] = cp_coords['time'][0]
                 omas_tag = 'core_profiles.profiles_1d.ion.density'
-                if omas_tag in data and 'ion_cp' in data:
-                    namelist = data.get('ion_cp', xr.DataArray()).to_numpy().tolist()
+                if omas_tag in data and ion_cp in data:
+                    namelist = data.isel({time_cp: 0}).get(ion_cp, xr.DataArray()).to_numpy().tolist()
                     mainlist = []
                     for ii in range(len(namelist)):
                         if namelist[ii] in ['H', 'D', 'T']:
                             mainlist.append(ii)
                     maincoord = []
                     mainfracs = []
-                    total_main = data.isel(ion_cp=mainlist)[omas_tag].sum('ion_cp')
+                    total_main = data.isel({ion_cp_i: mainlist})[omas_tag].sum(ion_cp_i)
                     for ii in mainlist:
                         maincoord.append(namelist[ii])
-                        mainfracs.append(np.expand_dims(np.atleast_1d((data.isel(ion_cp=ii)[omas_tag] / total_main).mean('rho_cp').to_numpy()), axis=0))
+                        mainfracs.append(np.expand_dims(np.atleast_1d((data.isel({ion_cp_i: ii})[omas_tag] / total_main).mean(rho_cp_i).to_numpy()), axis=0))
                     if len(mainlist) == 0:
                         maincoord = ['D']
                         mainfracs = [np.atleast_2d([1.0])]
-                    coords['main_ion'] = np.array(maincoord).flatten()
-                    data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.concatenate(mainfracs, axis=0))
+                    cp_coords['main_ion'] = np.array(maincoord).flatten()
+                    cp_data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.concatenate(mainfracs, axis=0))
                 if omas_tag in data and 'core_profiles.profiles_1d.electrons.density' in data:
-                    namelist = data.get('ion_cp', xr.DataArray()).to_numpy().tolist()
+                    namelist = data.isel({time_cp: 0}).get(ion_cp, xr.DataArray()).to_numpy().tolist()
                     implist = []
                     zeff = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     nsum = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
@@ -1890,7 +1907,7 @@ class torax_io(io):
                     for ii in range(len(namelist)):
                         sname = namelist[ii]
                         sn, sa, sz = define_ion_species(short_name=sname)
-                        nz = data.isel(ion_cp=ii)[omas_tag]
+                        nz = data.isel({ion_cp_i: ii})[omas_tag]
                         if sname not in newobj.allowed_radiation_species:
                             if sz > 2.0:
                                 sname = 'C'
@@ -1911,11 +1928,11 @@ class torax_io(io):
                         # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
                         impcomp[sname] = nz
                         nsum += nz
-                        zeff += data.isel(ion_cp=ii)[omas_tag] * sz ** 2.0 / data['core_profiles.profiles_1d.electrons.density']
-                    total = 0.0
+                        zeff += data.isel({ion_cp_i: ii})[omas_tag] * sz ** 2.0 / data['core_profiles.profiles_1d.electrons.density']
+                    total = xr.zeros_like(nsum.mean(rho_cp_i))
                     for key in impcomp:
-                        impcomp[key] = (impcomp[key] / nsum).mean('rho_cp')
-                        total += float(impcomp[key].to_numpy())
+                        impcomp[key] = (impcomp[key] / nsum).mean(rho_cp_i)
+                        total += impcomp[key]
                     impcoord = []
                     impfracs = []
                     for key in impcomp:
@@ -1924,129 +1941,144 @@ class torax_io(io):
                     if not impcomp:
                         impcoord = ['Ne']
                         impfracs = [np.atleast_2d([1.0])]
-                    coords['impurity'] = np.array(impcoord).flatten()
-                    data_vars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(impfracs, axis=0))
-                    data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
+                    cp_coords['impurity'] = np.array(impcoord).flatten()
+                    cp_data_vars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(impfracs, axis=0))
+                    cp_data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 omas_tag = 'core_profiles.global_quantities.ip'
                 if omas_tag in data:
-                    data_vars['profile_conditions.Ip'] = (['time'], data[omas_tag].to_numpy())
+                    cp_data_vars['profile_conditions.Ip'] = (['time'], data[omas_tag].to_numpy())
                 omas_tag = 'core_profiles.profiles_1d.electrons.density'
                 if omas_tag in data:
-                    data_vars['profile_conditions.n_e'] = (['time', 'rho'], data[omas_tag].to_numpy())
-                    attrs['profile_conditions.normalize_n_e_to_nbar'] = False
-                    attrs['profile_conditions.n_e_nbar_is_fGW'] = False
+                    cp_data_vars['profile_conditions.n_e'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                    cp_attrs['profile_conditions.normalize_n_e_to_nbar'] = False
+                    cp_attrs['profile_conditions.n_e_nbar_is_fGW'] = False
                 omas_tag = 'core_profiles.profiles_1d.electrons.temperature'
                 if omas_tag in data:
-                    data_vars['profile_conditions.T_e'] = (['time', 'rho'], 1.0e-3 * data[omas_tag].to_numpy())
+                    cp_data_vars['profile_conditions.T_e'] = (['time', 'rho'], 1.0e-3 * data[omas_tag].to_numpy())
                 omas_tag = 'core_profiles.profiles_1d.ion.temperature'
                 if omas_tag in data:
-                    data_vars['profile_conditions.T_i'] = (['time', 'rho'], 1.0e-3 * data[omas_tag].mean('ion_cp').to_numpy()) if 'ion_cp' in data else (['time', 'rho'], data[omas_tag].to_numpy())
+                    cp_data_vars['profile_conditions.T_i'] = (['time', 'rho'], 1.0e-3 * data[omas_tag].mean(ion_cp_i).to_numpy()) if ion_cp_i in data.dims else (['time', 'rho'], data[omas_tag].to_numpy())
                 omas_tag = 'core_profiles.profiles_1d.grid.psi'
                 if omas_tag in data:
-                    data_vars['profile_conditions.psi'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                    cp_data_vars['profile_conditions.psi'] = (['time', 'rho'], data[omas_tag].to_numpy())
                 omas_tag = 'core_profiles.profiles_1d.q'
                 if omas_tag in data:
-                    data_vars['profile_conditions.q'] = (['time', 'rho'], data[omas_tag].to_numpy())
+                    cp_data_vars['profile_conditions.q'] = (['time', 'rho'], data[omas_tag].to_numpy())
                 omas_tag = 'core_profiles.global_quantities.v_loop'
                 if omas_tag in data:
-                    data_vars['profile_conditions.v_loop_lcfs'] = (['time'], data[omas_tag].to_numpy())
-                    attrs['profile_conditions.use_v_loop_lcfs_boundary_condition'] = False
+                    cp_data_vars['profile_conditions.v_loop_lcfs'] = (['time'], data[omas_tag].to_numpy())
+                    cp_attrs['profile_conditions.use_v_loop_lcfs_boundary_condition'] = False
                 #core_profiles.profiles_1d.conductivity_parallel              (time_cp, rho_cp)
                 #core_profiles.profiles_1d.current_parallel_inside            (time_cp, rho_cp)
                 #core_profiles.profiles_1d.j_tor                              (time_cp, rho_cp)
                 #core_profiles.profiles_1d.j_total                            (time_cp, rho_cp)
-                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs).drop_duplicates(list(coords.keys()), keep='first'))
-                struct_index['core_profiles'] = len(dsvec) - 1
-            if 'time_cs' in data.coords and 'rho_cs' in data.coords:
-                coords = {}
-                data_vars = {}
-                attrs = {}
-                coords['time'] = data.get('time_cs', xr.DataArray()).to_numpy().flatten()
-                coords['rho'] = data.get('rho_cs', xr.DataArray()).to_numpy().flatten()
-                # Place the sources
+                dsmap['core_profiles'] = xr.Dataset(coords=cp_coords, data_vars=cp_data_vars, attrs=cp_attrs).drop_duplicates(list(cp_coords.keys()), keep='first')
+
+            if time_cs_i in data.coords and rho_cs_i in data.coords:
+                cs_coords = {}
+                cs_data_vars = {}
+                cs_attrs: MutableMapping[str, Any] = {}
+                data = data.swap_dims({time_cs_i: time_cs, src_cs_i: src_cs})
+                cs_coords['time'] = data.get(time_cs, xr.DataArray()).to_numpy().flatten()
+                cs_coords['rho'] = np.nanmean(data.isel({time_cs: 0}).get(rho_cs, xr.DataArray()).to_numpy(), axis=0).flatten()
+                srclist = data[src_cs].to_numpy().tolist()
                 external_el_heat_source = None
                 external_ion_heat_source = None
                 external_particle_source = None
                 external_current_source = None
                 fusion_source = None
-                omas_tag = 'core_sources.ohmic.profiles_1d.electrons.energy'
-                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
-                    attrs['sources.ohmic.mode'] = 'PRESCRIBED'
-                    data_vars['sources.ohmic.prescribed_values'] = (['time', 'rho'], data[omas_tag].to_numpy())
-                omas_tag = 'core_sources.line_radiation.profiles_1d.electrons.energy'
-                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
-                    attrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
-                    data_vars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], data[omas_tag].to_numpy())
-                omas_tag = 'core_sources.bremsstrahlung.profiles_1d.electrons.energy'
-                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
-                    attrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
-                    data_vars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], data[omas_tag].to_numpy())
-                omas_tag = 'core_sources.synchrotron.profiles_1d.electrons.energy'
-                omas_tag = 'core_sources.ic.profiles_1d.electrons.energy'
-                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
-                    if external_el_heat_source is None:
-                        external_el_heat_source = np.zeros_like(data[omas_tag].to_numpy())
-                    external_el_heat_source += 1.0e6 * data[omas_tag].to_numpy()
-                omas_tag = 'core_sources.ic.profiles_1d.total_ion_energy'
-                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
-                    if external_ion_heat_source is None:
-                        external_ion_heat_source = np.zeros_like(data[omas_tag].to_numpy())
-                    external_ion_heat_source += 1.0e6 * data[omas_tag].to_numpy()
-                omas_tag = 'core_sources.ic.global_quantities.power'
-                #if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
-                #    data_vars['sources.icrh.P_total'] = (['time'], data[omas_tag].to_numpy().flatten())
-                omas_tag = 'core_sources.fusion.profiles_1d.electrons.energy'
-                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
-                    if fusion_source is None:
-                        fusion_source = np.zeros_like(data[omas_tag].to_numpy())
-                    fusion_source += data[omas_tag].to_numpy()
-                omas_tag = 'core_sources.fusion.profiles_1d.ion.energy'
-                if omas_tag in data and np.abs(data[omas_tag]).sum() != 0.0:
-                    if fusion_source is None:
-                        fusion_source = np.zeros_like(data[omas_tag].sum('ion_cp').to_numpy())
-                    fusion_source += data[omas_tag].sum('ion_cp').to_numpy()
+                omas_tag = 'core_sources.source.profiles_1d.electrons.energy'
+                if omas_tag in data:
+                    srctag = 'ohmic'
+                    if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
+                        cs_attrs['sources.ohmic.mode'] = 'PRESCRIBED'
+                        cs_data_vars['sources.ohmic.prescribed_values'] = (['time', 'rho'], data.sel({src_cs: srctag})[omas_tag].to_numpy())
+                    srctag = 'line_radiation'
+                    if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
+                        cs_attrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
+                        cs_data_vars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], data.sel({src_cs: srctag})[omas_tag].to_numpy())
+                    srctag = 'bremsstrahlung'
+                    if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
+                        cs_attrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
+                        cs_data_vars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], data.sel({src_cs: srctag})[omas_tag].to_numpy())
+                    #srctag = 'synchrotron'
+                    srctag = 'ic'
+                    if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
+                        if external_el_heat_source is None:
+                            external_el_heat_source = np.zeros_like(data.sel({src_cs: srctag})[omas_tag].to_numpy())
+                        external_el_heat_source += 1.0e6 * data.sel({src_cs: srctag})[omas_tag].to_numpy()
+                    srctag = 'fusion'
+                    if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
+                        if fusion_source is None:
+                            fusion_source = np.zeros_like(data.sel({src_cs: srctag})[omas_tag].to_numpy())
+                        fusion_source += data.sel({src_cs: srctag})[omas_tag].to_numpy()
+                omas_tag = 'core_sources.source.profiles_1d.total_ion_energy'
+                if omas_tag in data:
+                    srctag = 'ic'
+                    if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
+                        if external_ion_heat_source is None:
+                            external_ion_heat_source = np.zeros_like(data.sel({src_cs: srctag})[omas_tag].to_numpy())
+                        external_ion_heat_source += 1.0e6 * data.sel({src_cs: srctag})[omas_tag].to_numpy()
+                #omas_tag = 'core_sources.source.global_quantities.power'
+                #if omas_tag in data:
+                #    srctag = 'ic'
+                #    if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
+                #        data_vars['sources.icrh.P_total'] = (['time'], data[omas_tag].to_numpy().flatten())
+                omas_tag = 'core_sources.source.profiles_1d.ion.energy'
+                if omas_tag in data:
+                    srctag = 'fusion'
+                    if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
+                        if fusion_source is None:
+                            fusion_source = np.zeros_like(data.sel({src_cs: srctag})[omas_tag].sum(ion_cp_i).to_numpy())
+                        fusion_source += data.sel({src_cs: srctag})[omas_tag].sum(ion_cp_i).to_numpy()
                 if external_el_heat_source is not None:
-                    attrs['use_generic_heat'] = True
-                    attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
-                    data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], external_ion_heat_source)
-                    data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], external_el_heat_source)
+                    cs_attrs['use_generic_heat'] = True
+                    cs_attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
+                    cs_data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], external_el_heat_source)
+                    if external_ion_heat_source is not None:
+                        cs_data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], external_ion_heat_source)
                 if external_particle_source is not None:
-                    attrs['use_generic_particle'] = True
-                    attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
-                    data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], external_particle_source)
+                    cs_attrs['use_generic_particle'] = True
+                    cs_attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
+                    cs_data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], external_particle_source)
                 if external_current_source is not None:
-                    attrs['use_generic_current'] = True
-                    attrs['sources.generic_current.mode'] = 'PRESCRIBED'
-                    data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], external_current_source)
-                    attrs['sources.generic_current.use_absolute_current'] = True
-                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs).drop_duplicates(list(coords.keys()), keep='first'))
-                struct_index['core_sources'] = len(dsvec) - 1
-            if 'time_eq' in data.coords and 'rho_eq' in data.coords:
-                coords = {}
-                data_vars = {}
-                attrs = {}
-                coords['time'] = data.get('time_eq', xr.DataArray()).to_numpy().flatten()
-                coords['rho'] = data.get('rho_eq', xr.DataArray()).to_numpy().flatten()
-                omas_tag = 'equilibrium.time_slice.profiles_1d.psi'
-                if omas_tag in data:
-                    data_vars['profile_conditions.psi'] = (['time', 'rho'], data[omas_tag].to_numpy())
-                omas_tag = 'equilibrium.time_slice.profiles_1d.q'
-                if omas_tag in data:
-                    data_vars['profile_conditions.q'] = (['time', 'rho'], data[omas_tag].to_numpy())
-                dsvec.append(xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs).drop_duplicates(list(coords.keys()), keep='first'))
-                struct_index['equilibrium'] = len(dsvec) - 1
-            if len(dsvec) > 0:
-                idx = struct_index.get('equilibrium', None)
-                if idx is not None:
+                    cs_attrs['use_generic_current'] = True
+                    cs_attrs['sources.generic_current.mode'] = 'PRESCRIBED'
+                    cs_data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], external_current_source)
+                    cs_attrs['sources.generic_current.use_absolute_current'] = True
+                #if fusion_source is not None:
+                #    cs_attrs['use_fusion'] = True
+                #    cs_attrs['sources.fusion.mode'] = 'PRESCRIBED'
+                #    cs_data_vars['sources.fusion.prescribed_values'] = (['time', 'rho'], fusion_source)
+                dsmap['core_sources'] = xr.Dataset(coords=cs_coords, data_vars=cs_data_vars, attrs=cs_attrs).drop_duplicates(list(cs_coords.keys()), keep='first')
+
+            # Require EQDSK?
+            #if time_eq in data.coords and psi_eq in data.coords and rho_eq in data.coords:
+            #    eq_coords = {}
+            #    eq_data_vars = {}
+            #    eq_attrs: MutableMapping[str, Any] = {}
+            #    data = data.swap_dims({time_eq_i: time_eq})
+            #    eq_coords['time'] = data.get(time_eq, xr.DataArray()).to_numpy().flatten()
+            #    eq_coords['rho'] = data.get(rho_eq, xr.DataArray()).to_numpy().flatten()
+            #    omas_tag = 'equilibrium.time_slice.profiles_1d.psi'
+            #    if omas_tag in data:
+            #        eq_data_vars['profile_conditions.psi'] = (['time', 'rho'], data[omas_tag].to_numpy())
+            #    omas_tag = 'equilibrium.time_slice.profiles_1d.q'
+            #    if omas_tag in data:
+            #        eq_data_vars['profile_conditions.q'] = (['time', 'rho'], data[omas_tag].to_numpy())
+            #    dsmap['equilibrium'] = xr.Dataset(coords=eq_coords, data_vars=eq_data_vars, attrs=eq_attrs).drop_duplicates(list(coords.keys()), keep='first')
+
+            if len(dsmap) > 0:
+                if 'equilibrium' in dsmap:
                     drop = [
                         'profile_conditions.q',
                     ]
-                    dsvec[idx] = dsvec[idx].drop_vars(drop, errors='ignore')
-                idx = struct_index.get('core_profiles', None)
-                if idx is not None:
+                    dsmap['equilibrium'] = dsmap['equilibrium'].drop_vars(drop, errors='ignore')
+                if 'core_profiles' in dsmap:
                     drop = [
                         'profile_conditions.psi',
                     ]
-                    dsvec[idx] = dsvec[idx].drop_vars(drop, errors='ignore')
-                newobj.input = xr.merge(dsvec, join='outer')
+                    dsmap['core_profiles'] = dsmap['core_profiles'].drop_vars(drop, errors='ignore')
+                newobj.input = xr.merge([v for k, v in dsmap.items()], join='outer')
+
         return newobj

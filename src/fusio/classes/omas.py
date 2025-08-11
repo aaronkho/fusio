@@ -6,14 +6,44 @@ from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
 
+from packaging.version import Version
+import copy
 import json
+import omas  # type: ignore[import-untyped]
+from omas.omas_core import ODS  # type: ignore[import-untyped]
 from .io import io
-from ..utils.eqdsk_tools import write_eqdsk
+from ..utils.eqdsk_tools import (
+    convert_cocos,
+    write_eqdsk,
+)
 
 logger = logging.getLogger('fusio')
 
 
 class omas_io(io):
+
+
+    default_cocos_3: Final[int] = 11
+    default_cocos_4: Final[int] = 17
+
+    last_index_fields: Final[Sequence[str]] = [
+        'core_profiles.profiles_1d.grid.rho_tor_norm',
+        'core_sources.source.profiles_1d.grid.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_flux.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_d.rho_tor_norm',
+        'core_transport.model.profiles_1d.grid_v.rho_tor_norm',
+        'equilibrium.time_slice.profiles_1d.psi',
+        'equilibrium.time_slice.profiles_2d.grid.dim1',
+        'equilibrium.time_slice.profiles_2d.grid.dim2',
+        'equilibrium.time_slice.boundary.outline.r',
+        'wall.description_2d.limiter.unit.outline.r',
+    ]
+    time_equivalent_dimensions: Final[Mapping[str, str]] = {
+        'core_profiles.time': 'core_profiles.profiles_1d',
+        'core_sources.time': 'core_sources.source.profiles_1d',
+        'core_transport.time': 'core_transport.model.profiles_1d',
+        'equilibrium.time': 'equilibrium.time_slice',
+    }
 
 
     def __init__(
@@ -64,393 +94,224 @@ class omas_io(io):
             self._write_omas_json_file(path, self.output.to_dataset(), overwrite=overwrite)
 
 
+    def _convert_to_imas_like_dataset(
+        self,
+        data: ODS,
+    ) -> xr.Dataset:
+
+        def _apply_special_coordinate_rules(
+            segments: Sequence[str],
+            dimensions: MutableSequence[str],
+        ) -> MutableSequence[str]:
+            # Uses field segments to manually append data array dimensions added after discovery
+            newdims = copy.deepcopy(dimensions)
+            if segments[0] == 'core_profiles' and 'profiles_1d' in segments:
+                newdims.append('core_profiles.profiles_1d.grid.rho_tor_norm:i')
+            elif segments[0] == 'core_profiles' and 'global_quantities' in segments:
+                newdims.append('core_profiles.profiles_1d:i')
+            elif segments[0] == 'core_sources' and 'profiles_1d' in segments:
+                newdims.append('core_sources.source.profiles_1d.grid.rho_tor_norm:i')
+            elif segments[0] == 'core_sources' and 'global_quantities' in segments:
+                newdims.append('core_sources.source.profiles_1d:i')
+            elif segments[0] == 'core_transport' and 'profiles_1d' in segments and ('flux' in segments or 'grid_flux' in segments):
+                newdims.append('core_transport.model.profiles_1d.grid_flux.rho_tor_norm:i')
+            elif segments[0] == 'core_transport' and 'profiles_1d' in segments and ('d' in segments or 'grid_d' in segments):
+                newdims.append('core_transport.model.profiles_1d.grid_d.rho_tor_norm:i')
+            elif segments[0] == 'core_transport' and 'profiles_1d' in segments and ('v' in segments or 'grid_v' in segments):
+                newdims.append('core_transport.model.profiles_1d.grid_v.rho_tor_norm:i')
+            elif segments[0] == 'equilibrium' and 'vacuum_toroidal_field' in segments and 'b0' in segments:
+                newdims.append('equilibrium.time_slice:i')
+            elif segments[0] == 'equilibrium' and 'profiles_1d' in segments:
+                newdims.append('equilibrium.time_slice.profiles_1d.psi:i')
+            elif segments[0] == 'equilibrium' and 'profiles_2d' in segments and 'grid' not in segments:
+                newdims.extend(['equilibrium.time_slice.profiles_2d.grid.dim2:i', 'equilibrium.time_slice.profiles_2d.grid.dim1:i'])
+            elif segments[0] == 'equilibrium' and 'boundary' in segments and 'outline' in segments:
+                newdims.append('equilibrium.time_slice.boundary.outline.r:i')
+            elif segments[0] == 'pulse_schedule' and 'reference' in segments:
+                dims = list(segments[:-1])
+                dims.append('time')
+                newdims.append('.'.join(dims))
+            elif segments[0] == 'summary' and 'global_quantities' in segments:
+                newdims.append('summary.time')
+            elif segments[0] == 'wall' and 'description_2d' in segments and 'outline' in segments:
+                newdims.append('wall.description_2d.limiter.unit.outline.r:i')
+            return newdims
+
+        def _recursive_array_structure_search(
+            ods: ODS,
+        ) -> Sequence[MutableMapping[str, Any]]:
+            struct_names: MutableMapping[str, Any] = {}
+            field_names: MutableMapping[str, Any] = {}
+            for key, val in ods.items():
+                if isinstance(val, ODS):
+                    if 0 in val:
+                        struct_names[f'{key}'] = len(val)
+                    next_struct_names, next_field_names = _recursive_array_structure_search(val)
+                    if isinstance(key, int):
+                        add_struct_names = {}
+                        # This construction allows setting dimension sizes to maximum value found
+                        for name, length in next_struct_names.items():
+                            if f'{name}' not in struct_names:
+                                add_struct_names[f'{name}'] = length
+                            elif struct_names[f'{name}'] is None and length is not None:
+                                add_struct_names[f'{name}'] = length
+                            elif struct_names[f'{name}'] is not None and length is not None:
+                                if isinstance(length, int) and length > struct_names[f'{name}']:
+                                    add_struct_names[f'{name}'] = length
+                                elif isinstance(length, list) and np.all([length[i] > struct_names[f'{name}'][i] for i in range(len(length))]):
+                                    add_struct_names[f'{name}'] = length
+                        struct_names.update(add_struct_names)
+                        add_field_names = {}
+                        # This construction allows setting dimension sizes to maximum value found
+                        for name, length in next_field_names.items():
+                            if f'{name}' not in field_names:
+                                add_field_names[f'{name}'] = length
+                            elif field_names[f'{name}'] is None and length is not None:
+                                add_field_names[f'{name}'] = length
+                            elif field_names[f'{name}'] is not None and length is not None:
+                                if isinstance(length, int) and length > field_names[f'{name}']:
+                                    add_field_names[f'{name}'] = length
+                                elif isinstance(length, list) and np.all([length[i] > field_names[f'{name}'][i] for i in range(len(length))]):
+                                    add_field_names[f'{name}'] = length
+                        field_names.update(add_field_names)
+                    else:
+                        add_struct_names = {}
+                        # This construction allows setting dimension sizes to maximum value found
+                        for name, length in next_struct_names.items():
+                            if f'{key}.{name}' not in struct_names:
+                                add_struct_names[f'{key}.{name}'] = length
+                            elif struct_names[f'{key}.{name}'] is None and length is not None:
+                                add_struct_names[f'{key}.{name}'] = length
+                            elif struct_names[f'{key}.{name}'] is not None and length is not None:
+                                if isinstance(length, int) and length > struct_names[f'{key}.{name}']:
+                                    add_struct_names[f'{key}.{name}'] = length
+                                elif isinstance(length, list) and np.all([length[i] > struct_names[f'{key}.{name}'][i] for i in range(len(length))]):
+                                    add_struct_names[f'{key}.{name}'] = length
+                        struct_names.update(add_struct_names)
+                        add_field_names = {}
+                        # This construction allows setting dimension sizes to maximum value found
+                        for name, length in next_field_names.items():
+                            if f'{key}.{name}' not in field_names:
+                                add_field_names[f'{key}.{name}'] = length
+                            elif field_names[f'{key}.{name}'] is None and length is not None:
+                                add_field_names[f'{key}.{name}'] = length
+                            elif field_names[f'{key}.{name}'] is not None and length is not None:
+                                if isinstance(length, int) and length > field_names[f'{key}.{name}']:
+                                    add_field_names[f'{key}.{name}'] = length
+                                elif isinstance(length, list) and np.all([length[i] > field_names[f'{key}.{name}'][i] for i in range(len(length))]):
+                                    add_field_names[f'{key}.{name}'] = length
+                        field_names.update(add_field_names)
+                elif isinstance(val, np.ndarray) and val.size > 0:
+                    field_names[f'{key}'] = [i for i in val.shape]
+                else:
+                    field_names[f'{key}'] = None
+            return struct_names, field_names
+
+        def _recursive_array_field_stack(
+            ods: ODS,
+            field: str,
+        ) -> NDArray:
+            out = np.array([])
+            components = field.split('.')
+            if len(components) > 0:
+                if f'{components[0]}' in ods:
+                    if len(components) > 1 and '0' in ods[f'{components[0]}']:
+                        dvec = []
+                        ndim = 0
+                        for ii in range(len(ods[f'{components[0]}'])):
+                            dvec.append(_recursive_array_field_stack(ods[f'{components[0]}'][ii], '.'.join(components[1:])))
+                            if ndim < dvec[-1].ndim:
+                                ndim = dvec[-1].ndim
+                        max_shape = [0] * ndim
+                        for ii in range(len(dvec)):
+                            while dvec[ii].ndim < ndim:
+                                dvec[ii] = np.expand_dims(dvec[ii], axis=-1)
+                            for jj in range(len(max_shape)):
+                                if max_shape[jj] < dvec[ii].shape[jj]:
+                                    max_shape[jj] = dvec[ii].shape[jj]
+                        for ii in range(len(dvec)):
+                            if dvec[ii].shape != tuple(max_shape):
+                                shape_pad = [max_shape[jj] - dvec[ii].shape[jj] for jj in range(len(max_shape))]
+                                if len(shape_pad) > 0:
+                                    dvec[ii] = np.pad(dvec[ii], [(0, pad) for pad in shape_pad], mode='constant', constant_values=np.nan)
+                        out = np.stack(dvec, axis=0)
+                    elif len(components) > 1:
+                        out = _recursive_array_field_stack(ods[f'{components[0]}'], '.'.join(components[1:]))
+                    else:
+                        out = ods[f'{components[0]}'] if isinstance(ods[f'{components[0]}'], np.ndarray) else np.array(ods[f'{components[0]}'])
+            return out
+
+        coords = {}
+        data_vars = {}
+        attrs: MutableMapping[str, Any] = {}
+
+        aos_sizes, data_sizes = _recursive_array_structure_search(data)
+        for key, size in aos_sizes.items():
+            coords[f'{key}:i'] = np.arange(size).astype(int)
+        for ctag in self.last_index_fields:
+            if ctag in data_sizes and isinstance(data_sizes[ctag], (list, tuple)):
+                coords[f'{ctag}:i'] = np.arange(data_sizes[ctag][0]).astype(int)
+
+        for key, size in data_sizes.items():
+            dims: MutableSequence[str] = []
+            components = key.split('.')
+            long_key = ''
+            for ii in range(len(components)):
+                long_key = '.'.join([comp for i, comp in enumerate(components) if i <= ii])
+                if f'{long_key}:i' in coords:
+                    dims.append(f'{long_key}:i')
+            if size is not None and key not in self.last_index_fields:
+                dims = _apply_special_coordinate_rules(components, dims)
+            val = _recursive_array_field_stack(data, key)
+            if val.dtype.type is np.str_ and len(val.shape) > len(dims) and val.shape[-1] == 1:
+                val = np.squeeze(val, axis=-1)
+            if f'{key}' in self.time_equivalent_dimensions and self.time_equivalent_dimensions[f'{key}'] in aos_sizes:
+                long_key = self.time_equivalent_dimensions[f'{key}']
+                dims.append(f'{long_key}:i')
+                data_vars[f'{key}'] = (dims, val)
+            elif len(components) == 2 and components[-1] == 'time':
+                coords[f'{key}'] = val
+            elif components[0] == 'pulse_schedule' and components[-1] == 'time':
+                coords[f'{key}'] = val
+            else:
+                data_vars[f'{key}'] = (dims, val)
+                if components[-1] == 'data_dictionary' and components[-2] == 'version_put' and 'data_dictionary_version' not in attrs:
+                    attrs['data_dictionary_version'] = val
+
+        # Does this belong here, or is it better in imas conversion function?
+        tag = 'core_sources.time'
+        if tag not in coords:
+            if 'core_sources.source.profiles_1d.time' in data_vars:
+                data_vars[f'{tag}'] = (
+                    ['core_sources.source.profiles_1d:i'],
+                    np.nanmean(data_vars['core_sources.source.profiles_1d.time'][1], axis=0).flatten()
+                )
+            elif 'core_sources.source.global_quantities.time' in data_vars:
+                data_vars[f'{tag}'] = (
+                    ['core_sources.source.global_quantities:i'],
+                    np.nanmean(data_vars['core_sources.source.global_quantities.time'][1], axis=0).flatten()
+                )
+
+        if hasattr(data, 'cocos'):
+            attrs['cocos'] = data.cocos
+        if 'data_dictionary_version' not in attrs and hasattr(data, 'imas_version'):
+            attrs['data_dictionary_version'] = data.imas_version
+
+        return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+
+
     def _read_omas_json_file(
         self,
         path: str | Path,
     ) -> xr.Dataset:
 
         dsvec = []
-
         if isinstance(path, (str, Path)):
             ipath = Path(path)
             if ipath.exists():
-
-                with open(ipath, 'r') as jsonfile:
-                    data = json.load(jsonfile)
-
-                if 'core_profiles' in data:
-                    cp_coords = {}
-                    cp_attrs = {}
-                    if 'time' in data['core_profiles']:
-                        cp_coords['time_cp'] = np.atleast_1d(data['core_profiles'].pop('time'))
-                    profs = data['core_profiles'].pop('profiles_1d', [])
-                    if len(profs) > 0 and 'rho_tor_norm' in profs[0].get('grid', {}):
-                        cp_coords['rho_cp'] = np.atleast_1d(profs[0]['grid'].pop('rho_tor_norm'))
-                    if len(profs) > 0 and 'ion' in profs[0] and len(profs[0]['ion']) > 0:
-                        ionlist = []
-                        for ii, ion in enumerate(profs[0]['ion']):
-                            ionlist.append(ion.pop('label', 'UNKNOWN'))
-                        cp_coords['ion_cp'] = np.atleast_1d(ionlist).flatten()
-                    if 'code' in data['core_profiles']:
-                        cp_attrs['core_profiles.code.name'] = data['core_profiles'].pop('code', {}).get('name', '')
-                    cp_ds = xr.Dataset(coords=cp_coords, attrs=cp_attrs) if cp_coords else None
-                    if 'time_cp' in cp_coords and 'rho_cp' in cp_coords:
-                        timevec = cp_coords.pop('time_cp', np.array([]))
-                        cp_dsvec = []
-                        for ii, cpp in enumerate(profs):
-                            cp_data_vars = {}
-                            cp_coords['time_cp'] = np.atleast_1d([timevec[ii]]) if len(timevec) > ii else np.atleast_1d([float(cpp['time'])])
-                            grid = cpp.pop('grid', {})
-                            for key, val in grid.items():
-                                tag = f'core_profiles.profiles_1d.grid.{key}'
-                                if isinstance(val, list):
-                                    cp_data_vars[tag] = (['time_cp', 'rho_cp'], np.expand_dims(np.atleast_1d(val), axis=0))
-                            elec = cpp.pop('electrons', {})
-                            for key, val in elec.items():
-                                tag = f'core_profiles.profiles_1d.electrons.{key}'
-                                if isinstance(val, list):
-                                    cp_data_vars[tag] = (['time_cp', 'rho_cp'], np.expand_dims(np.atleast_1d(val), axis=0))
-                            if 'ion_cp' in cp_coords:
-                                ions = cpp.pop('ion', [])
-                                ionprof_cp: MutableMapping[str, NDArray] = {}
-                                for jj, ion in enumerate(ions):
-                                    for key, val in ion.items():
-                                        tag = f'core_profiles.profiles_1d.ion.{key}'
-                                        if isinstance(val, list):
-                                            ionprof_cp[tag] = np.concatenate([ionprof_cp[tag], np.atleast_2d(val)], axis=0) if tag in ionprof_cp else np.atleast_2d(val)
-                                for tag in ionprof_cp:
-                                    while ionprof_cp[tag].shape[0] < len(cp_coords['ion_cp']):
-                                        ionprof_cp[tag] = np.concatenate([ionprof_cp[tag], np.atleast_2d(ionprof_cp[tag][-1, :])], axis=0)
-                                for tag, val in ionprof_cp.items():
-                                    cp_data_vars[tag] = (['time_cp', 'ion_cp', 'rho_cp'], np.expand_dims(val, axis=0))
-                            for key, val in cpp.items():
-                                tag = f'core_profiles.profiles_1d.{key}'
-                                if isinstance(val, list):
-                                    cp_data_vars[tag] = (['time_cp', 'rho_cp'], np.expand_dims(np.atleast_1d(val), axis=0))
-                            if cp_data_vars:
-                                cp_dsvec.append(xr.Dataset(coords=cp_coords, data_vars=cp_data_vars, attrs=cp_attrs))
-                        if len(cp_dsvec) > 0:
-                            cp_ds = xr.merge(cp_dsvec)
-                    if cp_ds is not None and 'time_cp' in cp_coords:
-                        globs = data['core_profiles'].pop('global_quantities', {})
-                        if 'ion_cp' in cp_coords:
-                            ions = globs.pop('ion', [])
-                            ionglob_cp: MutableMapping[str, NDArray] = {}
-                            for jj, ion in enumerate(ions):
-                                for key, val in ion.items():
-                                    tag = f'core_profiles.global_quantities.ion.{key}'
-                                    if isinstance(val, list):
-                                        ionglob_cp[tag] = np.concatenate([ionglob_cp[tag], np.atleast_2d(val).T], axis=-1) if tag in ionglob_cp else np.atleast_2d(val).T
-                            for tag, val in ionglob_cp.items():
-                                cp_ds[tag] = (['time_cp', 'ion_cp'], val)
-                        for key, val in globs.items():
-                            tag = f'core_profiles.global_quantities.{key}'
-                            if isinstance(val, list):
-                                cp_ds[tag] = (['time_cp'], np.atleast_1d(val))
-                    if cp_ds is not None:
-                        dsvec.append(cp_ds)
-
-                if 'core_sources' in data:
-                    srcs = data['core_sources'].pop('source', [])
-                    cs_dsvec = []
-                    for ii, src in enumerate(srcs):
-                        cs_coords = {}
-                        cs_attrs = {}
-                        sid = src.pop('identifier', {})
-                        srctag = sid['name'] if 'name' in sid else f'source_index_{sid.get("index", ii):d}'
-                        if 'global_quantities' in src:
-                            timevec = np.array([])
-                            for jj in range(len(src['global_quantities'])):
-                                if 'time' in src['global_quantities'][jj]:
-                                    timevec = np.concatenate([timevec, src['global_quantities'][jj]['time']], axis=0)
-                            cs_coords['time_cs'] = timevec.flatten()
-                        profs = src.pop('profiles_1d', [])
-                        if len(profs) > 0 and 'rho_tor_norm' in profs[0].get('grid', {}):
-                            cs_coords['rho_cs'] = np.atleast_1d(profs[0]['grid'].pop('rho_tor_norm')).flatten()
-                        if len(profs) > 0 and 'ion' in profs[0] and len(profs[0]['ion']) > 0:
-                            ionlist = []
-                            for ii, ion in enumerate(profs[0]['ion']):
-                                ionlist.append(ion.pop('label', 'UNKNOWN'))
-                            cs_coords['ion_cs'] = np.array(ionlist).flatten()
-                        if 'code' in src:
-                            cs_attrs[f'core_sources.{srctag}.code.name'] = src.pop('code').get('name', '')
-                        cs_ds = xr.Dataset(coords=cs_coords, attrs=cs_attrs) if cs_coords else None
-                        if cs_ds is not None and 'time_cs' in cs_coords and 'rho_cs' in cs_coords:
-                            timevec = cs_coords.pop('time_cs', np.array([]))
-                            csp_dsvec = []
-                            for jj, csp in enumerate(profs):
-                                cs_data_vars = {}
-                                cs_coords['time_cs'] = np.atleast_1d([timevec[jj]]).flatten() if len(timevec) > jj else np.atleast_1d([float(csp['time'])]).flatten()
-                                grid = csp.pop('grid', {})
-                                for key, val in grid.items():
-                                    tag = f'core_sources.{srctag}.profiles_1d.grid.{key}'
-                                    if isinstance(val, list):
-                                        cs_data_vars[tag] = (['time_cs', 'rho_cs'], np.expand_dims(np.atleast_1d(val), axis=0))
-                                elec = csp.pop('electrons', {})
-                                for key, val in elec.items():
-                                    tag = f'core_sources.{srctag}.profiles_1d.electrons.{key}'
-                                    if isinstance(val, list):
-                                        cs_data_vars[tag] = (['time_cs', 'rho_cs'], np.expand_dims(np.atleast_1d(val), axis=0))
-                                if 'ion_cs' in cs_coords:
-                                    ions = csp.pop('ion', [])
-                                    ionprof_cs: MutableMapping[str, NDArray] = {}
-                                    for kk, ion in enumerate(ions):
-                                        for key, val in ion.items():
-                                            tag = f'core_sources.{srctag}.profiles_1d.ion.{key}'
-                                            if isinstance(val, list):
-                                                ionprof_cs[tag] = np.concatenate([ionprof_cs[tag], np.atleast_2d(val)], axis=-1) if tag in ionprof_cs else np.atleast_2d(val)
-                                    for tag, val in ionprof_cs.items():
-                                        cs_data_vars[tag] = (['time_cs', 'rho_cs', 'ion_cs'], np.expand_dims(val, axis=0))
-                                for key, val in csp.items():
-                                    tag = f'core_sources.{srctag}.profiles_1d.{key}'
-                                    if isinstance(val, list):
-                                        cs_data_vars[tag] = (['time_cs', 'rho_cs'], np.expand_dims(np.atleast_1d(val), axis=0))
-                                if cs_data_vars:
-                                    csp_dsvec.append(xr.Dataset(coords=cs_coords, data_vars=cs_data_vars, attrs=cs_attrs))
-                            if len(csp_dsvec) > 0:
-                                csp_ds = xr.merge(csp_dsvec)
-                                cs_ds = cs_ds.assign_coords(csp_ds.coords).assign(csp_ds.data_vars).assign_attrs(**csp_ds.attrs)
-                            if len(timevec) > 0:
-                                cs_coords['time_cs'] = timevec.flatten()
-                        if cs_ds is not None and 'time_cs' in cs_coords:
-                            globs = src.pop('global_quantities', [])
-                            timevec = cs_coords.pop('time_cs', np.array([]))
-                            csg_dsvec = []
-                            for jj, csg in enumerate(globs):
-                                cs_data_vars = {}
-                                cs_coords['time_cs'] = np.atleast_1d([timevec[jj]]).flatten() if len(timevec) > jj else np.atleast_1d([float(csg['time'])]).flatten()
-                                if 'ion_cs' in cs_coords:
-                                    ions = csg.pop('ion', [])
-                                    ionglob_cs: MutableMapping[str, NDArray] = {}
-                                    for kk, ion in enumerate(ions):
-                                        for key, val in ion.items():
-                                            tag = f'core_sources.{srctag}.global_quantities.ion.{key}'
-                                            if isinstance(val, list):
-                                                ionglob_cs[tag] = np.concatenate([ionglob_cs[tag], np.atleast_1d(val)], axis=-1) if tag in ionglob_cs else np.atleast_1d(val)
-                                    for tag, val in ionglob_cs.items():
-                                        cs_data_vars[tag] = (['time_cs', 'ion_cs'], val)
-                                for key, val in csg.items():
-                                    tag = f'core_sources.{srctag}.global_quantities.{key}'
-                                    if key != 'time' and isinstance(val, (float, int)):
-                                        cs_data_vars[tag] = (['time_cs'], np.atleast_1d([val]))
-                                if cs_data_vars:
-                                    csg_dsvec.append(xr.Dataset(coords=cs_coords, data_vars=cs_data_vars))
-                            if len(csg_dsvec) > 0:
-                                csg_ds = xr.merge(csg_dsvec)
-                                cs_ds = cs_ds.assign_coords(csg_ds.coords).assign(csg_ds.data_vars).assign_attrs(**csg_ds.attrs)
-                        if cs_ds is not None:
-                            cs_dsvec.append(cs_ds)
-                    if len(cs_dsvec) > 0:
-                        dsvec.append(xr.merge(cs_dsvec))
-
-                if 'core_transport' in data:
-                    ct_coords = {}
-                    if 'time' in data['core_transport']:
-                        ct_coords['time_ct'] = np.atleast_1d(data['core_transport'].pop('time'))
-                    models = data['core_transport'].pop('model', [])
-                    ct_dsvec = []
-                    for ii, model in enumerate(models):
-                        ctm_coords = {}
-                        ctm_attrs = {}
-                        ctm_coords['time_ct'] = ct_coords['time_ct'].copy()
-                        modtag = f'model_index_{ii}'
-                        if 'code' in model:
-                            model_name = model.pop('code').get('name', '')
-                            modtag = model_name.lower()
-                            ctm_attrs[f'core_transport.{modtag}.code.name'] = model_name
-                        profs = model.pop('profiles_1d', [])
-                        if len(profs) > 0:
-                            if 'rho_tor_norm' in profs[0].get('grid_d', {}):
-                                ctm_coords[f'rho_d_{ii}_ct'] = np.atleast_1d(profs[0]['grid_d']['rho_tor_norm'])
-                            if 'rho_tor_norm' in profs[0].get('grid_v', {}):
-                                ctm_coords[f'rho_v_{ii}_ct'] = np.atleast_1d(profs[0]['grid_v']['rho_tor_norm'])
-                            if 'rho_tor_norm' in profs[0].get('grid_flux', {}):
-                                ctm_coords[f'rho_flux_{ii}_ct'] = np.atleast_1d(profs[0]['grid_flux']['rho_tor_norm'])
-                        if 'ion' in profs[0] and len(profs[0]['ion']) > 0:
-                            ctm_coords[f'ion_{ii}_ct'] = np.array([jj for jj in range(len(profs[0]['ion']))], dtype=int).flatten()
-                        if 'neutral' in profs[0] and len(profs[0]['neutral']) > 0:
-                            ctm_coords[f'neutral_{ii}_ct'] = np.array([jj for jj in range(len(profs[0]['neutral']))], dtype=int).flatten()
-                        ctm_ds = xr.Dataset(coords=ctm_coords, attrs=ctm_attrs) if ctm_coords else None
-                        if 'time_ct' in ctm_coords and (f'rho_d_{ii}_ct' in ctm_coords or f'rho_v_{ii}_ct' in ctm_coords or 'rho_flux_{ii}_ct' in ctm_coords):
-                            timevec = ctm_coords.pop('time_ct', np.array([]))
-                            ctp_dsvec = []
-                            for jj, ctp in enumerate(profs):
-                                ctm_data_vars = {}
-                                ctm_coords['time_ct'] = np.atleast_1d([timevec[jj]]).flatten() if len(timevec) > jj else np.atleast_1d([ctp['time']]).flatten()
-                                if f'ion_{ii}_ct' in ctm_coords:
-                                    ions = ctp.pop('ion', [])
-                                    ionprof_ct: MutableMapping[str, NDArray] = {}
-                                    for kk, ion in enumerate(ions):
-                                        for var, obj in ion.items():
-                                            for key, val in obj.items():
-                                                tag = f'core_transport.{modtag}.profiles_1d.ion.{var}.{key}'
-                                                if isinstance(val, list):
-                                                    ionprof_ct[tag] = np.concatenate([ionprof_ct[tag], np.atleast_2d(val)], axis=0) if tag in ionprof_ct else np.atleast_2d(val)
-                                    for tag in ionprof_ct:
-                                        while ionprof_ct[tag].shape[0] < len(ctm_coords[f'ion_{ii}_ct']):
-                                            ionprof_ct[tag] = np.concatenate([ionprof_ct[tag], np.atleast_2d(ionprof_ct[tag][-1, :])], axis=0)
-                                    for tag, val in ionprof_ct.items():
-                                        ctm_data_vars[tag] = (['time_ct', f'ion_{ii}_ct', f'rho_{key}_{ii}_ct'], np.expand_dims(val, axis=0))
-                                if f'neutral_{ii}_ct' in ctm_coords:
-                                    neutrals = ctp.pop('neutral', [])
-                                    neutprof_ct: MutableMapping[str, NDArray] = {}
-                                    for kk, neut in enumerate(neutrals):
-                                        for var, obj in neut.items():
-                                            for key, val in obj.items():
-                                                tag = f'core_transport.{modtag}.profiles_1d.neutral.{var}.{key}'
-                                                if isinstance(val, list):
-                                                    neutprof_ct[tag] = np.concatenate([neutprof_ct[tag], np.atleast_2d(val)], axis=0) if tag in neutprof_ct else np.atleast_2d(val)
-                                    for tag in neutprof_ct:
-                                        while neutprof_ct[tag].shape[0] < len(ctm_coords[f'neutral_{ii}_ct']):
-                                            neutprof_ct[tag] = np.concatenate([neutprof_ct[tag], np.atleast_2d(neutprof_ct[tag][-1, :])], axis=0)
-                                    for tag, val in neutprof_ct.items():
-                                        ctm_data_vars[tag] = (['time_ct', f'neutral_{ii}_ct', f'rho_{key}_{ii}_ct'], np.expand_dims(val, axis=0))
-                                elec = ctp.pop('electrons', {})
-                                for var, obj in elec.items():
-                                    for key, val in obj.items():
-                                        tag = f'core_transport.{modtag}.profiles_1d.electrons.{var}.{key}'
-                                        if isinstance(val, list):
-                                            ctm_data_vars[tag] = (['time_ct', f'rho_{key}_{ii}_ct'], np.expand_dims(np.atleast_1d(val), axis=0))
-                                if ctm_data_vars:
-                                   ctp_dsvec.append(xr.Dataset(coords=ctm_coords, data_vars=ctm_data_vars, attrs=ctm_attrs))
-                            if len(ctp_dsvec) > 0:
-                                ctm_ds = xr.merge(ctp_dsvec)
-                        if ctm_ds is not None:
-                            ct_dsvec.append(ctm_ds)
-                    if len(ct_dsvec) > 0:
-                        ct_ds = xr.Dataset()
-                        for ctm_ds in ct_dsvec:
-                            ct_ds = ct_ds.assign_coords(ctm_ds.coords).assign(ctm_ds.data_vars).assign_attrs(**ctm_ds.attrs)
-                        dsvec.append(ct_ds)
-
-                if 'equilibrium' in data:
-                    eq_coords = {}
-                    eq_attrs = {}
-                    if 'time' in data['equilibrium']:
-                        eq_coords['time_eq'] = np.atleast_1d(data['equilibrium'].pop('time'))
-                    slices = data['equilibrium'].pop('time_slice', [])
-                    if len(slices) > 0 and 'psi_norm' in slices[0].get('profiles_1d', {}):
-                        eq_coords['psin_eq'] = np.atleast_1d(slices[0]['profiles_1d'].pop('psi_norm'))
-                    if len(slices) > 0 and len(slices[0].get('profiles_2d', [])) > 0:
-                        for cc in range(len(slices[0]['profiles_2d'])):
-                            gtype = slices[0]['profiles_2d'][cc].get('grid_type', {})
-                            if 'name' in gtype and gtype['name'] == 'rectangular':
-                                eq_coords['r_eq'] = np.atleast_1d(slices[0]['profiles_2d'][cc]['grid']['dim1'])
-                                eq_coords['z_eq'] = np.atleast_1d(slices[0]['profiles_2d'][cc]['grid']['dim2'])
-                                eq_attrs['equilibrium.profiles_2d.grid_type.name'] = gtype['name']
-                                if 'description' in gtype:
-                                    eq_attrs['equilibrium.profiles_2d.grid_type.description'] = gtype['description']
-                    eq_ds = xr.Dataset(coords=eq_coords, attrs=eq_attrs) if eq_coords else None
-                    if 'time_eq' in eq_coords and 'r_eq' in eq_coords and 'z_eq' in eq_coords:
-                        timevec = eq_coords.pop('time_eq', np.array([]))
-                        eq_dsvec = []
-                        for ii, eqs in enumerate(slices):
-                            eq_coords.pop('i_bdry_eq', None)
-                            eq_coords.pop('i_xpt_eq', None)
-                            eq_data_vars = {}
-                            eq_coords['time_eq'] = np.atleast_1d([timevec[ii]]) if len(timevec) > ii else np.atleast_1d([float(eqs['time'])])
-                            equil = eqs.pop('profiles_2d', [])
-                            for cc in range(len(equil)):
-                                if 'grid_type' in equil[cc] and (
-                                    equil[cc]['grid_type'].get('name', '') == 'rectangular' or
-                                    equil[cc]['grid_type'].get('index', -1) == 1
-                                ):
-                                    for key, val in equil[cc].items():
-                                        tag = f'equilibrium.time_slice.profiles_2d.{key}'
-                                        if isinstance(val, list):
-                                            eq_data_vars[tag] = (['time_eq', 'r_eq', 'z_eq'], np.expand_dims(np.atleast_2d(val).T, axis=0))
-                            profs = eqs.pop('profiles_1d', {})
-                            for key, val in profs.items():
-                                tag = f'equilibrium.time_slice.profiles_1d.{key}'
-                                if isinstance(val, list) and key != 'psi_norm':
-                                    eq_data_vars[tag] = (['time_eq', 'psin_eq'], np.expand_dims(np.atleast_1d(val), axis=0))
-                            globs = eqs.pop('global_quantities', {})
-                            for key, val in globs.items():
-                                tag = f'equilibrium.time_slice.global_quantities.{key}'
-                                if isinstance(val, (float, int)):
-                                    eq_data_vars[tag] = (['time_eq'], np.atleast_1d([val]))
-                            if 'magnetic_axis' in globs:
-                                for key, val in globs['magnetic_axis'].items():
-                                    tag = f'equilibrium.time_slice.global_quantities.magnetic_axis.{key}'
-                                    if isinstance(val, (float, int)):
-                                        eq_data_vars[tag] = (['time_eq'], np.atleast_1d([val]))
-                            bnds = eqs.pop('boundary', {})
-                            for key, val in bnds.items():
-                                if key == 'minor_radius':
-                                    tag = 'equilibrium.time_slice.boundary.minor_radius'
-                                    eq_data_vars[tag] = (['time_eq'], np.atleast_1d([val]))
-                                if key == 'outline' and 'r' in val and 'z' in val:
-                                    rtag = 'equilibrium.time_slice.boundary.outline.r'
-                                    ztag = 'equilibrium.time_slice.boundary.outline.z'
-                                    eq_coords['i_bdry_eq'] = np.array([j for j in range(len(val['r']))], dtype=int).flatten()
-                                    eq_data_vars[rtag] = (['time_eq', 'i_bdry_eq'], np.expand_dims(np.atleast_1d(val['r']), axis=0))
-                                    eq_data_vars[ztag] = (['time_eq', 'i_bdry_eq'], np.expand_dims(np.atleast_1d(val['z']), axis=0))
-                                if key == 'x_point' and val:
-                                    rtag = 'equilibrium.time_slice.boundary.x_point.r'
-                                    ztag = 'equilibrium.time_slice.boundary.x_point.z'
-                                    rxpt = []
-                                    zxpt = []
-                                    for jj, xpt in enumerate(val):
-                                        if 'r' in xpt and 'z' in xpt:
-                                            rxpt.append(xpt['r'])
-                                            zxpt.append(xpt['z'])
-                                    if len(rxpt) > 0:
-                                        eq_coords['i_xpt_eq'] = np.array([j for j in range(len(rxpt))], dtype=int).flatten()
-                                        eq_data_vars[rtag] = (['time_eq', 'i_xpt_eq'], np.expand_dims(np.atleast_1d(rxpt), axis=0))
-                                        eq_data_vars[ztag] = (['time_eq', 'i_xpt_eq'], np.expand_dims(np.atleast_1d(zxpt), axis=0))
-                            eq_dsvec.append(xr.Dataset(coords=eq_coords, data_vars=eq_data_vars, attrs=eq_attrs))
-                        if len(eq_dsvec) > 0:
-                            eq_ds = xr.merge(eq_dsvec)
-                            if 'vacuum_toroidal_field' in data['equilibrium']:
-                                for key, val in data['equilibrium']['vacuum_toroidal_field'].items():
-                                    tag = f'equilibrium.vacuum_toroidal_field.{key}'
-                                    if key == 'r0':
-                                        eq_ds = eq_ds.assign({tag: (['time_eq'], np.repeat(np.atleast_1d([val]), len(timevec), axis=0))})
-                                    if key == 'b0':
-                                        eq_ds = eq_ds.assign({tag: (['time_eq'], np.atleast_1d(val))})
-                    if eq_ds is not None:
-                        dsvec.append(eq_ds)
-
-                #if 'wall' in data:
-                #    #data['wall']['description_2d'][-1]['limiter']['unit'][0]['outline']['r', 'z']
-                #    pass
-
-                if 'summary' in data:
-                    sm_coords = {}
-                    sm_data_vars = {}
-                    sm_attrs = {}
-                    if 'time' in data['summary']:
-                        sm_coords['time_sum'] = np.atleast_1d(data['summary'].pop('time'))
-                    if 'code' in data['summary']:
-                        cp_attrs['summary.code'] = data['summary'].pop('code')
-                    if 'time_sum' in sm_coords:
-                        globs = data['summary'].pop('global_quantities', {})
-                        for key, val in globs.items():
-                            tag = f'summary.global_quantities.{key}.value'
-                            if 'value' in val and isinstance(val['value'], list):
-                                sm_data_vars[tag] = (['time_sum'], np.atleast_1d(val['value']))
-                            if 'source' in val:
-                                sm_attrs[f'summary.global_quantities.{key}.source'] = val['source']
-                    if sm_coords:
-                        dsvec.append(xr.Dataset(coords=sm_coords, data_vars=sm_data_vars, attrs=sm_attrs))
-
-                if 'pulse_schedule' in data:
-                    ps_coords = {}
-                    ps_data_vars = {}
-                    ps_attrs = {}
-                    ii = 0
-                    for var, obj in data['pulse_schedule'].items():
-                        itag = f'{ii:d}'
-                        if 'time' in obj:
-                            ps_coords[f'time_{itag}_ps'] = np.atleast_1d(obj.pop('time'))
-                            ps_attrs[f'pulse_schedule.index_{itag}'] = var
-                            ii += 1
-                        for key, val in obj.items():
-                            tag = f'pulse_schedule.{var}.{key}.reference'
-                            if 'reference' in val and isinstance(val['reference'], list):
-                                ps_data_vars[tag] = ([f'time_{itag}_ps'], np.atleast_1d(val['reference']))
-                    if ps_coords:
-                        dsvec.append(xr.Dataset(coords=ps_coords, data_vars=ps_data_vars, attrs=ps_attrs))
+                data = omas.load_omas_json(str(ipath.resolve()))
+                ds = self._convert_to_imas_like_dataset(data)
+                dsvec.append(ds)
 
         ds = xr.Dataset()
         for dss in dsvec:
@@ -469,80 +330,173 @@ class omas_io(io):
         pass
 
 
+    @property
+    def input_cocos(
+        self,
+    ) -> int:
+        cocos = self.input.to_dataset().attrs.get('cocos', None)
+        if cocos is None:
+            version = self.input.to_dataset().attrs.get('data_dictionary_version', '4.0.0')
+            cocos = self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
+        return cocos
+
+
+    @property
+    def output_cocos(
+        self,
+    ) -> int:
+        cocos = self.input.to_dataset().attrs.get('cocos', None)
+        if cocos is None:
+            version = self.output.to_dataset().attrs.get('data_dictionary_version', '4.0.0')
+            cocos = self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
+        return cocos
+
+
+    def to_eqdsk(
+        self,
+        time_index: int = -1,
+        side: str = 'output',
+        cocos: int | None = None,
+        transpose: bool = False,
+    ) -> MutableMapping[str, Any]:
+        eqdata: MutableMapping[str, Any] = {}
+        time_eq = 'equilibrium.time_slice:i'
+        data = (
+            self.input.to_dataset().isel({time_eq: time_index})
+            if side == 'input' else
+            self.output.to_dataset().isel({time_eq: time_index})
+        )
+        default_cocos = self.input_cocos if side == 'input' else self.output_cocos
+        if cocos is None:
+            cocos = default_cocos
+        tag = 'equilibrium.time_slice.profiles_2d.grid_type.name'
+        if tag in data:
+            rectangular_index = [i for i, name in enumerate(data[tag]) if name == 'rectangular']
+        if len(rectangular_index) > 0:
+            data = data.isel({'equilibrium.time_slice.profiles_2d:i': rectangular_index[0]})
+            psi_eq_i = 'equilibrium.time_slice.profiles_1d.psi:i'
+            psin_eq = 'equilibrium.time_slice.profiles_1d.psi_norm'
+            psinvec = None
+            if psin_eq in data:
+                data = data.swap_dims({psi_eq_i: psin_eq}).drop_duplicates(psin_eq)
+                #psinvec = data[psin_eq].to_numpy().flatten()
+            conversion = None
+            ikwargs = {'fill_value': 'extrapolate'}
+            if psinvec is None:
+                conversion = (
+                    (data['equilibrium.time_slice.profiles_1d.psi'] - data['equilibrium.time_slice.global_quantities.psi_axis']) /
+                    (data['equilibrium.time_slice.global_quantities.psi_boundary'] - data['equilibrium.time_slice.global_quantities.psi_axis'])
+                ).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_2d.grid.dim1'
+            if tag in data:
+                rvec = data[tag].to_numpy().flatten()
+                eqdata['nr'] = rvec.size
+                eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
+                eqdata['rleft'] = float(np.nanmin(rvec))
+                if psinvec is None:
+                    psinvec = np.linspace(0.0, 1.0, len(rvec)).flatten()
+            tag = 'equilibrium.time_slice.profiles_2d.grid.dim2'
+            if tag in data:
+                zvec = data[tag].to_numpy().flatten()
+                eqdata['nz'] = zvec.size
+                eqdata['zdim'] = float(np.nanmax(zvec) - np.nanmin(zvec))
+                eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
+            tag = 'equilibrium.vacuum_toroidal_field.r0'
+            if tag in data:
+                eqdata['rcentr'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.vacuum_toroidal_field.b0'
+            if tag in data:
+                eqdata['bcentr'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.r'
+            if tag in data:
+                eqdata['rmagx'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
+            if tag in data:
+                eqdata['zmagx'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.psi_axis'
+            if tag in data:
+                eqdata['simagx'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.psi_boundary'
+            if tag in data:
+                eqdata['sibdry'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.global_quantities.ip'
+            if tag in data:
+                eqdata['cpasma'] = float(data[tag].to_numpy().flatten())
+            tag = 'equilibrium.time_slice.profiles_1d.f'
+            if tag in data:
+                if conversion is None:
+                    eqdata['fpol'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['fpol'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                #eqdata['fpol'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_1d.pressure'
+            if tag in data:
+                if conversion is None:
+                    eqdata['pres'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['pres'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                #eqdata['pres'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
+            if tag in data:
+                if conversion is None:
+                    eqdata['ffprime'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['ffprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                #eqdata['ffprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
+            if tag in data:
+                if conversion is None:
+                    eqdata['pprime'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['pprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                #eqdata['pprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+            tag = 'equilibrium.time_slice.profiles_2d.psi'
+            if tag in data:
+                dims = data[tag].dims
+                dim1_tag = [dim for dim in dims if 'dim1' in f'{dim}'][0]
+                dim2_tag = [dim for dim in dims if 'dim2' in f'{dim}'][0]
+                do_transpose = bool(dims.index(dim1_tag) < dims.index(dim2_tag))
+                if transpose:
+                    do_transpose = bool(not do_transpose)
+                eqdata['psi'] = data[tag].to_numpy().T if do_transpose else data[tag].to_numpy()
+            tag = 'equilibrium.time_slice.profiles_1d.q'
+            if tag in data:
+                if conversion is None:
+                    eqdata['qpsi'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                else:
+                    ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
+                    eqdata['qpsi'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
+                #eqdata['qpsi'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
+            rtag = 'equilibrium.time_slice.boundary.outline.r'
+            ztag = 'equilibrium.time_slice.boundary.outline.z'
+            if rtag in data and ztag in data:
+                rdata = data[rtag].dropna(f'{rtag}:i').to_numpy().flatten()
+                zdata = data[ztag].dropna(f'{rtag}:i').to_numpy().flatten()
+                if len(rdata) == len(zdata):
+                    eqdata['nbdry'] = len(rdata)
+                    eqdata['rbdry'] = rdata
+                    eqdata['zbdry'] = zdata
+            eqdata = convert_cocos(eqdata, cocos_in=default_cocos, cocos_out=cocos, bt_sign_out=None, ip_sign_out=None)
+        return eqdata
+
+
     def generate_eqdsk_file(
         self,
         path: str | Path,
         time_index: int = -1,
         side: str = 'output',
+        cocos: int | None = None,
+        transpose: bool = False,
     ) -> None:
         eqpath = None
         if isinstance(path, (str, Path)):
             eqpath = Path(path)
         assert isinstance(eqpath, Path)
-        eqdata: MutableMapping[str, Any] = {}
-        data = self.input.to_dataset().isel(time_eq=time_index) if side == 'input' else self.output.to_dataset().isel(time_eq=time_index)
-        psinvec = data['psin_eq'].to_numpy().flatten()
-        tag = 'r_eq'
-        if tag in data:
-            rvec = data[tag].to_numpy().flatten()
-            eqdata['nr'] = rvec.size
-            eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
-            eqdata['rleft'] = float(np.nanmin(rvec))
-            psinvec = np.linspace(0.0, 1.0, len(rvec)).flatten()
-        tag = 'z_eq'
-        if tag in data:
-            zvec = data[tag].to_numpy().flatten()
-            eqdata['nz'] = zvec.size
-            eqdata['zdim'] = float(np.nanmax(zvec) - np.nanmin(zvec))
-            eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
-        tag = 'equilibrium.vacuum_toroidal_field.r0'
-        if tag in data:
-            eqdata['rcentr'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium.vacuum_toroidal_field.b0'
-        if tag in data:
-            eqdata['bcentr'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.r'
-        if tag in data:
-            eqdata['rmagx'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
-        if tag in data:
-            eqdata['zmagx'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium.time_slice.global_quantities.psi_axis'
-        if tag in data:
-            eqdata['simagx'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium.time_slice.global_quantities.psi_boundary'
-        if tag in data:
-            eqdata['sibdry'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium.time_slice.global_quantities.ip'
-        if tag in data:
-            eqdata['cpasma'] = float(data[tag].to_numpy().flatten())
-        tag = 'equilibrium.time_slice.profiles_1d.f'
-        if tag in data:
-            eqdata['fpol'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-        tag = 'equilibrium.time_slice.profiles_1d.pressure'
-        if tag in data:
-            eqdata['pres'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-        tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
-        if tag in data:
-            eqdata['ffprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-        tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
-        if tag in data:
-            eqdata['pprime'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-        tag = 'equilibrium.time_slice.profiles_2d.psi'
-        if tag in data:
-            eqdata['psi'] = data[tag].to_numpy().T
-        tag = 'equilibrium.time_slice.profiles_1d.q'
-        if tag in data:
-            eqdata['qpsi'] = data.drop_duplicates('psin_eq')[tag].interp(psin_eq=psinvec).to_numpy().flatten()
-        rtag = 'equilibrium.time_slice.boundary.outline.r'
-        ztag = 'equilibrium.time_slice.boundary.outline.z'
-        if rtag in data and ztag in data:
-            rdata = data[rtag].dropna('i_bdry_eq').to_numpy().flatten()
-            zdata = data[ztag].dropna('i_bdry_eq').to_numpy().flatten()
-            if len(rdata) == len(zdata):
-                eqdata['nbdry'] = len(rdata)
-                eqdata['rbdry'] = rdata
-                eqdata['zbdry'] = zdata
+        eqdata = self.to_eqdsk(time_index=time_index, side=side, cocos=cocos, transpose=transpose)
         write_eqdsk(eqdata, eqpath)
         logger.info('Successfully generated g-eqdsk file, {path}')
 
@@ -551,20 +505,23 @@ class omas_io(io):
         self,
         basepath: str | Path,
         side: str = 'output',
+        cocos: int | None = None,
+        transpose: bool = False,
     ) -> None:
         path = None
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
         assert isinstance(path, Path)
-        data = self.input if side == 'input' else self.output
-        if 'time_eq' in data.coords:
-            for ii, time in enumerate(data['time_eq'].to_numpy().flatten()):
+        data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
+        time_eq = 'equilibrium.time'
+        if time_eq in data:
+            for ii, time in enumerate(data[time_eq].to_numpy().flatten()):
                 stem = f'{path.stem}'
                 if stem.endswith('_input'):
                     stem = stem[:-6]
                 time_tag = int(np.rint(time * 1000))
                 eqpath = path.parent / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
-                self.generate_eqdsk_file(eqpath, time_index=ii, side=side)
+                self.generate_eqdsk_file(eqpath, time_index=ii, side=side, cocos=cocos, transpose=transpose)
 
 
     @classmethod
@@ -577,3 +534,14 @@ class omas_io(io):
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
 
 
+    @classmethod
+    def from_omas(
+        cls,
+        obj: io,
+        side: str = 'output',
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+        return newobj
