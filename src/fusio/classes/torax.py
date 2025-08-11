@@ -914,7 +914,7 @@ class torax_io(io):
         chie: float,
         rho: float,
         tstart: float | None = None,
-        tend: float | None = None
+        tend: float | None = None,
     ) -> None:
         time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         trigger = np.isfinite(time)
@@ -958,7 +958,7 @@ class torax_io(io):
         scrit: float,
         flat: float = 1.01,
         rmult: float = 1.1,
-        deltat: float = 1.0e-3
+        deltat: float = 1.0e-3,
     ) -> None:
         time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
@@ -974,43 +974,127 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def set_exchange_source(
+    def reset_exchange_source(
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ei_exchange.mode'] = 'MODEL_BASED'
-        newattrs['sources.ei_exchange.Qei_multiplier'] = 1.0
+        newattrs['sources.ei_exchange.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
+        delattrs = [
+            'sources.ei_exchange.Qei_multiplier'
+        ]
+        self.delete_input_attrs(delattrs)
         delvars = [
             'sources.ei_exchange.prescribed_values',
         ]
         self.delete_input_data_vars(delvars)
 
 
-    def set_ohmic_source(
+    def set_default_exchange_source(
+        self,
+    ) -> None:
+        self.reset_exchange_source()
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.ei_exchange.mode'] = 'MODEL_BASED'
+        newattrs['sources.ei_exchange.Qei_multiplier'] = 1.0
+        self.update_input_attrs(newattrs)
+
+
+    def set_prescribed_exchange_source(
+        self,
+        rho: NDArray,
+        values: NDArray,
+    ) -> None:
+        # TODO: Should make 2D version
+        self.reset_exchange_source()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvals = np.interp(newrho, rho, values)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.ei_exchange.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.ei_exchange.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
+        self.update_input_data_vars(newvars)
+
+
+    def reset_ohmic_source(
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ohmic.mode'] = 'MODEL_BASED'
+        newattrs['sources.ohmic.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.ohmic.prescribed_values',
         ]
         self.delete_input_data_vars(delvars)
+
+
+    def set_default_ohmic_source(
+        self,
+    ) -> None:
+        self.reset_ohmic_source()
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.ohmic.mode'] = 'MODEL_BASED'
+        self.update_input_attrs(newattrs)
         if 'sources.generic_current.prescribed_values' in self.input and 'profile_conditions.j_ohmic' in self.input:
             self.input['sources.generic_current.prescribed_values'] = self.input['sources.generic_current.prescribed_values'] - self.input['profile_conditions.j_ohmic']
 
 
-    def set_fusion_source(
+    def set_prescribed_ohmic_source(
+        self,
+        rho: NDArray,
+        values: NDArray,
+    ) -> None:
+        # TODO: Should make 2D version
+        self.reset_ohmic_source()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvals = np.interp(newrho, rho, values)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.ohmic.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.ohmic.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
+        self.update_input_data_vars(newvars)
+
+
+    def reset_fusion_source(
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.fusion.mode'] = 'MODEL_BASED'
+        newattrs['sources.fusion.mode'] = 'ZERO'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.fusion.prescribed_values',
         ]
         self.delete_input_data_vars(delvars)
+
+
+    def set_default_fusion_source(
+        self,
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.fusion.mode'] = 'MODEL_BASED'
+        self.update_input_attrs(newattrs)
+
+
+    def set_prescribed_fusion_source(
+        self,
+        rho: NDArray,
+        values: NDArray,
+    ) -> None:
+        # TODO: Should make 2D version
+        self.reset_fusion_source()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvals = np.interp(newrho, rho, values)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.fusion.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.fusion.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
+        self.update_input_data_vars(newvars)
 
 
     def reset_gas_puff_source(
@@ -1026,11 +1110,12 @@ class torax_io(io):
         self.delete_input_data_vars(delvars)
 
 
-    def set_gas_puff_source(
+    def set_default_gas_puff_source(
         self, 
         length: float,
-        total: float
+        total: float,
     ) -> None:
+        self.reset_gas_puff_source()
         time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
         newvars = {}
         newvars['sources.gas_puff.puff_decay_length'] = (['time'], np.zeros_like(time) + length)
@@ -1041,7 +1126,25 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
-    def set_bootstrap_current_source(
+    def set_prescribed_gas_puff_source(
+        self,
+        rho: NDArray,
+        values: NDArray,
+    ) -> None:
+        # TODO: Should make 2D version
+        self.reset_gas_puff_source()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvals = np.interp(newrho, rho, values)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.gas_puff.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.gas_puff.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
+        self.update_input_data_vars(newvars)
+
+
+    def set_default_bootstrap_current_source(
         self,
     ) -> None:
         self.add_neoclassical_bootstrap_current()
@@ -1063,7 +1166,7 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def set_bremsstrahlung_source(
+    def set_default_bremsstrahlung_source(
         self,
     ) -> None:
         self.reset_bremsstrahlung_source()
@@ -1071,6 +1174,24 @@ class torax_io(io):
         newattrs['sources.bremsstrahlung.mode'] = 'MODEL_BASED'
         newattrs['sources.bremsstrahlung.use_relativistic_correction'] = True
         self.update_input_attrs(newattrs)
+
+
+    def set_prescribed_bremsstrahlung_source(
+        self,
+        rho: NDArray,
+        values: NDArray,
+    ) -> None:
+        # TODO: Should make 2D version
+        self.reset_bremsstrahlung_source()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvals = np.interp(newrho, rho, values)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
+        self.update_input_data_vars(newvars)
 
 
     def reset_line_radiation_source(
@@ -1103,6 +1224,24 @@ class torax_io(io):
         self.reset_bremsstrahlung_source()
 
 
+    def set_prescribed_line_radiation_source(
+        self,
+        rho: NDArray,
+        values: NDArray,
+    ) -> None:
+        # TODO: Should make 2D version
+        self.reset_line_radiation_source()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvals = np.interp(newrho, rho, values)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
+        self.update_input_data_vars(newvars)
+
+
     def reset_synchrotron_source(
         self,
     ) -> None:
@@ -1122,7 +1261,7 @@ class torax_io(io):
         self.delete_input_attrs(delattrs)
 
 
-    def set_synchrotron_source(
+    def set_default_synchrotron_source(
         self,
     ) -> None:
         self.reset_synchrotron_source()
@@ -1133,6 +1272,24 @@ class torax_io(io):
         newattrs['sources.cyclotron_radiation.beta_max'] = 8.0
         newattrs['sources.cyclotron_radiation.beta_grid_size'] = 32
         self.update_input_attrs(newattrs)
+
+
+    def set_prescribed_synchrotron_source(
+        self,
+        rho: NDArray,
+        values: NDArray,
+    ) -> None:
+        # TODO: Should make 2D version
+        self.reset_synchrotron_source()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvals = np.interp(newrho, rho, values)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.cyclotron_radiation.mode'] = 'PRESCRIBED'
+        self.update_input_attrs(newattrs)
+        newvars = {}
+        newvars['sources.cyclotron_radiation.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
+        self.update_input_data_vars(newvars)
 
 
     def add_toricnn_icrh_source(
@@ -1298,7 +1455,7 @@ class torax_io(io):
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         neweheat = np.interp(newrho, rho, eheat)
         newiheat = np.interp(newrho, rho, iheat)
-        newattrs = {}
+        newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_heat.mode'] = 'PRESCRIBED'
         self.update_input_attrs(newattrs)
         newvars = {}
