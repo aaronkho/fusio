@@ -1736,14 +1736,14 @@ class torax_io(io):
                 if 'main_ion' in ds[key].dims:
                     for species in ds['main_ion'].to_numpy().flatten():
                         da = ds[key].dropna(ttag).sel(main_ion=species)
-                        if rtag in da:
+                        if rtag is not None and rtag in da:
                             da = da.rename({rtag: 'rho_norm'})
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
                 elif 'impurity' in ds[key].dims:
                     for species in ds['impurity'].to_numpy().flatten():
                         da = ds[key].dropna(ttag).sel(impurity=species)
-                        if rtag in da:
+                        if rtag is not None and rtag in da:
                             da = da.rename({rtag: 'rho_norm'})
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
@@ -1893,8 +1893,9 @@ class torax_io(io):
                                     nz = nz * scharge / newsz
                                     if sn == 'He':
                                         sname = 'He4'
-                                # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
-                                impcomp[sname] = nz
+                                if ii in implist:
+                                    # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
+                                    impcomp[sname] = nz
                                 nsum += nz
                             zeff += (data['ni'] * data['z'] ** 2.0 / data['ne']).isel(name=ii)
                         total = 0.0
@@ -2134,8 +2135,9 @@ class torax_io(io):
                             nz = nz * sz / newsz
                             if sn == 'He':
                                 sname = 'He4'
-                        # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
-                        impcomp[sname] = nz
+                        if ii in implist:
+                            # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
+                            impcomp[sname] = nz
                         nsum += nz
                         zeff += data.isel({ion_cp_i: ii})[omas_tag] * sz ** 2.0 / data['core_profiles.profiles_1d.electrons.density']
                     total = xr.zeros_like(nsum.mean(rho_cp_i))
