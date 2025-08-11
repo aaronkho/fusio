@@ -459,7 +459,7 @@ class torax_io(io):
             self.reset_generic_current_source()
         use_fusion = data.attrs.get('use_fusion', True)
         if not use_fusion:
-            self.set_fusion_source()
+            self.reset_fusion_source()
 
 
     def read(
@@ -1059,6 +1059,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_exchange_source()
+        data = self.input.to_dataset()
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1100,6 +1101,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_ohmic_source()
+        data = self.input.to_dataset()
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1138,6 +1140,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_fusion_source()
+        data = self.input.to_dataset()
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1185,6 +1188,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_gas_puff_source()
+        data = self.input.to_dataset()
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1235,6 +1239,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_bremsstrahlung_source()
+        data = self.input.to_dataset()
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1283,6 +1288,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_line_radiation_source()
+        data = self.input.to_dataset()
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1333,6 +1339,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_synchrotron_source()
+        data = self.input.to_dataset()
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1867,6 +1874,10 @@ class torax_io(io):
                     zeff = xr.ones_like(data['ne'])
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
+                        implist = []
+                        for ii in range(len(namelist)):
+                            if namelist[ii] not in ['H', 'D', 'T']:
+                                implist.append(ii)
                         impcomp = {}
                         zeff = xr.zeros_like(data['ne'])
                         nsum = xr.zeros_like(data['ne'])
