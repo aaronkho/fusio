@@ -797,7 +797,7 @@ class gacode_io(io):
         if isinstance(obj, io):
 
             data: xr.Dataset = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
-            obj_cocos = obj.input_cocos if side == 'input' else obj.output_cocos
+            obj_cocos = obj.input_cocos if side == 'input' else obj.output_cocos  # type: ignore[attr-defined]
             time_cp = 'core_profiles.time'
             rho_cp_i = 'core_profiles.profiles_1d.grid.rho_tor_norm:i'
             rho_cp = 'core_profiles.profiles_1d.grid.rho_tor_norm'

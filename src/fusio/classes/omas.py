@@ -9,8 +9,8 @@ import xarray as xr
 from packaging.version import Version
 import copy
 import json
-import omas
-from omas.omas_core import ODS
+import omas  # type: ignore[import-untyped]
+from omas.omas_core import ODS  # type: ignore[import-untyped]
 from .io import io
 from ..utils.eqdsk_tools import (
     convert_cocos,
@@ -102,7 +102,7 @@ class omas_io(io):
         def _apply_special_coordinate_rules(
             segments: Sequence[str],
             dimensions: MutableSequence[str],
-        ) -> Sequence[str]:
+        ) -> MutableSequence[str]:
             # Uses field segments to manually append data array dimensions added after discovery
             newdims = copy.deepcopy(dimensions)
             if segments[0] == 'core_profiles' and 'profiles_1d' in segments:
@@ -128,7 +128,9 @@ class omas_io(io):
             elif segments[0] == 'equilibrium' and 'boundary' in segments and 'outline' in segments:
                 newdims.append('equilibrium.time_slice.boundary.outline.r:i')
             elif segments[0] == 'pulse_schedule' and 'reference' in segments:
-                newdims.append('.'.join(segments[:-1] + ['time']))
+                dims = list(segments[:-1])
+                dims.append('time')
+                newdims.append('.'.join(dims))
             elif segments[0] == 'summary' and 'global_quantities' in segments:
                 newdims.append('summary.time')
             elif segments[0] == 'wall' and 'description_2d' in segments and 'outline' in segments:
@@ -137,7 +139,7 @@ class omas_io(io):
 
         def _recursive_array_structure_search(
             ods: ODS,
-        ) -> Sequence[MutableMapping[str, Any], MutableMapping[str, Any]]:
+        ) -> Sequence[MutableMapping[str, Any]]:
             struct_names: MutableMapping[str, Any] = {}
             field_names: MutableMapping[str, Any] = {}
             for key, val in ods.items():
@@ -251,7 +253,7 @@ class omas_io(io):
                 coords[f'{ctag}:i'] = np.arange(data_sizes[ctag][0]).astype(int)
 
         for key, size in data_sizes.items():
-            dims = []
+            dims: MutableSequence[str] = []
             components = key.split('.')
             long_key = ''
             for ii in range(len(components)):
@@ -455,8 +457,8 @@ class omas_io(io):
             tag = 'equilibrium.time_slice.profiles_2d.psi'
             if tag in data:
                 dims = data[tag].dims
-                dim1_tag = [dim for dim in dims if 'dim1' in dim][0]
-                dim2_tag = [dim for dim in dims if 'dim2' in dim][0]
+                dim1_tag = [dim for dim in dims if 'dim1' in f'{dim}'][0]
+                dim2_tag = [dim for dim in dims if 'dim2' in f'{dim}'][0]
                 do_transpose = bool(dims.index(dim1_tag) < dims.index(dim2_tag))
                 if transpose:
                     do_transpose = bool(not do_transpose)

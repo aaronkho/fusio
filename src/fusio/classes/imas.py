@@ -737,8 +737,8 @@ class imas_io(io):
             tag = 'equilibrium.time_slice.profiles_2d.psi'
             if tag in data:
                 dims = data[tag].dims
-                dim1_tag = [dim for dim in dims if 'dim1' in dim][0]
-                dim2_tag = [dim for dim in dims if 'dim2' in dim][0]
+                dim1_tag = [dim for dim in dims if 'dim1' in f'{dim}'][0]
+                dim2_tag = [dim for dim in dims if 'dim2' in f'{dim}'][0]
                 do_transpose = bool(dims.index(dim1_tag) < dims.index(dim2_tag))
                 if transpose:
                     do_transpose = bool(not do_transpose)
@@ -839,13 +839,13 @@ class imas_io(io):
             # TODO: Should compress down last_index_fields to true coordinates and set rho values as actual dimensions
             top_levels = {}
             for key in data.coords:
-                components = key.split('.')
+                components = f'{key}'.split('.')
                 if components[0] not in top_levels:
                     top_levels[f'{components[0]}'] = 1
             for level in top_levels:
                 n_time_coords = 0
                 for key in data.coords:
-                    components = key.split('.')
+                    components = f'{key}'.split('.')
                     if len(components) > 1 and components[0] == level and components[-1] == 'time':
                         n_time_coords += 1
                 if n_time_coords > 1:
