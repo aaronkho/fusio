@@ -743,6 +743,58 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def add_constant_transport(
+        self,
+        rho_min: float | None = None,
+        rho_max: float | None = None,
+    ) -> None:
+        data = self.input.to_dataset()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newcoords = {}
+        newvars = {}
+        newattrs: MutableMapping[str, Any] = {}
+        prefix = 'transport'
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_models', {})
+            prefix = f'transport.transport_models.{len(models):d}'
+            if 'pedestal.rho_norm_ped_top' in data:
+                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+            newattrs[f'{prefix}.apply_inner_patch'] = False
+            newattrs[f'{prefix}.apply_outer_patch'] = False
+            models.update({'constant': len(models)})
+            newattrs['map_combined_models'] = models
+        if rho_min is not None:
+            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+        if rho_max is not None:
+            newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+        newattrs[f'{prefix}.model_name'] = 'constant'
+        xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, 11)
+        factor = np.abs((xrho - np.nanmin(xrho)) / (1.0 - np.nanmin(xrho)))
+        chirho = 0.01 * np.exp(-factor / 0.2)
+        drho = 0.01 * np.exp(-factor / 0.2)
+        vrho = np.zeros_like(factor)
+        newcoords['rho_const'] = xrho.flatten()
+        newvars[f'{prefix}.chi_i'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
+        newvars[f'{prefix}.chi_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
+        newvars[f'{prefix}.D_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
+        newvars[f'{prefix}.V_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
+        newattrs['transport.chi_min'] = 0.05
+        newattrs['transport.chi_max'] = 100.0
+        newattrs['transport.D_e_min'] = 0.05
+        newattrs['transport.D_e_max'] = 100.0
+        newattrs['transport.V_e_min'] = -50.0
+        newattrs['transport.V_e_max'] = 50.0
+        newattrs['transport.smoothing_width'] = 0.1
+        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
+        #if 'transport.apply_inner_patch' not in data.attrs:
+        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
+        #if 'transport.apply_outer_patch' not in data.attrs:
+        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
     def add_qualikiz_transport(
         self,
         rho_min: float | None = None,
