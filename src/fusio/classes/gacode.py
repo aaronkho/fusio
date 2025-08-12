@@ -330,59 +330,105 @@ class gacode_io(io):
         return mxh_data
 
 
+    def _compute_derived_coordinates(
+        self,
+    ) -> None:
+        data = self.input.to_dataset()
+        newvars = {}
+        if 'rho' in data:
+            if 'mref' not in data:
+                newvars['mref'] = np.zeros(data['n'].to_numpy()) + 2.0
+            if 'rmin' in data:
+                a = data['rmin'].isel(rho=1)
+                newvars['a'] = (['n'], a.to_numpy().flatten())
+                newvars['roa'] = (['n', 'rho'], (data['rmin'] / a).to_numpy())
+                if 'rmaj' in data:
+                    newvars['aspect_local'] = (['n', 'rho'], (data['rmaj'] / data['rmin']).to_numpy())
+                    newvars['aspect'] = (['n'], (data['rmaj'] / data['rmin']).isel(rho=-1).to_numpy())
+                    newvars['eps_local'] = (['n', 'rho'], (data['rmin'] / data['rmaj']).to_numpy())
+                    newvars['eps'] = (['n'], (data['rmin'] / data['rmaj']).isel(rho=-1).to_numpy())
+                    newvars['rmajoa'] = (['n', 'rho'], (data['rmaj'] / a).to_numpy())
+                if 'zmag' in data:
+                    newvars['zmagoa'] = (['n', 'rho'], (data['zmag'] / a).to_numpy())
+            if 'torfluxa' in data:
+                torflux = 2.0 * np.pi * data['torflux'] * data['rho'] ** 2
+                newvars['torflux'] = (['n', 'rho'], torflux.to_numpy())
+                newvars['psi_tor_norm'] = (['n', 'rho'], (torflux / torflux.isel(rho=-1)).to_numpy())
+                newvars['rho_tor'] = (['n', 'rho'], np.sqrt((torflux / torflux.isel(rho=-1)).to_numpy()))
+            if 'polflux' in data:
+                polfluxn = (data['polflux'] - data['polflux'].isel(rho=0)) / (data['polflux'].isel(rho=-1) - data['polflux'].isel(rho=0))
+                newvars['psi_pol_norm'] = (['n', 'rho'], polfluxn.to_numpy())
+                newvars['rho_pol'] = (['n', 'rho'], np.sqrt(polfluxn.to_numpy()))
+        self.update_input_data_vars(newvars)
+
+
     def compute_derived_quantities(
         self,
     ) -> None:
 
+        def derivative(x, y):
+            deriv = np.zeros_like(x)
+            if len(x) > 2:
+                x1 = np.concatenate([x[0], x[:-2], x[-3]])
+                x2 = np.concatenate([x[1], x[1:-1], x[-2]])
+                x3 = np.concatenate([x[2], x[2:], x[-1]])
+                y1 = np.concatenate([y[0], y[:-2], y[-3]])
+                y2 = np.concatenate([y[1], y[1:-1], y[-2]])
+                y3 = np.concatenate([y[2], y[2:], y[-1]])
+                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
+            elif len(x) > 1:
+                deriv += np.diff(y) / np.diff(x)
+            return deriv
+        def find_interp_last(v, x, y):
+            out = np.nan
+            yprod = (y - v)[1:] * (y - v)[:-1]
+            yidx = np.where(yprod)[0]
+            if len(yidx) > 0:
+                yi = yidx[-1]
+                out = (v - y[yi]) * (x[yi + 1] - x[yi]) / (y[yi + 1] - y[yi])
+            return out
+        v_interp = np.vectorize(np.interp, signature='(m),(m,n),(m,n)->(m)')
+        v_interp_last = np.vectorize(find_interp_last, signature='(m),(m,n),(m,n)->(m)')
+
+        self._compute_derived_coordinates()
         data = self.input.to_dataset()
 
         newvars = {}
         if 'rho' in data:
+            n_zeros = np.zeros_like(data['n'].to_numpy())
+
             if 'qmom' not in data:
-                newvars['qmom'] = (['n', 'rho'], np.expand_dims(np.zeros_like(data['rho'].to_numpy().flatten()), axis=0))
+                newvars['qmom'] = (['n', 'rho'], np.repeat(np.atleast_2d(np.zeros_like(data['rho'].to_numpy().flatten())), len(data['n']), axis=0))
 
-            if 'rmin' in data:
-                newvars['a'] = (['n'], data['rmin'].isel(rho=-1).to_numpy().flatten())
-                if 'rmaj' in data:
-                    newvars['aspect_local'] = (['n', 'rho'], np.expand_dims((data['rmaj'] / data['rmin']).to_numpy().flatten(), axis=0))
-                    newvars['aspect'] = (['n'], (data['rmaj'] / data['rmin']).isel(rho=-1).to_numpy().flatten())
-                    newvars['eps_local'] = (['n'], np.expand_dims((data['rmin'] / data['rmaj']).to_numpy().flatten(), axis=0))
-                    newvars['eps'] = (['n'], (data['rmin'] / data['rmaj']).isel(rho=-1).to_numpy().flatten())
+            if 'rmin' in data and 'torflux' in data:
+                newvars['B_unit'] = (['n', 'rho'], np.atleast_2d(derivative(0.5 * data['rmin'].to_numpy() ** 2 , data['torflux'].to_numpy() / (2.0 * pi))))
 
-        newvars['roa'] = data['rmin(m)'] / newvars['a']
-        newvars['Rmajoa'] = data['rmaj(m)'] / newvars['a']
-        newvars['Zmagoa'] = data['zmag(m)'] / newvars['a']
+            if 'shape_sin0' not in data:
+                newvars['shape_sin0'] = (['n', 'rho'], np.repeat(np.atleast_2d(np.zeros_like(data['rho'].to_numpy().flatten())), len(data['n']), axis=0))
+            if 'delta' in data:
+                newvars['shape_sin1'] = (['n', 'rho'], np.arcsin(data['delta'].to_numpy()))
+            if 'zeta' in data:
+                newvars['shape_sin2'] = (['n', 'rho'], -1.0 * data['zeta'].to_numpy())
 
-        newvars['torflux'] = (
-            float(data['torfluxa(Wb/radian)'][0])
-            * 2
-            * np.pi
-            * data['rho(-)'] ** 2
-        )  # Wb
-        newvars['B_unit'] = PLASMAtools.Bunit(
-            newvars['torflux'], data['rmin(m)']
+            if 'q' in data and 'psi_pol_norm' in data:
+                newvars['q0'] = v_interp(n_zeros, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy())
+                newvars['q95'] = v_interp(n_zeros + 0.95, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy())
+                newvars['rho_saw'] = v_interp_last(n_zeros + 1.0, data['rho_tor'].to_numpy(), data['q'].to_numpy())
+
+        newvars['c_s'] = PLASMAtools.c_s(
+            data['te(keV)'], newvars['mi_ref']
+        )
+        newvars['rho_s'] = PLASMAtools.rho_s(
+            data['te(keV)'], newvars['mi_ref'], newvars['B_unit']
         )
 
-        newvars['psi_pol_n'] = (
-            data['polflux(Wb/radian)'] - data['polflux(Wb/radian)'][0]
-        ) / (
-            data['polflux(Wb/radian)'][-1]
-            - data['polflux(Wb/radian)'][0]
+        newvars['q_gb'], newvars['g_gb'], _, _, _ = PLASMAtools.gyrobohmUnits(
+            data['te(keV)'],
+            data['ne(10^19/m^3)'] * 1e-1,
+            newvars['mi_ref'],
+            np.abs(newvars['B_unit']),
+            data['rmin(m)'][-1],
         )
-        newvars['rho_pol'] = newvars['psi_pol_n'] ** 0.5
-
-        newvars['q95'] = np.interp(
-            0.95, newvars['psi_pol_n'], data['q(-)']
-        )
-
-        newvars['q0'] = data['q(-)'][0]
-
-        if data['q(-)'].min() > 1.0: 
-            newvars['rho_saw'] = np.nan
-        else:
-            newvars['rho_saw'] = np.interp(
-                1.0, data['q(-)'], data['rho(-)']
-            )
 
         # --------- Geometry (only if it doesn't exist or if I ask to recalculate)
 
@@ -481,20 +527,6 @@ class gacode_io(io):
 
         newvars['surfGACODE_miller'][np.isnan(newvars['surfGACODE_miller'])] = 0
 
-        newvars['c_s'] = PLASMAtools.c_s(
-            data['te(keV)'], newvars['mi_ref']
-        )
-        newvars['rho_s'] = PLASMAtools.rho_s(
-            data['te(keV)'], newvars['mi_ref'], newvars['B_unit']
-        )
-
-        newvars['q_gb'], newvars['g_gb'], _, _, _ = PLASMAtools.gyrobohmUnits(
-            data['te(keV)'],
-            data['ne(10^19/m^3)'] * 1e-1,
-            newvars['mi_ref'],
-            np.abs(newvars['B_unit']),
-            data['rmin(m)'][-1],
-        )
 
         """
 		In prgen_map_plasmastate:
