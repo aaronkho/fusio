@@ -330,14 +330,54 @@ class gacode_io(io):
         return mxh_data
 
 
+    def _compute_derived_reference_quantities(
+        self,
+    ) -> None:
+        def derivative(x, y):
+            deriv = np.zeros_like(x)
+            if len(x) > 2:
+                x1 = np.concatenate([x[0], x[:-2], x[-3]])
+                x2 = np.concatenate([x[1], x[1:-1], x[-2]])
+                x3 = np.concatenate([x[2], x[2:], x[-1]])
+                y1 = np.concatenate([y[0], y[:-2], y[-3]])
+                y2 = np.concatenate([y[1], y[1:-1], y[-2]])
+                y3 = np.concatenate([y[2], y[2:], y[-1]])
+                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
+            elif len(x) > 1:
+                deriv += np.diff(y) / np.diff(x)
+            return deriv
+        e_si = 1.60218e-19  # C
+        u_si = 1.66054e-27  # kg
+        data = self.input.to_dataset()
+        newvars = {}
+        if 'rho' in data:
+            mref = data.get('mref', xr.zeros_like(data['n']) + 2.0).to_numpy().flatten()
+            bunit = xr.ones_like(data['polflux'])
+            if 'mref' not in data:
+                newvars['mref'] = (['n'], mref)
+            if 'rmin' in data and 'torflux' in data:
+                bunit = derivative(0.5 * data['rmin'].to_numpy() ** 2, data['torflux'].to_numpy() / (2.0 * np.pi))
+                newvars['b_unit'] = (['n', 'rho'], bunit)
+            if 'te' in data:
+                newvars['c_s'] = (['n', 'rho'], (1.0e3 * e_si * data['te'].to_numpy() / (u_si * mref)) ** (0.5))
+                newvars['rho_s_unit'] = (['n', 'rho'], (1.0e3 * data['te'].to_numpy() * u_si * mref / e_si) ** (0.5) / np.abs(bunit))
+                if 'masse' in data:
+                    newvars['c_the'] = (['n', 'rho'], ((2.0 * 1.0e3 * e_si * data['te'] / (u_si * data['masse'])) ** (0.5)).to_numpy())
+            if 'ti' in data and 'masse' in data:
+                newvars['c_thi'] = (['n', 'rho', 'name'], ((2.0 * 1.0e3 * e_si * data['ti'] / (u_si * data['mass'])) ** (0.5)).to_numpy())
+            if 'rcentr' in data:
+                newvars['rgeo'] = (['n'], data['rcentr'].to_numpy())
+            if 'bcentr' in data:
+                newvars['b_zero'] = (['n'], np.abs(data['bcentr'].to_numpy()))
+        self.update_input_data_vars(newvars)
+
+
     def _compute_derived_coordinates(
         self,
     ) -> None:
         data = self.input.to_dataset()
         newvars = {}
         if 'rho' in data:
-            if 'mref' not in data:
-                newvars['mref'] = np.zeros(data['n'].to_numpy()) + 2.0
             if 'rmin' in data:
                 a = data['rmin'].isel(rho=1)
                 newvars['a'] = (['n'], a.to_numpy().flatten())
@@ -366,19 +406,20 @@ class gacode_io(io):
         self,
     ) -> None:
 
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if len(x) > 2:
-                x1 = np.concatenate([x[0], x[:-2], x[-3]])
-                x2 = np.concatenate([x[1], x[1:-1], x[-2]])
-                x3 = np.concatenate([x[2], x[2:], x[-1]])
-                y1 = np.concatenate([y[0], y[:-2], y[-3]])
-                y2 = np.concatenate([y[1], y[1:-1], y[-2]])
-                y3 = np.concatenate([y[2], y[2:], y[-1]])
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif len(x) > 1:
-                deriv += np.diff(y) / np.diff(x)
-            return deriv
+        # SI
+        e_si = 1.60218e-19  # C
+        u_si = 1.66054e-27  # kg
+        eps0_si = 8.85419e-12  # F/m
+        mu0_si = 4.0 * np.pi * 1.0e-7
+        me_u = 5.4488741e-04  # as in input.gacode
+
+        # CGS
+        me_cgs = 9.1094e-28  # g
+        k_cgs = 1.6022e-12  # erg/eV
+        e_cgs = 4.8032e-10  # statcoul
+        c_cgs = 2.9979e10  # cm/s
+        md_cgs = 3.34358e-24
+
         def find_interp_last(v, x, y):
             out = np.nan
             yprod = (y - v)[1:] * (y - v)[:-1]
@@ -390,6 +431,7 @@ class gacode_io(io):
         v_interp = np.vectorize(np.interp, signature='(m),(m,n),(m,n)->(m)')
         v_interp_last = np.vectorize(find_interp_last, signature='(m),(m,n),(m,n)->(m)')
 
+        self._compute_derived_reference_quantities()
         self._compute_derived_coordinates()
         data = self.input.to_dataset()
 
@@ -400,13 +442,17 @@ class gacode_io(io):
             if 'qmom' not in data:
                 newvars['qmom'] = (['n', 'rho'], np.repeat(np.atleast_2d(np.zeros_like(data['rho'].to_numpy().flatten())), len(data['n']), axis=0))
 
-            if 'rmin' in data and 'torflux' in data:
-                newvars['B_unit'] = (['n', 'rho'], np.atleast_2d(derivative(0.5 * data['rmin'].to_numpy() ** 2 , data['torflux'].to_numpy() / (2.0 * pi))))
+            if 'kappa' in data:
+                newvars['kappa95'] = v_interp(n_zeros + 0.95, data['psi_pol_norm'].to_numpy(), data['kappa'].to_numpy())
+                newvars['kappa995'] = v_interp(n_zeros + 0.995, data['psi_pol_norm'].to_numpy(), data['kappa'].to_numpy())
+                #newvars['kappa_a'] = (data['surfXS'].isel(-1) / np.pi / data['a'] ** 2).to_numpy()
 
             if 'shape_sin0' not in data:
                 newvars['shape_sin0'] = (['n', 'rho'], np.repeat(np.atleast_2d(np.zeros_like(data['rho'].to_numpy().flatten())), len(data['n']), axis=0))
             if 'delta' in data:
                 newvars['shape_sin1'] = (['n', 'rho'], np.arcsin(data['delta'].to_numpy()))
+                newvars['delta95'] = v_interp(n_zeros + 0.95, data['psi_pol_norm'].to_numpy(), data['delta'].to_numpy())
+                newvars['delta995'] = v_interp(n_zeros + 0.995, data['psi_pol_norm'].to_numpy(), data['delta'].to_numpy())
             if 'zeta' in data:
                 newvars['shape_sin2'] = (['n', 'rho'], -1.0 * data['zeta'].to_numpy())
 
@@ -415,20 +461,20 @@ class gacode_io(io):
                 newvars['q95'] = v_interp(n_zeros + 0.95, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy())
                 newvars['rho_saw'] = v_interp_last(n_zeros + 1.0, data['rho_tor'].to_numpy(), data['q'].to_numpy())
 
-        newvars['c_s'] = PLASMAtools.c_s(
-            data['te(keV)'], newvars['mi_ref']
-        )
-        newvars['rho_s'] = PLASMAtools.rho_s(
-            data['te(keV)'], newvars['mi_ref'], newvars['B_unit']
-        )
+            if 'rho_s_unit' in data and 'c_s' in data:
+                newvars['gammae_gb'] = (['n', 'rho'], (data['ne'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
+                newvars['gammai_gb'] = (['n', 'rho', 'name'], (data['ni'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
+                newvars['qe_gb'] = (['n', 'rho'], (1.0e16 * e_si * data['ne'] * data['te'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
+                newvars['qi_gb'] = (['n', 'rho', 'name'], (1.0e16 * e_si * data['ni'] * data['ti'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
+                if 'masse' in data and 'c_the' in data:
+                    newvars['pie_gb'] = (['n', 'rho'], (1.0e19 * data['ne'] * u_si * data['masse'] * data['rmaj'] * data['c_the'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
+                if 'mass' in data and 'c_thi' in data:
+                    newvars['pii_gb'] = (['n', 'rho', 'name'], (1.0e19 * data['ni'] * u_si * data['mass'] * data['rmaj'] * data['c_thi'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
+                newvars['ex_gb'] = (['n', 'rho'], (1.0e16 * e_si * data['ne'] * data['te'] * data['c_s'] * (data['rho_s_unit']) ** 2 / (data['a'] ** 3)).to_numpy())
+                newvars['qce_gb'] = (['n', 'rho'], (1.5 * 1.0e16 * e_si * data['ne'] * data['te'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
+                newvars['qci_gb'] = (['n', 'rho', 'name'], (1.5 * 1.0e16 * e_si * data['ni'] * data['ti'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
 
-        newvars['q_gb'], newvars['g_gb'], _, _, _ = PLASMAtools.gyrobohmUnits(
-            data['te(keV)'],
-            data['ne(10^19/m^3)'] * 1e-1,
-            newvars['mi_ref'],
-            np.abs(newvars['B_unit']),
-            data['rmin(m)'][-1],
-        )
+
 
         # --------- Geometry (only if it doesn't exist or if I ask to recalculate)
 
@@ -481,40 +527,6 @@ class gacode_io(io):
                 newvars['B_unit'] * newvars['geo_bt']
             )
 
-        # --------------------------------------------------------------------------
-        # Reference mass
-        # --------------------------------------------------------------------------
-
-        # Forcing mass from this specific deriveQuantities call
-        if mi_ref is not None:
-            newvars['mi_ref'] = mi_ref
-            print(f'\t- Using mi_ref={newvars['mi_ref']} provided in this particular deriveQuantities method, subtituting initialization one',typeMsg='i')
-
-        # ---------------------------------------------------------------------------------------------------------------------
-        # --------- Important for scaling laws
-        # ---------------------------------------------------------------------------------------------------------------------
-
-        newvars['kappa95'] = np.interp(
-            0.95, newvars['psi_pol_n'], data['kappa(-)']
-        )
-
-        newvars['kappa995'] = np.interp(
-            0.995, newvars['psi_pol_n'], data['kappa(-)']
-        )
-
-        newvars['kappa_a'] = newvars['surfXS'][-1] / np.pi / newvars['a'] ** 2
-
-        newvars['delta95'] = np.interp(
-            0.95, newvars['psi_pol_n'], data['delta(-)']
-        )
-
-        newvars['delta995'] = np.interp(
-            0.995, newvars['psi_pol_n'], data['delta(-)']
-        )
-
-        newvars['Rgeo'] = float(data['rcentr(m)'][-1])
-        newvars['B0'] = np.abs(float(data['bcentr(T)'][-1]))
-
         # ---------------------------------------------------------------------------------------------------------------------
 
         """
@@ -528,30 +540,6 @@ class gacode_io(io):
         newvars['surfGACODE_miller'][np.isnan(newvars['surfGACODE_miller'])] = 0
 
 
-        """
-		In prgen_map_plasmastate:
-			qspow_e = expro_qohme+expro_qbeame+expro_qrfe+expro_qfuse-expro_qei &
-				-expro_qsync-expro_qbrem-expro_qline
-			qspow_i = expro_qbeami+expro_qrfi+expro_qfusi+expro_qei
-		"""
-
-        qe_terms = {
-            'qohme(MW/m^3)': 1,
-            'qbeame(MW/m^3)': 1,
-            'qrfe(MW/m^3)': 1,
-            'qfuse(MW/m^3)': 1,
-            'qei(MW/m^3)': -1,
-            'qsync(MW/m^3)': -1,
-            'qbrem(MW/m^3)': -1,
-            'qline(MW/m^3)': -1,
-            'qione(MW/m^3)': 1,
-        }
-
-        newvars['qe'] = np.zeros(len(data['rho(-)']))
-        for i in qe_terms:
-            if i in data:
-                newvars['qe'] += qe_terms[i] * data[i]
-
         qrad = {
             'qsync(MW/m^3)': 1,
             'qbrem(MW/m^3)': 1,
@@ -562,199 +550,6 @@ class gacode_io(io):
         for i in qrad:
             if i in data:
                 newvars['qrad'] += qrad[i] * data[i]
-
-        qi_terms = {
-            'qbeami(MW/m^3)': 1,
-            'qrfi(MW/m^3)': 1,
-            'qfusi(MW/m^3)': 1,
-            'qei(MW/m^3)': 1,
-            'qioni(MW/m^3)': 1,
-        }
-
-        newvars['qi'] = np.zeros(len(data['rho(-)']))
-        for i in qi_terms:
-            if i in data:
-                newvars['qi'] += qi_terms[i] * data[i]
-
-        # Depends on GACODE version
-        ge_terms = {self.varqpar: 1, self.varqpar2: 1}
-
-        newvars['ge'] = np.zeros(len(data['rho(-)']))
-        for i in ge_terms:
-            if i in data:
-                newvars['ge'] += ge_terms[i] * data[i]
-
-        """
-		Careful, that's in MW/m^3. I need to find the volumes. Using here the Miller
-		calculation. Should be consistent with TGYRO
-
-		profiles_gen puts any missing power into the CX: qioni, qione
-		"""
-
-        r = data['rmin(m)']
-        volp = newvars['volp_miller']
-
-        newvars['qe_MWmiller'] = CALCtools.integrateFS(newvars['qe'], r, volp)
-        newvars['qi_MWmiller'] = CALCtools.integrateFS(newvars['qi'], r, volp)
-        newvars['ge_10E20miller'] = CALCtools.integrateFS(
-            newvars['ge'] * 1e-20, r, volp
-        )  # Because the units were #/sec/m^3
-
-        newvars['geIn'] = newvars['ge_10E20miller'][-1]  # 1E20 particles/sec
-
-        newvars['qe_MWm2'] = newvars['qe_MWmiller'] / (volp)
-        newvars['qi_MWm2'] = newvars['qi_MWmiller'] / (volp)
-        newvars['ge_10E20m2'] = newvars['ge_10E20miller'] / (volp)
-
-        newvars['QiQe'] = newvars['qi_MWm2'] / np.where(newvars['qe_MWm2'] == 0, 1e-10, newvars['qe_MWm2']) # to avoid division by zero
-
-        # 'Convective' flux
-        newvars['ce_MWmiller'] = PLASMAtools.convective_flux(
-            data['te(keV)'], newvars['ge_10E20miller']
-        )
-        newvars['ce_MWm2'] = PLASMAtools.convective_flux(
-            data['te(keV)'], newvars['ge_10E20m2']
-        )
-
-        # qmom
-        newvars['mt_Jmiller'] = CALCtools.integrateFS(
-            data[self.varqmom], r, volp
-        )
-        newvars['mt_Jm2'] = newvars['mt_Jmiller'] / (volp)
-
-        # Extras for plotting in TGYRO for comparison
-        P = np.zeros(len(data['rmin(m)']))
-        if 'qsync(MW/m^3)' in data:
-            P += data['qsync(MW/m^3)']
-        if 'qbrem(MW/m^3)' in data:
-            P += data['qbrem(MW/m^3)']
-        if 'qline(MW/m^3)' in data:
-            P += data['qline(MW/m^3)']
-        newvars['qe_rad_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        P = data['qei(MW/m^3)']
-        newvars['qe_exc_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        """
-		---------------------------------------------------------------------------------------------------------------------
-		Note that the real auxiliary power is RF+BEAMS+OHMIC, 
-		The QIONE is added by TGYRO, but sometimes it includes radiation and direct RF to electrons
-		---------------------------------------------------------------------------------------------------------------------
-		"""
-
-        # ** Electrons
-
-        P = np.zeros(len(data['rho(-)']))
-        for i in ['qrfe(MW/m^3)', 'qohme(MW/m^3)', 'qbeame(MW/m^3)']:
-            if i in data:
-                P += data[i]
-
-        newvars['qe_auxONLY'] = copy.deepcopy(P)
-        newvars['qe_auxONLY_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        for i in ['qione(MW/m^3)']:
-            if i in data:
-                P += data[i]
-
-        newvars['qe_aux'] = copy.deepcopy(P)
-        newvars['qe_aux_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        # ** Ions
-
-        P = np.zeros(len(data['rho(-)']))
-        for i in ['qrfi(MW/m^3)', 'qbeami(MW/m^3)']:
-            if i in data:
-                P += data[i]
-
-        newvars['qi_auxONLY'] = copy.deepcopy(P)
-        newvars['qi_auxONLY_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        for i in ['qioni(MW/m^3)']:
-            if i in data:
-                P += data[i]
-
-        newvars['qi_aux'] = copy.deepcopy(P)
-        newvars['qi_aux_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        # ** General
-
-        P = np.zeros(len(data['rho(-)']))
-        for i in ['qohme(MW/m^3)']:
-            if i in data:
-                P += data[i]
-        newvars['qOhm_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        P = np.zeros(len(data['rho(-)']))
-        for i in ['qrfe(MW/m^3)', 'qrfi(MW/m^3)']:
-            if i in data:
-                P += data[i]
-        newvars['qRF_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-        if 'qrfe(MW/m^3)' in data:
-            newvars['qRFe_MWmiller'] = CALCtools.integrateFS(
-                data['qrfe(MW/m^3)'], r, volp
-            )
-        if 'qrfi(MW/m^3)' in data:
-            newvars['qRFi_MWmiller'] = CALCtools.integrateFS(
-                data['qrfi(MW/m^3)'], r, volp
-            )
-
-        P = np.zeros(len(data['rho(-)']))
-        for i in ['qbeame(MW/m^3)', 'qbeami(MW/m^3)']:
-            if i in data:
-                P += data[i]
-        newvars['qBEAM_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        newvars['qrad_MWmiller'] = CALCtools.integrateFS(newvars['qrad'], r, volp)
-        if 'qsync(MW/m^3)' in data:
-            newvars['qrad_sync_MWmiller'] = CALCtools.integrateFS(data['qsync(MW/m^3)'], r, volp)
-        else:
-            newvars['qrad_sync_MWmiller'] = newvars['qrad_MWmiller']*0.0
-        if 'qbrem(MW/m^3)' in data:
-            newvars['qrad_brem_MWmiller'] = CALCtools.integrateFS(data['qbrem(MW/m^3)'], r, volp)
-        else:
-            newvars['qrad_brem_MWmiller'] = newvars['qrad_MWmiller']*0.0
-        if 'qline(MW/m^3)' in data:    
-            newvars['qrad_line_MWmiller'] = CALCtools.integrateFS(data['qline(MW/m^3)'], r, volp)
-        else:
-            newvars['qrad_line_MWmiller'] = newvars['qrad_MWmiller']*0.0
-
-        P = np.zeros(len(data['rho(-)']))
-        for i in ['qfuse(MW/m^3)', 'qfusi(MW/m^3)']:
-            if i in data:
-                P += data[i]
-        newvars['qFus_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        P = np.zeros(len(data['rho(-)']))
-        for i in ['qioni(MW/m^3)', 'qione(MW/m^3)']:
-            if i in data:
-                P += data[i]
-        newvars['qz_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        newvars['q_MWmiller'] = (
-            newvars['qe_MWmiller'] + newvars['qi_MWmiller']
-        )
-
-        # ---------------------------------------------------------------------------------------------------------------------
-        # ---------------------------------------------------------------------------------------------------------------------
-
-        P = np.zeros(len(data['rho(-)']))
-        if 'qfuse(MW/m^3)' in data:
-            P = data['qfuse(MW/m^3)']
-        newvars['qe_fus_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        P = np.zeros(len(data['rho(-)']))
-        if 'qfusi(MW/m^3)' in data:
-            P = data['qfusi(MW/m^3)']
-        newvars['qi_fus_MWmiller'] = CALCtools.integrateFS(P, r, volp)
-
-        P = np.zeros(len(data['rho(-)']))
-        if 'qfusi(MW/m^3)' in data:
-            newvars['q_fus'] = (
-                data['qfuse(MW/m^3)'] + data['qfusi(MW/m^3)']
-            ) * 5
-            P = newvars['q_fus']
-        newvars['q_fus'] = P
-        newvars['q_fus_MWmiller'] = CALCtools.integrateFS(P, r, volp)
 
         """
 		Derivatives
