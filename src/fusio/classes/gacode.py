@@ -402,6 +402,74 @@ class gacode_io(io):
         self.update_input_data_vars(newvars)
 
 
+    def _compute_derived_geometrical_factors(
+        self,
+    ) -> None:
+        def derivative(x, y):
+            deriv = np.zeros_like(x)
+            if len(x) > 2:
+                x1 = np.concatenate([x[0], x[:-2], x[-3]])
+                x2 = np.concatenate([x[1], x[1:-1], x[-2]])
+                x3 = np.concatenate([x[2], x[2:], x[-1]])
+                y1 = np.concatenate([y[0], y[:-2], y[-3]])
+                y2 = np.concatenate([y[1], y[1:-1], y[-2]])
+                y3 = np.concatenate([y[2], y[2:], y[-1]])
+                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
+            elif len(x) > 1:
+                deriv += np.diff(y) / np.diff(x)
+            return deriv
+        data = self.input.to_dataset()
+        newvars = {}
+        if 'shape_sin0' not in data:
+            newvars['shape_sin0'] = (['n', 'rho'], np.repeat(np.atleast_2d(np.zeros_like(data['rho'].to_numpy().flatten())), len(data['n']), axis=0))
+        if 'delta' in data and 'shape_sin1' not in data:
+            newvars['shape_sin1'] = (['n', 'rho'], np.arcsin(data['delta'].to_numpy()))
+        if 'zeta' in data and 'shape_sin2' not in data:
+            newvars['shape_sin2'] = (['n', 'rho'], -1.0 * data['zeta'].to_numpy())
+        self.update_input_data_vars(newvars)
+        newvars = {}
+        if 'roa' in data:
+            if 'kappa' in data:
+                newvars['s_kappa'] = (['n', 'rho'], (data['roa'] / data['kappa']).to_numpy() * derivative(data['r'].to_numpy(), data['kappa'].to_numpy()))
+            if 'delta' in data:
+                newvars['s_delta'] = (['n', 'rho'], data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data['delta'].to_numpy()))
+            if 'zeta' in data:
+                newvars['s_zeta'] = (['n', 'rho'], data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data['zeta'].to_numpy()))
+            if 'zmagoa' in data:
+                newvars['dzmagdr'] = (['n', 'rho'], derivative(data['roa'].to_numpy(), data['zmagoa'].to_numpy()))
+            if 'rmajoa' in data:
+                newvars['drmagdr'] = (['n', 'rho'], derivative(data['roa'].to_numpy(), data['rmajoa'].to_numpy()))
+            if 'shape_sin0' in data:
+                newvars['s_shape_sin0'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_sin0'].to_numpy()))
+            if 'shape_sin1' in data:
+                newvars['s_shape_sin1'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_sin1'].to_numpy()))
+            if 'shape_sin2' in data:
+                newvars['s_shape_sin2'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_sin2'].to_numpy()))
+            if 'shape_sin3' in data:
+                newvars['s_shape_sin3'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_sin3'].to_numpy()))
+            if 'shape_sin4' in data:
+                newvars['s_shape_sin4'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_sin4'].to_numpy()))
+            if 'shape_sin5' in data:
+                newvars['s_shape_sin5'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_sin5'].to_numpy()))
+            if 'shape_sin6' in data:
+                newvars['s_shape_sin6'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_sin6'].to_numpy()))
+            if 'shape_cos0' in data:
+                newvars['s_shape_cos0'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_cos0'].to_numpy()))
+            if 'shape_cos1' in data:
+                newvars['s_shape_cos1'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_cos1'].to_numpy()))
+            if 'shape_cos2' in data:
+                newvars['s_shape_cos2'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_cos2'].to_numpy()))
+            if 'shape_cos3' in data:
+                newvars['s_shape_cos3'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_cos3'].to_numpy()))
+            if 'shape_cos4' in data:
+                newvars['s_shape_cos4'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_cos4'].to_numpy()))
+            if 'shape_cos5' in data:
+                newvars['s_shape_cos5'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_cos5'].to_numpy()))
+            if 'shape_cos6' in data:
+                newvars['s_shape_cos6'] = (['n', 'rho'], data['roa'] * derivative(data['roa'].to_numpy(), data['shape_cos6'].to_numpy()))
+        self.update_new_data_vars(newvars)
+
+
     def compute_derived_quantities(
         self,
     ) -> None:
@@ -474,6 +542,266 @@ class gacode_io(io):
                 newvars['qce_gb'] = (['n', 'rho'], (1.5 * 1.0e16 * e_si * data['ne'] * data['te'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
                 newvars['qci_gb'] = (['n', 'rho', 'name'], (1.5 * 1.0e16 * e_si * data['ni'] * data['ti'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
 
+
+    # ----------------------------------------
+    # Calculate the differencial volume at each radii
+    # 	from f2py/geo/geo.f90 in gacode source we have geo_volume_prime.
+    # ----------------------------------------
+
+    # Prepare cos_sins
+    cos_sin = []
+    cos_sin_s = []
+    for j in range(len(R)):
+        cos_sin0 = []
+        cos_sin_s0 = []
+        for k in range(len(shape_coeffs)):
+            if shape_coeffs[k] is not None:
+                cos_sin0.append(shape_coeffs[k][j])
+                cos_sin_s0.append(s_shape_coeffs[k][j])
+            else:
+                cos_sin0.append(None)
+                cos_sin_s0.append(None)
+        cos_sin.append(cos_sin0)
+        cos_sin_s.append(cos_sin_s0)
+
+    (
+        geo_volume_prime,
+        geo_surf,
+        geo_fluxsurfave_grad_r,
+        geo_fluxsurfave_bp2,
+        geo_fluxsurfave_bt2,
+        geo_bt0,
+    ) = volp_surf_Miller_vectorized(
+        R,
+        r,
+        delta,
+        kappa,
+        cos_sin,
+        cos_sin_s,
+        zeta,
+        zmag,
+        s_delta,
+        s_kappa,
+        s_zeta,
+        dzmag,
+        dRmag,
+        q,
+        n_theta=n_theta,
+    )
+
+
+        theta = -0.5 * pi_2 + (i - 1) * d_theta
+
+        geov_theta[i] = theta
+
+        x = np.arcsin(geo_delta_in)
+
+        #! A
+        #! dA/dtheta
+        #! d^2A/dtheta^2
+        a = (
+            theta
+            + geo_shape_cos0_in
+            + geo_shape_cos1_in * np.cos(theta)
+            + geo_shape_cos2_in * np.cos(2 * theta)
+            + geo_shape_cos3_in * np.cos(3 * theta)
+            + geo_shape_cos4_in * np.cos(4 * theta)
+            + geo_shape_cos5_in * np.cos(5 * theta)
+            + geo_shape_cos6_in * np.cos(6 * theta)
+            + geo_shape_sin3_in * np.sin(3 * theta)
+            + x * np.sin(theta)
+            - geo_zeta_in * np.sin(2 * theta)
+            + geo_shape_sin3_in * np.sin(3 * theta)
+            + geo_shape_sin4_in * np.sin(4 * theta)
+            + geo_shape_sin5_in * np.sin(5 * theta)
+            + geo_shape_sin6_in * np.sin(6 * theta)
+        )
+        a_t = (
+            1.0
+            - geo_shape_cos1_in * np.sin(theta)
+            - 2 * geo_shape_cos2_in * np.sin(2 * theta)
+            - 3 * geo_shape_cos3_in * np.sin(3 * theta)
+            - 4 * geo_shape_cos4_in * np.sin(4 * theta)
+            - 5 * geo_shape_cos5_in * np.sin(5 * theta)
+            - 6 * geo_shape_cos6_in * np.sin(6 * theta)
+            + x * np.cos(theta)
+            - 2 * geo_zeta_in * np.cos(2 * theta)
+            + 3 * geo_shape_sin3_in * np.cos(3 * theta)
+            + 4 * geo_shape_sin4_in * np.cos(4 * theta)
+            + 5 * geo_shape_sin5_in * np.cos(5 * theta)
+            + 6 * geo_shape_sin6_in * np.cos(6 * theta)
+        )
+        a_tt = (
+            -geo_shape_cos1_in * np.cos(theta)
+            - 4 * geo_shape_cos2_in * np.cos(2 * theta)
+            - 9 * geo_shape_cos3_in * np.cos(3 * theta)
+            - 16 * geo_shape_cos4_in * np.cos(4 * theta)
+            - 25 * geo_shape_cos5_in * np.cos(5 * theta)
+            - 36 * geo_shape_cos6_in * np.cos(6 * theta)
+            - x * np.sin(theta)
+            + 4 * geo_zeta_in * np.sin(2 * theta)
+            - 9 * geo_shape_sin3_in * np.sin(3 * theta)
+            - 16 * geo_shape_sin4_in * np.sin(4 * theta)
+            - 25 * geo_shape_sin5_in * np.sin(5 * theta)
+            - 36 * geo_shape_sin6_in * np.sin(6 * theta)
+        )
+
+        #! R(theta)
+        #! dR/dr
+        #! dR/dtheta
+        #! d^2R/dtheta^2
+        geov_bigr[i] = geo_rmaj_in + geo_rmin_in * np.cos(a)
+        geov_bigr_r[i] = (
+            geo_drmaj_in
+            + np.cos(a)
+            - np.sin(a)
+            * (
+                geo_shape_s_cos0_in
+                + geo_shape_s_cos1_in * np.cos(theta)
+                + geo_shape_s_cos2_in * np.cos(2 * theta)
+                + geo_shape_s_cos3_in * np.cos(3 * theta)
+                + geo_shape_s_cos4_in * np.cos(4 * theta)
+                + geo_shape_s_cos5_in * np.cos(5 * theta)
+                + geo_shape_s_cos6_in * np.cos(6 * theta)
+                + geo_s_delta_in / np.cos(x) * np.sin(theta)
+                - geo_s_zeta_in * np.sin(2 * theta)
+                + geo_shape_s_sin3_in * np.sin(3 * theta)
+                + geo_shape_s_sin4_in * np.sin(4 * theta)
+                + geo_shape_s_sin5_in * np.sin(5 * theta)
+                + geo_shape_s_sin6_in * np.sin(6 * theta)
+            )
+        )
+        geov_bigr_t[i] = -geo_rmin_in * a_t * np.sin(a)
+        bigr_tt = -geo_rmin_in * a_t**2 * np.cos(a) - geo_rmin_in * a_tt * np.sin(a)
+
+        #!-----------------------------------------------------------
+
+        #! A
+        #! dA/dtheta
+        #! d^2A/dtheta^2
+        a = theta
+        a_t = 1.0
+        a_tt = 0.0
+
+        #! Z(theta)
+        #! dZ/dr
+        #! dZ/dtheta
+        #! d^2Z/dtheta^2
+        bigz[i] = geo_zmag_in + geo_kappa_in * geo_rmin_in * np.sin(a)
+        bigz_r[i] = geo_dzmag_in + geo_kappa_in * (1.0 + geo_s_kappa_in) * np.sin(a)
+        bigz_t[i] = geo_kappa_in * geo_rmin_in * np.cos(a) * a_t
+        bigz_tt = (
+            -geo_kappa_in * geo_rmin_in * np.sin(a) * a_t**2
+            + geo_kappa_in * geo_rmin_in * np.cos(a) * a_tt
+        )
+
+        g_tt = geov_bigr_t[i] ** 2 + bigz_t[i] ** 2
+
+        geov_jac_r[i] = geov_bigr[i] * (
+            geov_bigr_r[i] * bigz_t[i] - geov_bigr_t[i] * bigz_r[i]
+        )
+
+        geov_grad_r[i] = geov_bigr[i] * np.sqrt(g_tt) / geov_jac_r[i]
+
+        geov_l_t[i] = np.sqrt(g_tt)
+
+        r_c[i] = geov_l_t[i] ** 3 / (geov_bigr_t[i] * bigz_tt - bigz_t[i] * bigr_tt)
+
+        bigz_l[i] = bigz_t[i] / geov_l_t[i]
+
+        bigr_l[i] = geov_bigr_t[i] / geov_l_t[i]
+
+        geov_l_r[i] = bigz_l[i] * bigz_r[i] + bigr_l[i] * geov_bigr_r[i]
+
+        geov_nsin[i] = (
+            geov_bigr_r[i] * geov_bigr_t[i] + bigz_r[i] * bigz_t[i]
+        ) / geov_l_t[i]
+
+    c = 0.0
+    for i in range(n_theta):
+        c = c + geov_l_t[i] / (geov_bigr[i] * geov_grad_r[i])
+
+    f = geo_rmin_in / (c * d_theta / pi_2)
+
+    c = 0.0
+    for i in range(n_theta - 1):
+        c = c + geov_l_t[i] * geov_bigr[i] / geov_grad_r[i]
+
+    geo_volume_prime = pi_2 * c * d_theta
+
+    # Line 716 in geo.f90
+    geo_surf = 0.0
+    for i in range(n_theta - 1):
+        geo_surf = geo_surf + geov_l_t[i] * geov_bigr[i]
+    geo_surf = pi_2 * geo_surf * d_theta
+
+    # -----
+    c = 0.0
+    for i in range(n_theta - 1):
+        c = c + geov_l_t[i] / (geov_bigr[i] * geov_grad_r[i])
+    f = geo_rmin_in / (c * d_theta / pi_2)
+
+    geov_b = np.zeros((n_theta,geo_rmin_in.shape[0]))
+    geov_g_theta = np.zeros((n_theta,geo_rmin_in.shape[0]))
+    geov_bt = np.zeros((n_theta,geo_rmin_in.shape[0]))
+    for i in range(n_theta):
+        geov_bt[i] = f / geov_bigr[i]
+        geov_bp = (geo_rmin_in / geo_q_in) * geov_grad_r[i] / geov_bigr[i]
+
+        geov_b[i] = geo_signb_in * (geov_bt[i] ** 2 + geov_bp**2) ** 0.5
+        geov_g_theta[i] = (
+            geov_bigr[i]
+            * geov_b[i]
+            * geov_l_t[i]
+            / (geo_rmin_in * geo_rmaj_in * geov_grad_r[i])
+        )
+
+    theta_0 = 0
+    dx = geov_theta[1,0] - geov_theta[0,0]
+    x0 = theta_0 - geov_theta[0,0]
+    i1 = int(x0 / dx) + 1
+    i2 = i1 + 1
+    x1 = (i1 - 1) * dx
+    z = (x0 - x1) / dx
+    if i2 == n_theta:
+        i2 -= 1
+    geo_bt0 = geov_bt[i1] + (geov_bt[i2] - geov_bt[i1]) * z
+
+    denom = 0
+    for i in range(n_theta - 1):
+        denom = denom + geov_g_theta[i] / geov_b[i]
+
+    geo_fluxsurfave_grad_r = 0
+    for i in range(n_theta - 1):
+        geo_fluxsurfave_grad_r = (
+            geo_fluxsurfave_grad_r
+            + geov_grad_r[i] * geov_g_theta[i] / geov_b[i] / denom
+        )
+
+    geo_fluxsurfave__bp2 = 0
+    for i in range(n_theta - 1):
+        geo_fluxsurfave__bp2 = (
+            geo_fluxsurfave__bp2
+            + geov_bt[i] ** 2 * geov_g_theta[i] / geov_b[i] / denom
+        )
+
+    geo_fluxsurfave_bt2 = 0
+    for i in range(n_theta - 1):
+        geo_fluxsurfave_bt2 = (
+            geo_fluxsurfave_bt2
+            + geov_bp ** 2 * geov_g_theta[i] / geov_b[i] / denom
+        )
+
+
+
+    """
+	from expro_util.f90 we have:
+		expro_volp(i) = geo_volume_prime*r_min**2, where r_min = expro_rmin(expro_n_exp)
+		expro_surf(i) = geo_surf*r_min**2
+	"""
+
+    volp = geo_volume_prime * profiles.profiles["rmin(m)"][-1] ** 2
+    surf = geo_surf * profiles.profiles["rmin(m)"][-1] ** 2
 
 
         # --------- Geometry (only if it doesn't exist or if I ask to recalculate)
