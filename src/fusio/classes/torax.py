@@ -699,6 +699,29 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def add_internal_boundary(
+        self,
+        rho: float,
+    ) -> None:
+        ne_bc = self.input.to_dataset()['profile_conditions.n_e'].interp(rho=rho).to_numpy().flatten()
+        te_bc = self.input.to_dataset()['profile_conditions.T_e'].interp(rho=rho).to_numpy().flatten()
+        ti_bc = self.input.to_dataset()['profile_conditions.T_i'].interp(rho=rho).to_numpy().flatten()
+        newvars = {}
+        newvars['pedestal.n_e_ped'] = (['time'], ne_bc)
+        newvars['pedestal.T_e_ped'] = (['time'], te_bc)
+        newvars['pedestal.T_i_ped'] = (['time'], ti_bc)
+        newvars['pedestal.rho_norm_ped_top'] = (['time'], np.zeros_like(ne_bc) + rho)
+        self.update_input_data_vars(newvars)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['pedestal.set_pedestal'] = True
+        newattrs['pedestal.model_name'] = 'set_T_ped_n_ped'
+        newattrs['pedestal.n_e_ped_is_fGW'] = False
+        newattrs['transport.smooth_everywhere'] = False
+        newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
+        newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
+        self.update_input_attrs(newattrs)
+
+
     def add_neoclassical_transport(
         self,
     ) -> None:
@@ -778,6 +801,58 @@ class torax_io(io):
         newvars[f'{prefix}.chi_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
         newvars[f'{prefix}.D_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
         newvars[f'{prefix}.V_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
+        newattrs['transport.chi_min'] = 0.05
+        newattrs['transport.chi_max'] = 100.0
+        newattrs['transport.D_e_min'] = 0.05
+        newattrs['transport.D_e_max'] = 100.0
+        newattrs['transport.V_e_min'] = -50.0
+        newattrs['transport.V_e_max'] = 50.0
+        newattrs['transport.smoothing_width'] = 0.1
+        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
+        #if 'transport.apply_inner_patch' not in data.attrs:
+        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
+        #if 'transport.apply_outer_patch' not in data.attrs:
+        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def add_critical_gradient_transport(
+        self,
+        alpha: float = 2.0,
+        chi_grad: float = 2.0,
+        ei_ratio: float = 2.0,
+        D_ratio: float = 5.0,
+        peaking: float = 0.0,
+        rho_min: float | None = None,
+        rho_max: float | None = None,
+    ) -> None:
+        data = self.input.to_dataset()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newcoords = {}
+        newvars = {}
+        newattrs: MutableMapping[str, Any] = {}
+        prefix = 'transport'
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_models', {})
+            prefix = f'transport.transport_models.{len(models):d}'
+            if 'pedestal.rho_norm_ped_top' in data:
+                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+            newattrs[f'{prefix}.apply_inner_patch'] = False
+            newattrs[f'{prefix}.apply_outer_patch'] = False
+            models.update({'constant': len(models)})
+            newattrs['map_combined_models'] = models
+        if rho_min is not None:
+            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+        if rho_max is not None:
+            newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+        newattrs[f'{prefix}.model_name'] = 'CGM'
+        newvars[f'{prefix}.alpha'] = (['time'], np.zeros_like(time) + alpha)
+        newvars[f'{prefix}.chi_stiff'] = (['time'], np.zeros_like(time) + chi_grad)
+        newvars[f'{prefix}.chi_e_i_ratio'] = (['time'], np.zeros_like(time) + ei_ratio)
+        newvars[f'{prefix}.chi_D_ratio'] = (['time'], np.zeros_like(time) + D_ratio)
+        newvars[f'{prefix}.VR_D_ratio'] = (['time'], np.zeros_like(time) + peaking)
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -1667,6 +1742,19 @@ class torax_io(io):
         newattrs['numerics.evolve_density'] = (isinstance(eqs, (list, tuple)) and 'ne' in eqs)
         newattrs['numerics.evolve_current'] = (isinstance(eqs, (list, tuple)) and 'j' in eqs)
         newattrs['numerics.resistivity_multiplier'] = 1.0
+        self.update_input_attrs(newattrs)
+
+
+    def add_restart(
+        self,
+        restart_path: str | Path,
+        restart_time: float,
+    ) -> None:
+        newattrs = {}
+        newattrs['restart.filename'] = f'{restart_path}'
+        newattrs['restart.time'] = float(restart_time)
+        newattrs['restart.do_restart'] = True
+        newattrs['restart.stitch'] = False
         self.update_input_attrs(newattrs)
 
 
