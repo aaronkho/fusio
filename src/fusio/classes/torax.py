@@ -674,7 +674,7 @@ class torax_io(io):
         if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
             models = self.input.attrs.get('map_combined_models', {})
             prefix = f'transport.transport_models.{len(models):d}'
-            newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
+            #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
             wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
             factor = np.abs((xrho - wrho) / (1.0 - wrho))
@@ -687,6 +687,7 @@ class torax_io(io):
             newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
             newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
             newattrs[f'{prefix}.model_name'] = 'constant'
+            newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
             # Improper form given base xarray structure, but necessary for now due to disjointed rho grid
             #newattrs[f'{prefix}.chi_i'] = {0.0: (xrho, chirho)}
             #newattrs[f'{prefix}.chi_e'] = {0.0: (xrho, chirho)}
@@ -781,15 +782,18 @@ class torax_io(io):
             models = data.attrs.get('map_combined_models', {})
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
-                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.update({'constant': len(models)})
             newattrs['map_combined_models'] = models
         if rho_min is not None:
-            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
-            newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'constant'
         xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, 11)
         factor = np.abs((xrho - np.nanmin(xrho)) / (1.0 - np.nanmin(xrho)))
@@ -838,15 +842,18 @@ class torax_io(io):
             models = data.attrs.get('map_combined_models', {})
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
-                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.update({'constant': len(models)})
             newattrs['map_combined_models'] = models
         if rho_min is not None:
-            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
-            newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'CGM'
         newvars[f'{prefix}.alpha'] = (['time'], np.zeros_like(time) + alpha)
         newvars[f'{prefix}.chi_stiff'] = (['time'], np.zeros_like(time) + chi_grad)
@@ -890,9 +897,11 @@ class torax_io(io):
             models.update({'qualikiz': len(models)})
             newattrs['map_combined_models'] = models
         if rho_min is not None:
-            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
-            newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'qualikiz'
         newattrs[f'{prefix}.n_max_runs'] = 1
         newattrs[f'{prefix}.n_processes'] = 60
@@ -949,15 +958,18 @@ class torax_io(io):
             prefix = f'transport.transport_models.{len(models):d}'
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if 'pedestal.rho_norm_ped_top' in data:
-                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.update({'qlknn': len(models)})
             newattrs['map_combined_models'] = models
         if rho_min is not None:
-            newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
-            newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'qlknn'
         newattrs[f'{prefix}.model_path'] = ''
         newattrs[f'{prefix}.include_ITG'] = True
