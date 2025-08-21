@@ -1970,10 +1970,9 @@ class torax_io(io):
                         zeff = xr.zeros_like(data['ne'])
                         nsum = xr.zeros_like(data['ne'])
                         for ii in range(len(data['name'])):
-                            nz = data['ni'].isel(name=ii)
+                            nz = copy.deepcopy(data['ni'].isel(name=ii))
                             if str(data['name'].isel(name=ii).to_numpy()) in namelist and 'therm' in str(data['type'].isel(name=ii).to_numpy()):
                                 sname = str(data['name'].isel(name=ii).to_numpy())
-                                scharge = float(data['z'].isel(name=ii).to_numpy())
                                 if sname not in newobj.allowed_radiation_species:
                                     sn, sa, sz = define_ion_species(short_name=sname)
                                     if sz > 2.0:
@@ -1989,12 +1988,12 @@ class torax_io(io):
                                     if sz > 64.0:
                                         sname = 'W'
                                     newsn, newsa, newsz = define_ion_species(short_name=sname)
-                                    nz = nz * scharge / newsz
+                                    nz = nz * sz / newsz
                                     if sn == 'He':
                                         sname = 'He4'
                                 if ii in implist:
                                     # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
-                                    impcomp[sname] = nz
+                                    impcomp[sname] = copy.deepcopy(nz)
                                 nsum += nz
                             zeff += (data['ni'] * data['z'] ** 2.0 / data['ne']).isel(name=ii)
                         total = 0.0
@@ -2007,7 +2006,7 @@ class torax_io(io):
                             impval = (impcomp[key] / total).to_numpy().flatten()
                             impcoord.append(key)
                             impfracs.append(np.expand_dims(impval, axis=0))
-                        if impfracs is None:
+                        if len(impcoord) == 0:
                             impcoord = ['Ne']
                             impfracs = [np.atleast_2d([1.0])]
                         if 'z_eff' in data:
@@ -2207,16 +2206,17 @@ class torax_io(io):
                 if omas_tag in data and 'core_profiles.profiles_1d.electrons.density' in data:
                     namelist = data.isel({time_cp: 0}).get(ion_cp, xr.DataArray()).to_numpy().tolist()
                     implist = []
-                    zeff = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
-                    nsum = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
+                    #zeff = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
+                    #nqn = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     for ii in range(len(namelist)):
                         if namelist[ii] not in ['H', 'D', 'T']:
                             implist.append(ii)
-                    impcomp = {}
+                    nzz = np.zeros_like(data[omas_tag].to_numpy()) # time, ion, rho
+                    szz = np.zeros_like(data[omas_tag].to_numpy())
                     for ii in range(len(namelist)):
                         sname = namelist[ii]
                         sn, sa, sz = define_ion_species(short_name=sname)
-                        nz = data.isel({ion_cp_i: ii})[omas_tag]
+                        nz = data.isel({ion_cp_i: ii})[omas_tag].to_numpy()
                         if sname not in newobj.allowed_radiation_species:
                             if sz > 2.0:
                                 sname = 'C'
@@ -2234,21 +2234,39 @@ class torax_io(io):
                             nz = nz * sz / newsz
                             if sn == 'He':
                                 sname = 'He4'
+                        sz2 = np.zeros_like(nz) + sz
+                        if 'core_profiles.profiles_1d.electrons.temperature' in data:
+                            if sname == 'Kr':
+                                sz2 = 13.0 * (np.log10(data['core_profiles.profiles_1d.electrons.temperature'].to_numpy()) - 2.0) + 12.0
+                                sz2 = np.where(sz2 > 36.0, 36.0, sz2)
+                            if sname == 'Xe':
+                                sz2 = 18.0 * (np.log10(data['core_profiles.profiles_1d.electrons.temperature'].to_numpy()) - 2.0) + 12.0
+                                sz2 = float(np.mean(np.where(sz2 > 54.0, 54.0, sz2)))
+                            if sname == 'W':
+                                sz2 = 21.5 * (np.log10(data['core_profiles.profiles_1d.electrons.temperature'].to_numpy()) - 2.0) + 12.0
+                                sz2 = float(np.mean(np.where(sz2 > 74.0, 74.0, sz2)))
+                        nzz[:, ii, :] = nz
+                        szz[:, ii, :] = sz2
+                    nzz = xr.DataArray(data=nzz, coords=data[omas_tag].coords)
+                    szz = xr.DataArray(data=szz, coords=data[omas_tag].coords)
+                    nqn = (nzz * szz).sum(ion_cp_i) / data['core_profiles.profiles_1d.electrons.density']
+                    nzz = nzz / nqn
+                    zeff = (nzz * (szz ** 2.0)).sum(ion_cp_i) / data['core_profiles.profiles_1d.electrons.density']
+                    impcomp = {}
+                    for ii in range(len(namelist)):
                         if ii in implist:
                             # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
-                            impcomp[sname] = nz
-                        nsum += nz
-                        zeff += data.isel({ion_cp_i: ii})[omas_tag] * sz ** 2.0 / data['core_profiles.profiles_1d.electrons.density']
-                    total = xr.zeros_like(nsum.mean(rho_cp_i))
+                            impcomp[sname] = copy.deepcopy(nzz.isel({ion_cp_i: ii}))
+                    total = xr.zeros_like(nqn.mean(rho_cp_i))
                     for key in impcomp:
-                        impcomp[key] = (impcomp[key] / nsum).mean(rho_cp_i)
-                        total += impcomp[key]
+                        #impcomp[key] = (impcomp[key] / nsum).mean(rho_cp_i)
+                        total += impcomp[key].mean(rho_cp_i)
                     impcoord = []
                     impfracs = []
                     for key in impcomp:
                         impcoord.append(key)
-                        impfracs.append(np.expand_dims(np.atleast_1d((impcomp[key] / total).to_numpy()), axis=0))
-                    if not impcomp:
+                        impfracs.append(np.expand_dims(np.atleast_1d((impcomp[key].mean(rho_cp_i) / total).to_numpy()), axis=0))
+                    if len(impcoord) == 0:
                         impcoord = ['Ne']
                         impfracs = [np.atleast_2d([1.0])]
                     cp_coords['impurity'] = np.array(impcoord).flatten()
