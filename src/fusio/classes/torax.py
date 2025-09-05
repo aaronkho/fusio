@@ -578,8 +578,6 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
         #newattrs['geometry.hires_factor'] = 4
-        #newattrs['profile_conditions.initial_psi_from_j'] = True
-        #newattrs['profile_conditions.initial_j_is_total_current'] = True
         newattrs['geometry.Ip_from_parameters'] = bool(self.input.to_dataset().attrs.get('profile_conditions.Ip_tot', False))
         newattrs['geometry.geometry_type'] = f'{geotype}'
         if geodir is not None:
@@ -609,6 +607,19 @@ class torax_io(io):
             'profile_conditions.psi',
         ]
         self.delete_input_data_vars(delvars)
+
+
+    def set_defined_current_psi(
+        self,
+        nu: float = 2.0,
+        use_total: bool = False
+    ) -> None:
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['use_psi'] = False
+        newattrs['profile_conditions.initial_psi_from_j'] = True
+        newattrs['profile_conditions.current_profile_nu'] = float(nu)
+        newattrs['profile_conditions.initial_j_is_total_current'] = use_total
+        self.update_input_attrs(newattrs)
 
 
     def add_pedestal_by_pressure(
@@ -688,11 +699,6 @@ class torax_io(io):
             newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
             newattrs[f'{prefix}.model_name'] = 'constant'
             newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
-            # Improper form given base xarray structure, but necessary for now due to disjointed rho grid
-            #newattrs[f'{prefix}.chi_i'] = {0.0: (xrho, chirho)}
-            #newattrs[f'{prefix}.chi_e'] = {0.0: (xrho, chirho)}
-            #newattrs[f'{prefix}.D_e'] = {0.0: (xrho, drho)}
-            #newattrs[f'{prefix}.V_e'] = {0.0: (xrho, np.zeros_like(xrho))}
             models.update({'constant_ped': len(models)})
             newattrs['map_combined_models'] = models
         self.update_input_coords(newcoords)
@@ -758,19 +764,19 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
-        #newattrs['transport.predict_pedestal'] = (self.input.attrs.get('pedestal.set_pedestal', False))
-        #if 'transport.apply_inner_patch' not in self.input.attrs:
-        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
-        #if 'transport.apply_outer_patch' not in self.input.attrs:
-        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         newattrs['map_combined_models'] = data.attrs.get('map_combined_models', {})
         self.update_input_attrs(newattrs)
 
 
     def add_constant_transport(
         self,
+        chi_i: float = 0.0,
+        chi_e: float = 0.0,
+        D_e: float = 0.0,
+        V_e: float = 0.0,
         rho_min: float | None = None,
         rho_max: float | None = None,
+        n_rho: int | None = None,
     ) -> None:
         data = self.input.to_dataset()
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
@@ -795,16 +801,21 @@ class torax_io(io):
             #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'constant'
-        xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, 11)
-        factor = np.abs((xrho - np.nanmin(xrho)) / (1.0 - np.nanmin(xrho)))
-        chirho = 0.01 * np.exp(-factor / 0.2)
-        drho = 0.01 * np.exp(-factor / 0.2)
-        vrho = np.zeros_like(factor)
+        nrho = n_rho if isinstance(n_rho, int) else 2
+        xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, nrho)
+        #factor = np.abs((xrho - np.nanmin(xrho)) / (1.0 - np.nanmin(xrho)))
+        #chirho = 0.01 * np.exp(-factor / 0.2)
+        #drho = 0.01 * np.exp(-factor / 0.2)
+        #vrho = np.zeros_like(factor)
+        chiirho = np.zeros_like(xrho) + chi_i
+        chierho = np.zeros_like(xrho) + chi_e
+        derho = np.zeros_like(xrho) + D_e
+        verho = np.zeros_like(xrho) + V_e
         newcoords['rho_const'] = xrho.flatten()
-        newvars[f'{prefix}.chi_i'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
-        newvars[f'{prefix}.chi_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
-        newvars[f'{prefix}.D_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
-        newvars[f'{prefix}.V_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
+        newvars[f'{prefix}.chi_i'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chiirho, axis=0), len(time), axis=0))
+        newvars[f'{prefix}.chi_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chierho, axis=0), len(time), axis=0))
+        newvars[f'{prefix}.D_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(derho, axis=0), len(time), axis=0))
+        newvars[f'{prefix}.V_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(verho, axis=0), len(time), axis=0))
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -813,10 +824,6 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
-        #if 'transport.apply_inner_patch' not in data.attrs:
-        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
-        #if 'transport.apply_outer_patch' not in data.attrs:
-        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -846,7 +853,7 @@ class torax_io(io):
                 newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
-            models.update({'constant': len(models)})
+            models.update({'CGM': len(models)})
             newattrs['map_combined_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
@@ -855,11 +862,11 @@ class torax_io(io):
             #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'CGM'
-        newvars[f'{prefix}.alpha'] = (['time'], np.zeros_like(time) + alpha)
-        newvars[f'{prefix}.chi_stiff'] = (['time'], np.zeros_like(time) + chi_grad)
         newvars[f'{prefix}.chi_e_i_ratio'] = (['time'], np.zeros_like(time) + ei_ratio)
         newvars[f'{prefix}.chi_D_ratio'] = (['time'], np.zeros_like(time) + D_ratio)
         newvars[f'{prefix}.VR_D_ratio'] = (['time'], np.zeros_like(time) + peaking)
+        newattrs[f'{prefix}.alpha'] = float(alpha)
+        newattrs[f'{prefix}.chi_stiff'] = float(chi_grad)
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -868,10 +875,6 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
-        #if 'transport.apply_inner_patch' not in data.attrs:
-        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
-        #if 'transport.apply_outer_patch' not in data.attrs:
-        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -919,10 +922,6 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
-        #if 'transport.apply_inner_patch' not in data.attrs:
-        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
-        #if 'transport.apply_outer_patch' not in data.attrs:
-        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
@@ -993,10 +992,6 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.0
         newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
-        #if 'transport.apply_inner_patch' not in data.attrs:
-        #    newattrs['transport.apply_inner_patch'] = {0.0: False}
-        #if 'transport.apply_outer_patch' not in data.attrs:
-        #    newattrs['transport.apply_outer_patch'] = {0.0: False}
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
@@ -1034,14 +1029,17 @@ class torax_io(io):
         if isinstance(tend, (float, int)):
             trigger &= (time <= tend)
         newvars = {}
-        newvars['transport.apply_inner_patch'] = (['time'], trigger)
-        newvars['transport.D_e_inner'] = (['time'], np.zeros_like(time) + de)
-        newvars['transport.V_e_inner'] = (['time'], np.zeros_like(time) + ve)
-        newvars['transport.chi_i_inner'] = (['time'], np.zeros_like(time) + chii)
-        newvars['transport.chi_e_inner'] = (['time'], np.zeros_like(time) + chie)
-        self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['transport.rho_inner'] = float(rho)
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            self.add_constant_transport(chii, chie, de, ve, rho_max=rho)
+        else:
+            newvars['transport.apply_inner_patch'] = (['time'], trigger)
+            newvars['transport.D_e_inner'] = (['time'], np.zeros_like(time) + de)
+            newvars['transport.V_e_inner'] = (['time'], np.zeros_like(time) + ve)
+            newvars['transport.chi_i_inner'] = (['time'], np.zeros_like(time) + chii)
+            newvars['transport.chi_e_inner'] = (['time'], np.zeros_like(time) + chie)
+            newattrs['transport.rho_inner'] = float(rho)
+        self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
 
@@ -1062,14 +1060,17 @@ class torax_io(io):
         if isinstance(tend, (float, int)):
             trigger &= (time <= tend)
         newvars = {}
-        newvars['transport.apply_outer_patch'] = (['time'], trigger)
-        newvars['transport.D_e_outer'] = (['time'], np.zeros_like(time) + de)
-        newvars['transport.V_e_outer'] = (['time'], np.zeros_like(time) + ve)
-        newvars['transport.chi_i_outer'] = (['time'], np.zeros_like(time) + chii)
-        newvars['transport.chi_e_outer'] = (['time'], np.zeros_like(time) + chie)
+        newattrs: MutableMapping[str, Any] = {}
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            self.add_constant_transport(chii, chie, de, ve, rho_min=rho)
+        else:
+            newvars['transport.apply_outer_patch'] = (['time'], trigger)
+            newvars['transport.D_e_outer'] = (['time'], np.zeros_like(time) + de)
+            newvars['transport.V_e_outer'] = (['time'], np.zeros_like(time) + ve)
+            newvars['transport.chi_i_outer'] = (['time'], np.zeros_like(time) + chii)
+            newvars['transport.chi_e_outer'] = (['time'], np.zeros_like(time) + chie)
+            newattrs['transport.rho_outer'] = float(rho)
         self.update_input_data_vars(newvars)
-        newattrs = {}
-        newattrs['transport.rho_outer'] = float(rho)
         self.update_input_attrs(newattrs)
 
 
