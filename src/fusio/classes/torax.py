@@ -569,6 +569,24 @@ class torax_io(io):
         self.update_input_data_vars(newvars)
 
 
+    def set_constant_flat_impurity_composition(
+        self,
+        impurities: MutableMapping[str, float],
+    ) -> None:
+        data = self.input.to_dataset()
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
+        self.delete_input_data_vars(dropvars)
+        self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
+        self.update_input_coords(newcoords)
+        newvars: MutableMapping[str, Any] = {}
+        total = np.sum([impurities[key] for key in impurities])
+        composition = [np.atleast_2d(np.zeros_like(time) + float(impurities[key] / total)) for key in impurities]
+        newvars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(composition, axis=0))
+        self.update_input_data_vars(newvars)
+
+
     def add_geometry(
         self,
         geotype: str,
@@ -975,7 +993,7 @@ class torax_io(io):
             #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'qlknn'
-        newattrs[f'{prefix}.model_path'] = ''
+        #newattrs[f'{prefix}.model_path'] = ''
         newattrs[f'{prefix}.include_ITG'] = True
         newattrs[f'{prefix}.include_TEM'] = True
         newattrs[f'{prefix}.include_ETG'] = True
