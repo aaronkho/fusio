@@ -206,7 +206,7 @@ class gacode_io(io):
         side: str = 'input',
         overwrite: bool = False,
     ) -> None:
-        data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
+        data = self.input if side == 'input' else self.output
         if isinstance(path, (str, Path)) and 'polflux' in data:
             eqdsk_data = read_eqdsk(path)
             mxh_data = self._calculate_geometry_from_eqdsk(eqdsk_data, data.isel(n=0)['polflux'].to_numpy().flatten())
@@ -335,7 +335,7 @@ class gacode_io(io):
     def _compute_derived_coordinates(
         self,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         newvars: MutableMapping[str, Any] = {}
         if 'rho' in data:
             if 'rmin' in data:
@@ -381,7 +381,7 @@ class gacode_io(io):
             return deriv
         e_si = 1.60218e-19  # C
         u_si = 1.66054e-27  # kg
-        data = self.input.to_dataset()
+        data = self.input
         newvars = {}
         if 'rho' in data:
             mref = data.get('mref', xr.zeros_like(data['n']) + 2.0).to_numpy()
@@ -422,7 +422,7 @@ class gacode_io(io):
                 deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
                 deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
             return deriv
-        data = self.input.to_dataset()
+        data = self.input
         newvars: MutableMapping[str, Any] = {}
         if 'roa' in data:
             signb = 1.0
@@ -554,7 +554,7 @@ class gacode_io(io):
     def _compute_average_mass(
         self,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         newvars: MutableMapping[str, Any] = {}
         if 'name' in data and 'mass' in data and 'ni' in data and 'volp_miller' in data:
             main_species_mask = (data['name'].isin(['H', 'D', 'T']).to_numpy() & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
@@ -574,7 +574,7 @@ class gacode_io(io):
         self,
     ) -> None:
 
-        data = self.input.to_dataset()
+        data = self.input
         newvars: MutableMapping[str, Any] = {}
 
         qe_terms = {
@@ -741,7 +741,7 @@ class gacode_io(io):
             found = found.reshape(*y.shape[:-1])
             return found
 
-        data = self.input.to_dataset()
+        data = self.input
         newvars: MutableMapping[str, Any] = {}
 
         e_si = 1.60218e-19
@@ -860,7 +860,7 @@ class gacode_io(io):
             interp = interp.reshape(*y.shape[:-1])
             return interp
 
-        data = self.input.to_dataset()
+        data = self.input
         newvars: MutableMapping[str, Any] = {}
 
         if 'rmin' in data:
@@ -1017,7 +1017,7 @@ class gacode_io(io):
         self
     ) -> None:
 
-        data = self.input.to_dataset()
+        data = self.input
         newvars: MutableMapping[str, Any] = {}
         if 'current' in data and 'bcentr' in data:
 
@@ -1159,9 +1159,9 @@ class gacode_io(io):
         overwrite: bool = False
     ) -> None:
         if side == 'input':
-            self._write_gacode_file(path, self.input.to_dataset(), overwrite=overwrite)
+            self._write_gacode_file(path, self.input, overwrite=overwrite)
         else:
-            self._write_gacode_file(path, self.output.to_dataset(), overwrite=overwrite)
+            self._write_gacode_file(path, self.output, overwrite=overwrite)
 
 
     def _read_gacode_file(
@@ -1364,7 +1364,7 @@ class gacode_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            newobj.input = obj.input if side == 'input' else obj.output
         return newobj
 
 
@@ -1378,7 +1378,7 @@ class gacode_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data = obj.input if side == 'input' else obj.output
             if 'rho_norm' in data.coords:
                 data = data.isel(time=-1)
                 zeros = np.zeros_like(data.coords['rho_norm'].to_numpy().flatten())
@@ -1607,7 +1607,7 @@ class gacode_io(io):
         newobj = cls()
         if isinstance(obj, io):
 
-            data: xr.Dataset = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data: xr.Dataset = obj.input if side == 'input' else obj.output
             obj_cocos = obj.input_cocos if side == 'input' else obj.output_cocos  # type: ignore[attr-defined]
             time_cp = 'core_profiles.time'
             rho_cp_i = 'core_profiles.profiles_1d.grid.rho_tor_norm:i'
@@ -1922,7 +1922,7 @@ class gacode_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data = obj.input if side == 'input' else obj.output
             coords = {}
             data_vars = {}
             attrs: MutableMapping[str, Any] = {}
