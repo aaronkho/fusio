@@ -444,7 +444,7 @@ class torax_io(io):
     def _clean(
         self,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         use_psi = data.attrs.get('use_psi', True)
         if not use_psi:
             self.reset_psi()
@@ -481,9 +481,9 @@ class torax_io(io):
         overwrite: bool = False,
     ) -> None:
         if side == 'input':
-            self._write_torax_file(path, self.input.to_dataset(), overwrite=overwrite)
+            self._write_torax_file(path, self.input, overwrite=overwrite)
         else:
-            self._write_torax_file(path, self.output.to_dataset(), overwrite=overwrite)
+            self._write_torax_file(path, self.output, overwrite=overwrite)
 
 
     def _read_torax_file(
@@ -542,8 +542,8 @@ class torax_io(io):
         sname: str,
         sfrac: float,
     ) -> None:
-        if sname in ['H', 'D', 'T'] and sname not in self.input.to_dataset().get('main_ion', xr.DataArray()):
-            data = self.input.to_dataset()
+        data = self.input
+        if sname in ['H', 'D', 'T'] and sname not in data.get('main_ion', xr.DataArray()):
             coords = {'main_ion': np.array([sname]), 'time': np.atleast_1d(data.get('time', xr.DataArray()).to_numpy())}
             data_vars = {}
             if 'plasma_composition.main_ion' in data:
@@ -551,8 +551,8 @@ class torax_io(io):
                 data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(sfrac / (total - sfrac), axis=0))
             newdata = xr.Dataset(coords=coords, data_vars=data_vars)
             self.input = xr.concat([data, newdata], dim='main_ion', data_vars='minimal', coords='different', join='outer')
-            if 'plasma_composition.main_ion' in self.input.to_dataset():
-                val = self.input.to_dataset()['plasma_composition.main_ion']
+            if 'plasma_composition.main_ion' in self.input:
+                val = self.input['plasma_composition.main_ion']
                 newvars: MutableMapping[str, Any] = {}
                 newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], (val / val.sum('main_ion')).to_numpy())
                 self.update_input_data_vars(newvars)
@@ -562,7 +562,7 @@ class torax_io(io):
         self,
         zeff: float,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         shape = (data.get('time', xr.DataArray()).size, data.get('rho', xr.DataArray()).size)
         newvars: MutableMapping[str, Any] = {}
         newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.full(shape, float(zeff)))
@@ -575,10 +575,11 @@ class torax_io(io):
         geofiles: str | Mapping[str, str],
         geodir: str | None = None,
     ) -> None:
+        data = self.input
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
         #newattrs['geometry.hires_factor'] = 4
-        newattrs['geometry.Ip_from_parameters'] = bool(self.input.to_dataset().attrs.get('profile_conditions.Ip_tot', False))
+        newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
         newattrs['geometry.geometry_type'] = f'{geotype}'
         if geodir is not None:
             newattrs['geometry.geometry_directory'] = f'{geodir}'
@@ -629,7 +630,8 @@ class torax_io(io):
         tpedratio: float,
         wrho: float,
     ) -> None:
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newvars['pedestal.P_ped'] = (['time'], np.zeros_like(time) + pped)
         newvars['pedestal.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
@@ -652,7 +654,8 @@ class torax_io(io):
         tped: float,
         wrho: float,
     ) -> None:
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         tref = 1.0e3
         newvars: MutableMapping[str, Any] = {}
         newvars['pedestal.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
@@ -677,7 +680,8 @@ class torax_io(io):
         dscale: float,
         ddecay: float,
     ) -> None:
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
@@ -710,9 +714,10 @@ class torax_io(io):
         self,
         rho: float,
     ) -> None:
-        ne_bc = self.input.to_dataset()['profile_conditions.n_e'].interp(rho=rho).to_numpy().flatten()
-        te_bc = self.input.to_dataset()['profile_conditions.T_e'].interp(rho=rho).to_numpy().flatten()
-        ti_bc = self.input.to_dataset()['profile_conditions.T_i'].interp(rho=rho).to_numpy().flatten()
+        data = self.input
+        ne_bc = data['profile_conditions.n_e'].interp(rho=rho).to_numpy().flatten()
+        te_bc = data['profile_conditions.T_e'].interp(rho=rho).to_numpy().flatten()
+        ti_bc = data['profile_conditions.T_i'].interp(rho=rho).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newvars['pedestal.n_e_ped'] = (['time'], ne_bc)
         newvars['pedestal.T_e_ped'] = (['time'], te_bc)
@@ -741,7 +746,7 @@ class torax_io(io):
     def add_neoclassical_bootstrap_current(
         self,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         newattrs: MutableMapping[str, Any] = {}
         newattrs['neoclassical.bootstrap_current.model_name'] = 'sauter'
         newattrs['neoclassical.bootstrap_current.bootstrap_multiplier'] = 1.0
@@ -753,7 +758,7 @@ class torax_io(io):
     def add_combined_transport(
         self,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         newattrs: MutableMapping[str, Any] = {}
         newattrs['transport.model_name'] = 'combined'
         newattrs['transport.chi_min'] = 0.05
@@ -778,7 +783,7 @@ class torax_io(io):
         rho_max: float | None = None,
         n_rho: int | None = None,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
@@ -839,7 +844,7 @@ class torax_io(io):
         rho_min: float | None = None,
         rho_max: float | None = None,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
@@ -885,7 +890,7 @@ class torax_io(io):
         rho_min: float | None = None,
         rho_max: float | None = None,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
@@ -930,7 +935,7 @@ class torax_io(io):
         self,
         path: str | Path,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         newattrs: MutableMapping[str, Any] = {}
         if data.attrs.get('transport.model_name', '') == 'combined':
             models = data.attrs.get('map_combined_models', {})
@@ -947,7 +952,7 @@ class torax_io(io):
         rho_min: float | None = None,
         rho_max: float | None = None,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
@@ -1000,7 +1005,7 @@ class torax_io(io):
         self,
         path: str | Path,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         newattrs: MutableMapping[str, Any] = {}
         if data.attrs.get('transport.model_name', '') == 'combined':
             models = data.attrs.get('map_combined_models', {})
@@ -1022,7 +1027,7 @@ class torax_io(io):
         tstart: float | None = None,
         tend: float | None = None,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         trigger = np.isfinite(time)
         if isinstance(tstart, (float, int)):
@@ -1054,7 +1059,7 @@ class torax_io(io):
         tstart: float | None = None,
         tend: float | None = None,
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         trigger = np.isfinite(time)
         if isinstance(tstart, (float, int)):
@@ -1102,7 +1107,8 @@ class torax_io(io):
         rmult: float = 1.1,
         deltat: float = 1.0e-3,
     ) -> None:
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newvars['mhd.sawtooth.trigger_model.minimum_radius'] = (['time'], np.zeros_like(time) + rmin)
         newvars['mhd.sawtooth.trigger_model.s_critical'] = (['time'], np.zeros_like(time) + scrit)
@@ -1149,7 +1155,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_exchange_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1191,7 +1197,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_ohmic_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1230,7 +1236,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_fusion_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1261,7 +1267,8 @@ class torax_io(io):
         total: float,
     ) -> None:
         self.reset_gas_puff_source()
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.gas_puff.puff_decay_length'] = (['time'], np.zeros_like(time) + length)
         newvars['sources.gas_puff.S_total'] = (['time'], np.zeros_like(time) + total)
@@ -1278,7 +1285,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_gas_puff_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1329,7 +1336,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_bremsstrahlung_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1378,7 +1385,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_line_radiation_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1429,7 +1436,7 @@ class torax_io(io):
     ) -> None:
         # TODO: Should make 2D version
         self.reset_synchrotron_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
@@ -1449,7 +1456,8 @@ class torax_io(io):
         iwall: float = 1.24,
         owall: float = 2.43,
     ) -> None:
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.icrh.frequency'] = (['time'], np.zeros_like(time) + freq)
         newvars['sources.icrh.minority_concentration'] = (['time'], np.zeros_like(time) + mfrac)
@@ -1467,7 +1475,7 @@ class torax_io(io):
         self,
         path: str | Path
     ) -> None:
-        data = self.input.to_dataset()
+        data = self.input
         newattrs: MutableMapping[str, Any] = {}
         if self.input.attrs.get('sources.icrh.mode', 'ZERO') == 'MODEL_BASED':
             newattrs['sources.icrh.model_path'] = f'{path}'
@@ -1543,7 +1551,8 @@ class torax_io(io):
         afrac: float = 1.0,
     ) -> None:
         self.reset_generic_heat_source()
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.generic_heat.gaussian_location'] = (['time'], np.zeros_like(time) + mu)
         newvars['sources.generic_heat.gaussian_width'] = (['time'], np.zeros_like(time) + sigma)
@@ -1563,7 +1572,8 @@ class torax_io(io):
         total: float,
     ) -> None:
         self.reset_generic_particle_source()
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.generic_particle.deposition_location'] = (['time'], np.zeros_like(time) + mu)
         newvars['sources.generic_particle.particle_width'] = (['time'], np.zeros_like(time) + sigma)
@@ -1581,7 +1591,8 @@ class torax_io(io):
         total: float,
     ) -> None:
         self.reset_generic_current_source()
-        time = self.input.to_dataset().get('time', xr.DataArray()).to_numpy().flatten()
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_current.mode'] = 'MODEL_BASED'
         newattrs['sources.generic_current.gaussian_location'] = (['time'], np.zeros_like(time) + mu)
@@ -1599,7 +1610,7 @@ class torax_io(io):
         iheat: NDArray,
     ) -> None:
         self.reset_generic_heat_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         neweheat = np.interp(newrho, rho, eheat)
@@ -1619,7 +1630,7 @@ class torax_io(io):
         particle: NDArray,
     ) -> None:
         self.reset_generic_particle_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newparticle = np.interp(newrho, rho, particle)
@@ -1637,7 +1648,7 @@ class torax_io(io):
         current: NDArray,
     ) -> None:
         self.reset_generic_current_source()
-        data = self.input.to_dataset()
+        data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newcurrent = np.interp(newrho, rho, current)
@@ -1806,7 +1817,7 @@ class torax_io(io):
                 'nu_Te': ('T_e', 0, 'T_e_volume_avg', ''),
                 'nu_Ti': ('T_i', 0, 'T_i_volume_avg', ''),
             }
-            data = self.output.to_dataset().isel(time=-1)
+            data = self.output.isel(time=-1)
             for key, sspecs in fields.items():
                 var, scale, units = sspecs
                 val = data[var] / scale
@@ -1825,7 +1836,7 @@ class torax_io(io):
     ) -> MutableMapping[str, Any]:
         datadict: MutableMapping[str, Any] = {}
         self._clean()
-        ds = self.input.to_dataset()
+        ds = self.input
         datadict.update(ds.attrs)
         for key in ds.data_vars:
             dims = ds[key].dims
@@ -1946,7 +1957,7 @@ class torax_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data = obj.input if side == 'input' else obj.output
             if 'n' in data.coords and 'rho' in data.coords:
                 coords = {}
                 data_vars = {}
@@ -2167,7 +2178,7 @@ class torax_io(io):
         newobj = cls()
         if isinstance(obj, io):
 
-            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data = obj.input if side == 'input' else obj.output
             time_cp_i = 'core_profiles.profiles_1d:i'
             time_cp = 'core_profiles.time'
             rho_cp_i = 'core_profiles.profiles_1d.grid.rho_tor_norm:i'

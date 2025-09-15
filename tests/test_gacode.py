@@ -14,13 +14,11 @@ class TestInitialization():
     def test_initialized_input_class_creation(self, gacode_file_path):
         g = gacode_io(input=gacode_file_path)
         assert isinstance(g, gacode_io)
-        assert not g.input.is_empty
         assert g.has_input
 
     def test_initialized_output_class_creation(self, gacode_file_path):
         g = gacode_io(output=gacode_file_path)
         assert isinstance(g, gacode_io)
-        assert not g.output.is_empty
         assert g.has_output
 
     def test_read_native_input(self, gacode_file_path):

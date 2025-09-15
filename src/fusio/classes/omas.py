@@ -89,9 +89,9 @@ class omas_io(io):
         overwrite: bool = False
     ) -> None:
         if side == 'input':
-            self._write_omas_json_file(path, self.input.to_dataset(), overwrite=overwrite)
+            self._write_omas_json_file(path, self.input, overwrite=overwrite)
         else:
-            self._write_omas_json_file(path, self.output.to_dataset(), overwrite=overwrite)
+            self._write_omas_json_file(path, self.output, overwrite=overwrite)
 
 
     def _convert_to_imas_like_dataset(
@@ -334,9 +334,9 @@ class omas_io(io):
     def input_cocos(
         self,
     ) -> int:
-        cocos = self.input.to_dataset().attrs.get('cocos', None)
+        cocos = self.input.attrs.get('cocos', None)
         if cocos is None:
-            version = self.input.to_dataset().attrs.get('data_dictionary_version', '4.0.0')
+            version = self.input.attrs.get('data_dictionary_version', '4.0.0')
             cocos = self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
         return cocos
 
@@ -345,9 +345,9 @@ class omas_io(io):
     def output_cocos(
         self,
     ) -> int:
-        cocos = self.input.to_dataset().attrs.get('cocos', None)
+        cocos = self.input.attrs.get('cocos', None)
         if cocos is None:
-            version = self.output.to_dataset().attrs.get('data_dictionary_version', '4.0.0')
+            version = self.output.attrs.get('data_dictionary_version', '4.0.0')
             cocos = self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
         return cocos
 
@@ -362,9 +362,9 @@ class omas_io(io):
         eqdata: MutableMapping[str, Any] = {}
         time_eq = 'equilibrium.time_slice:i'
         data = (
-            self.input.to_dataset().isel({time_eq: time_index})
+            self.input.isel({time_eq: time_index})
             if side == 'input' else
-            self.output.to_dataset().isel({time_eq: time_index})
+            self.output.isel({time_eq: time_index})
         )
         default_cocos = self.input_cocos if side == 'input' else self.output_cocos
         if cocos is None:
@@ -512,7 +512,7 @@ class omas_io(io):
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
         assert isinstance(path, Path)
-        data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
+        data = self.input if side == 'input' else self.output
         time_eq = 'equilibrium.time'
         if time_eq in data:
             for ii, time in enumerate(data[time_eq].to_numpy().flatten()):
@@ -543,5 +543,5 @@ class omas_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            newobj.input = obj.input if side == 'input' else obj.output
         return newobj

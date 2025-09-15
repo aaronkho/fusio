@@ -216,9 +216,9 @@ class imas_io(io):
         overwrite: bool = False,
     ) -> None:
         if side == 'input':
-            self._write_imas_directory(path, self.input.to_dataset(), overwrite=overwrite)
+            self._write_imas_directory(path, self.input, overwrite=overwrite)
         else:
-            self._write_imas_directory(path, self.output.to_dataset(), overwrite=overwrite)
+            self._write_imas_directory(path, self.output, overwrite=overwrite)
 
 
     def _convert_to_ids_structure(
@@ -627,7 +627,7 @@ class imas_io(io):
     def input_cocos(
         self,
     ) -> int:
-        version = self.input.to_dataset().attrs.get('data_dictionary_version', imas.dd_zip.latest_dd_version())
+        version = self.input.attrs.get('data_dictionary_version', imas.dd_zip.latest_dd_version())
         return self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
 
 
@@ -635,7 +635,7 @@ class imas_io(io):
     def output_cocos(
         self,
     ) -> int:
-        version = self.output.to_dataset().attrs.get('data_dictionary_version', imas.dd_zip.latest_dd_version())
+        version = self.output.attrs.get('data_dictionary_version', imas.dd_zip.latest_dd_version())
         return self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
 
 
@@ -649,9 +649,9 @@ class imas_io(io):
         eqdata: MutableMapping[str, Any] = {}
         time_eq = 'equilibrium.time'
         data = (
-            self.input.to_dataset().isel({time_eq: time_index})
+            self.input.isel({time_eq: time_index})
             if side == 'input' else
-            self.output.to_dataset().isel({time_eq: time_index})
+            self.output.isel({time_eq: time_index})
         )
         default_cocos = self.input_cocos if side == 'input' else self.output_cocos
         if cocos is None:
@@ -791,7 +791,7 @@ class imas_io(io):
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
         assert isinstance(path, Path)
-        data = self.input.to_dataset() if side == 'input' else self.output.to_dataset()
+        data = self.input if side == 'input' else self.output
         time_eq = 'equilibrium.time'
         if time_eq in data:
             for ii, time in enumerate(data[time_eq].to_numpy().flatten()):
@@ -822,7 +822,7 @@ class imas_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            newobj.input = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            newobj.input = obj.input if side == 'input' else obj.output
         return newobj
 
 
@@ -835,7 +835,7 @@ class imas_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data = obj.input if side == 'input' else obj.output
             # TODO: Should compress down last_index_fields to true coordinates and set rho values as actual dimensions
             top_levels = {}
             for key in data.coords:
@@ -865,6 +865,6 @@ class imas_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input.to_dataset() if side == 'input' else obj.output.to_dataset()
+            data = obj.input if side == 'input' else obj.output
         return newobj
 

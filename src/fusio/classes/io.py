@@ -41,8 +41,8 @@ class io():
         return (not self._tree['output'].is_empty)
 
     @property
-    def input(self) -> xr.DataTree | xr.DataArray:
-        return self._tree['input'].copy(deep=True)
+    def input(self) -> xr.Dataset:
+        return self._tree['input'].copy(deep=True).to_dataset()
 
     @input.setter
     def input(self, data: xr.Dataset) -> None:
@@ -50,8 +50,8 @@ class io():
             self._tree['input'] = xr.DataTree(name='input', dataset=data.copy(deep=True))
 
     @property
-    def output(self) -> xr.DataTree | xr.DataArray:
-        return self._tree['output'].copy(deep=True)
+    def output(self) -> xr.Dataset:
+        return self._tree['output'].copy(deep=True).to_dataset()
 
     @output.setter
     def output(self, data: xr.Dataset) -> None:
