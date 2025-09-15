@@ -172,7 +172,7 @@ class gacode_io(io):
     ) -> str:
         now = datetime.datetime.now()
         gacode_header = [
-            f'#  *original : {now.strftime('%a %b %-d %H:%M:%S %Z %Y')}',
+            f'#  *original : {now.strftime("%a %b %-d %H:%M:%S %Z %Y")}',
             f'# *statefile : null',
             f'#     *gfile : null',
             f'#   *cerfile : null',
