@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 import datetime
-from scipy.integrate import cumulative_simpson
+from scipy.integrate import cumulative_simpson  # type: ignore[import-untyped]
 from .io import io
 from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (
@@ -828,7 +828,7 @@ class gacode_io(io):
             if 'ne' in data:
                 newvars['nine'] = (['n', 'rho', 'name'], (data['ni'] / data['ne']).to_numpy())
                 zeff = (data['ni'] * data['z'] ** 2 / data['ne']).sum('name')
-                newvars['qn_error'] = (['n'], np.abs(1.0 - (data['ni'] * data['z'] / data['ne']).sum('name')).sum('rho').to_numpy())
+                newvars['qn_error'] = (['n'], abs(1.0 - (data['ni'] * data['z'] / data['ne']).sum('name')).sum('rho').to_numpy())
                 newvars['zeff_derived'] = (['n', 'rho'], zeff.to_numpy())
         if 'omega0' in data:
             norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
