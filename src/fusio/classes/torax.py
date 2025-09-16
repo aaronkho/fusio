@@ -1983,7 +1983,7 @@ class torax_io(io):
                     for species in ds['main_ion'].to_numpy().flatten():
                         da = ds[key].dropna(ttag).sel(main_ion=species)
                         if rtag is not None and rtag in da.dims:
-                            da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
+                            da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0)
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
                 elif 'impurity' in dims:
