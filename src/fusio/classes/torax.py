@@ -540,18 +540,18 @@ class torax_io(io):
     def time_coordinate(
         self,
         time: float | ArrayLike = 0.0,
-    ) -> None:
+    ) -> xr.DataArray:
         if 'time' not in self.input.coords:
             newcoords: MutableMapping[str, Any] = {}
             newcoords['time'] = np.array([time]).flatten()
             self.update_input_coords(newcoords)
-        return self.input.get('time')
+        return self.input.get('time', xr.DataArray())
 
 
     def radial_coordinate(
         self,
         rho: float | ArrayLike = [0.0, 1.0],
-    ) -> None:
+    ) -> xr.DataArray:
         if 'rho' not in self.input.coords:
             newcoords: MutableMapping[str, Any] = {}
             newcoords['rho'] = np.array([rho]).flatten()
@@ -560,7 +560,7 @@ class torax_io(io):
                 newattrs: MutableMapping[str, Any] = {}
                 newattrs['geometry.n_rho'] = len(newcoords['rho'])
                 self.update_input_attrs(newattrs)
-        return self.input.get('rho')
+        return self.input.get('rho', xr.DataArray())
 
 
     def set_flat_initial_and_constant_kinetic_boundary_condition(
