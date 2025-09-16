@@ -537,24 +537,118 @@ class torax_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
+    def time_coordinate(
+        self,
+        time: float | ArrayLike = 0.0,
+    ) -> None:
+        if 'time' not in self.input.coords:
+            newcoords: MutableMapping[str, Any] = {}
+            newcoords['time'] = np.array([time]).flatten()
+            self.update_input_coords(newcoords)
+        return self.input.get('time')
+
+
+    def radial_coordinate(
+        self,
+        rho: float | ArrayLike = [0.0, 1.0],
+    ) -> None:
+        if 'rho' not in self.input.coords:
+            newcoords: MutableMapping[str, Any] = {}
+            newcoords['rho'] = np.array([rho]).flatten()
+            self.update_input_coords(newcoords)
+            if 'geometry.n_rho' not in self.input.attrs:
+                newattrs: MutableMapping[str, Any] = {}
+                newattrs['geometry.n_rho'] = len(newcoords['rho'])
+                self.update_input_attrs(newattrs)
+        return self.input.get('rho')
+
+
+    def set_flat_initial_and_constant_kinetic_boundary_condition(
+        self,
+        tebc: float,
+        tibc: float,
+        nebc: float,
+    ) -> None:
+        time = self.time_coordinate().to_numpy().flatten()
+        rho = self.radial_coordinate().to_numpy().flatten()
+        tref = 1.0e3
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        newvars['profile_conditions.T_e'] = (['time', 'rho'], np.full((len(time), len(rho)), tebc / tref))
+        newvars['profile_conditions.T_i'] = (['time', 'rho'], np.full((len(time), len(rho)), tibc / tref))
+        newvars['profile_conditions.n_e'] = (['time', 'rho'], np.full((len(time), len(rho)), nebc))
+        newattrs['profile_conditions.normalize_n_e_to_nbar'] = False
+        newattrs['profile_conditions.n_e_nbar_is_fGW'] = False
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def set_cosine_initial_and_constant_kinetic_boundary_condition(
+        self,
+        tebc: float,
+        tibc: float,
+        nebc: float,
+        tecore: float,
+        ticore: float,
+        necore: float,
+    ) -> None:
+        time = self.time_coordinate().to_numpy().flatten()
+        rho = self.radial_coordinate().to_numpy().flatten()
+        tref = 1.0e3
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        te = (tecore - tebc) * np.cos(0.5 * np.pi * rho) + tebc
+        ti = (ticore - tibc) * np.cos(0.5 * np.pi * rho) + tibc
+        ne = (necore - nebc) * np.cos(0.5 * np.pi * rho) + nebc
+        newvars['profile_conditions.T_e'] = (['time', 'rho'], np.repeat(np.expand_dims(te / tref, axis=0), len(time), axis=0))
+        newvars['profile_conditions.T_i'] = (['time', 'rho'], np.repeat(np.expand_dims(ti / tref, axis=0), len(time), axis=0))
+        newvars['profile_conditions.n_e'] = (['time', 'rho'], np.repeat(np.expand_dims(ne, axis=0), len(time), axis=0))
+        newattrs['profile_conditions.normalize_n_e_to_nbar'] = False
+        newattrs['profile_conditions.n_e_nbar_is_fGW'] = False
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def set_constant_flat_main_ion_composition(
+        self,
+        ions: MutableMapping[str, float],
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'main_ion' in data.coords:
+            dropvars = [var for var in data.data_vars if 'main_ion' in data[var].dims and var != 'main_ion']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['main_ion'])
+        newcoords: MutableMapping[str, Any] = {'main_ion': [key for key in ions]}
+        self.update_input_coords(newcoords)
+        newvars: MutableMapping[str, Any] = {}
+        total = np.sum([ions[key] for key in ions])
+        composition = [np.expand_dims(np.full((len(time), len(rho)), float(ions[key] / total)), axis=0) for key in ions]
+        newvars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], np.concatenate(composition, axis=0))
+        self.update_input_data_vars(newvars)
+
+
     def add_hydrogenic_minority_species(
         self,
         sname: str,
         sfrac: float,
     ) -> None:
         data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         if sname in ['H', 'D', 'T'] and sname not in data.get('main_ion', xr.DataArray()):
-            coords = {'main_ion': np.array([sname]), 'time': np.atleast_1d(data.get('time', xr.DataArray()).to_numpy())}
-            data_vars = {}
+            coords: MutableMapping[str, Any] = {'main_ion': np.array([sname]), 'time': time, 'rho': rho}
+            data_vars: MutableMapping[str, Any] = {}
             if 'plasma_composition.main_ion' in data:
                 total = np.atleast_1d(data['plasma_composition.main_ion'].sum('main_ion').to_numpy())
-                data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(sfrac / (total - sfrac), axis=0))
+                data_vars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], np.expand_dims(sfrac / (total - sfrac), axis=0))
             newdata = xr.Dataset(coords=coords, data_vars=data_vars)
             self.input = xr.concat([data, newdata], dim='main_ion', data_vars='minimal', coords='different', join='outer')
             if 'plasma_composition.main_ion' in self.input:
                 val = self.input['plasma_composition.main_ion']
                 newvars: MutableMapping[str, Any] = {}
-                newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], (val / val.sum('main_ion')).to_numpy())
+                newvars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], (val / val.sum('main_ion')).to_numpy())
                 self.update_input_data_vars(newvars)
 
 
@@ -575,16 +669,21 @@ class torax_io(io):
     ) -> None:
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
-        self.delete_input_data_vars(dropvars)
-        self.delete_input_data_vars(['impurity'])
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
         newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
         self.update_input_coords(newcoords)
         newvars: MutableMapping[str, Any] = {}
         total = np.sum([impurities[key] for key in impurities])
-        composition = [np.atleast_2d(np.zeros_like(time) + float(impurities[key] / total)) for key in impurities]
-        newvars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(composition, axis=0))
+        composition = [np.expand_dims(np.full((len(time), len(rho)), float(impurities[key] / total)), axis=0) for key in impurities]
+        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
         self.update_input_data_vars(newvars)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+        self.update_input_attrs(newattrs)
 
 
     def add_geometry(
@@ -757,6 +856,13 @@ class torax_io(io):
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
         newattrs['neoclassical.conductivity.model_name'] = 'sauter'
+        newattrs['neoclassical.transport.model_name'] = 'angioni_sauter'
+        newattrs['neoclassical.transport.chi_min'] = 0.0
+        newattrs['neoclassical.transport.chi_max'] = 100.0
+        newattrs['neoclassical.transport.D_e_min'] = 0.0
+        newattrs['neoclassical.transport.D_e_max'] = 100.0
+        newattrs['neoclassical.transport.V_e_min'] = -50.0
+        newattrs['neoclassical.transport.V_e_max'] = 50.0
         self.update_input_attrs(newattrs)
         self.add_neoclassical_bootstrap_current()
 
@@ -1137,6 +1243,7 @@ class torax_io(io):
         newattrs['mhd.sawtooth.crash_step_duration'] = float(deltat)
         newattrs['mhd.sawtooth.trigger_model.model_name'] = 'simple'
         newattrs['mhd.sawtooth.redistribution_model.model_name'] = 'simple'
+        newattrs['mhd.sawtooth.crash_step_duration'] = 1.0e-3
         self.update_input_attrs(newattrs)
 
 
@@ -1730,7 +1837,7 @@ class torax_io(io):
         newattrs['solver.chi_pereverzev'] = 30.0
         newattrs['solver.D_pereverzev'] = 15.0
         newattrs['solver.log_iterations'] = False
-        newattrs['solver.initial_guess_mode'] = 1  # 0 = x_old, 1 = linear
+        newattrs['solver.initial_guess_mode'] = 'linear'
         newattrs['solver.residual_tol'] = 1.0e-5 if not single else 1.0e-3
         newattrs['solver.residual_coarse_tol'] = 1.0e-2 if not single else 1.0e-1
         newattrs['solver.delta_reduction_factor'] = 0.5
@@ -1756,7 +1863,7 @@ class torax_io(io):
         newattrs['solver.chi_pereverzev'] = 30.0
         newattrs['solver.D_pereverzev'] = 15.0
         newattrs['solver.log_iterations'] = False
-        newattrs['solver.initial_guess_mode'] = 1  # 0 = x_old, 1 = linear
+        newattrs['solver.initial_guess_mode'] = 'linear'
         newattrs['solver.residual_tol'] = 1.0e-5 if not single else 1.0e-3
         newattrs['solver.residual_coarse_tol'] = 1.0e-2 if not single else 1.0e-1
         newattrs['solver.delta_reduction_factor'] = 0.5
@@ -1775,7 +1882,7 @@ class torax_io(io):
         eqs: Sequence[str] = ['te', 'ti', 'ne', 'j'],
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['geometry.n_rho'] = 25
+        newattrs['geometry.n_rho'] = 25 if 'geometry.n_rho' not in self.input.attrs else int(self.input.attrs['geometry.n_rho'])
         newattrs['numerics.t_initial'] = float(t_initial)
         newattrs['numerics.t_final'] = float(t_final)
         newattrs['numerics.exact_t_final'] = True
@@ -1870,24 +1977,24 @@ class torax_io(io):
                     if str(dim).startswith('rho_'):
                         rtag = str(dim)
                         break
-            if ttag is not None and ttag in ds[key].dims:
+            if ttag is not None and ttag in dims:
                 time = ds[ttag].to_numpy().flatten()
-                if 'main_ion' in ds[key].dims:
+                if 'main_ion' in dims:
                     for species in ds['main_ion'].to_numpy().flatten():
                         da = ds[key].dropna(ttag).sel(main_ion=species)
-                        if rtag is not None and rtag in da:
-                            da = da.rename({rtag: 'rho_norm'})
+                        if rtag is not None and rtag in da.dims:
+                            da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
-                elif 'impurity' in ds[key].dims:
+                elif 'impurity' in dims:
                     for species in ds['impurity'].to_numpy().flatten():
                         da = ds[key].dropna(ttag).sel(impurity=species)
-                        if rtag is not None and rtag in da:
-                            da = da.rename({rtag: 'rho_norm'})
+                        if rtag is not None and rtag in da.dims:
+                            da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
-                elif rtag is not None and rtag in ds[key].dims:
-                    da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'})
+                elif rtag is not None and rtag in dims:
+                    da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
                     if da.size > 0:
                         datadict[f'{key}'] = da
                 else:
