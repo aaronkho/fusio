@@ -746,14 +746,15 @@ class gacode_io(io):
 
         e_si = 1.60218e-19
         u_si = 1.66054e-27
+        eps_si = 8.85419e-12
         if 'type' in data:
             thermal_species_mask = data['type'].isin(['[therm]']).to_numpy().flatten()
             thermal_species = [i for i in range(len(thermal_species_mask)) if thermal_species_mask[i]]
             #newvars['ni_th'] = data['ni'].isel(name=thermal_species)
             newvars['ni_th_all'] = (['n', 'rho'], data['ni'].isel(name=thermal_species).sum('name').to_numpy())
             newvars['ni_all'] = (['n', 'rho'], data['ni'].sum('name').to_numpy())
-            pressure_e = 1.60218e-3 * data['te'] * data['ne']  # MPa
-            pressure_i = 1.60218e-3 * data['ti'] * data['ni']  # MPa
+            pressure_e = 1.0e16 * e_si * data['te'] * data['ne']  # MPa
+            pressure_i = 1.0e16 * e_si * data['ti'] * data['ni']  # MPa
             pressure_i_th = pressure_i.isel(name=thermal_species)  # MPa
             newvars['pressure_e'] = (['n', 'rho'], pressure_e.to_numpy())
             newvars['pressure_i'] = (['n', 'rho', 'name'], pressure_i.to_numpy())
@@ -806,10 +807,10 @@ class gacode_io(io):
             norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
             newvars['alte'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['te'].to_numpy())))
             if 'masse' in data:
-                v_e_th = (2.0 * (data['te'] * 1.0e3 * 1.60218e19) / (data['masse'] * 1.66054e-27)) ** 0.5  # m/s
+                v_e_th = (2.0 * (data['te'] * 1.0e3 * e_si) / (data['masse'] * u_si)) ** 0.5  # m/s
                 newvars['v_e_th'] = (['n', 'rho'], v_e_th.to_numpy())
             if 'mass_i' in data:
-                v_s = (2.0 * (data['te'] * 1.0e3 * 1.60218e19) / (data['mass_i'] * 1.66054e-27)) ** 0.5  # m/s
+                v_s = (2.0 * (data['te'] * 1.0e3 * e_si) / (data['mass_i'] * u_si)) ** 0.5  # m/s
                 newvars['v_s'] = (['n', 'rho'], v_s.to_numpy())
         if 'ti' in data:
             norm = np.expand_dims(np.expand_dims(data['a'].to_numpy(), axis=-1), axis=-1)
@@ -817,7 +818,7 @@ class gacode_io(io):
             if 'te' in data:
                 newvars['tite'] = (['n', 'rho', 'name'], (data['ti'] / data['te']).to_numpy())
             if 'mass_i' in data:
-                v_i_th = (2.0 * (data['ti'] * 1.0e3 * 1.60218e19) / (data['mass_i'] * 1.66054e-27)) ** 0.5  # m/s
+                v_i_th = (2.0 * (data['ti'] * 1.0e3 * e_si) / (data['mass_i'] * u_si)) ** 0.5  # m/s
                 newvars['v_i_th'] = (['n', 'rho', 'name'], v_i_th.to_numpy())
         if 'ne' in data:
             norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
@@ -830,6 +831,14 @@ class gacode_io(io):
                 zeff = (data['ni'] * data['z'] ** 2 / data['ne']).sum('name')
                 newvars['qn_error'] = (['n'], abs(1.0 - (data['ni'] * data['z'] / data['ne']).sum('name')).sum('rho').to_numpy())
                 newvars['zeff_derived'] = (['n', 'rho'], zeff.to_numpy())
+        if 'ne' in data and 'te' in data and 'rho_s_unit' in data:
+            debye_e = (eps_si / e_si) ** 0.5 * (1.0e-16 * data['te'] / (data['ne'] * data['ze'] ** 2)) ** 0.5  # m
+            newvars['debye_e'] = (['n', 'rho'], debye_e.to_numpy())
+            newvars['debye_e_norm'] = (['n', 'rho'], (debye_e / data['rho_s_unit']).to_numpy())
+        if 'ni' in data and 'ti' in data and 'rho_s_unit' in data:
+            debye_i = (eps_si / e_si) ** 0.5 * (1.0e-16 * data['ti'] / (data['ni'] * data['z'] ** 2)) ** 0.5  # m
+            newvars['debye_i'] = (['n', 'rho', 'name'], debye_i.to_numpy())
+            newvars['debye_i_norm'] = (['n', 'rho', 'name'], (debye_i / data['rho_s_unit']).to_numpy())
         if 'omega0' in data:
             norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
             newvars['alw0'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['omega0'].to_numpy())))
@@ -843,6 +852,84 @@ class gacode_io(io):
             if 'r_out' in data:
                 newvars['mach'] = (['n', 'rho'], (data['w0'] * data['r_out']).to_numpy() / newvars['v_s'][-1])
 
+        self.update_input_data_vars(newvars)
+
+
+    def _compute_secondary_quantities(
+        self
+    ) -> None:
+        def derivative(x, y):
+            deriv = np.zeros_like(x)
+            if x.shape[-1] > 2:
+                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
+                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
+                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
+                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
+                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
+                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
+                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
+            elif x.shape[-1] > 1:
+                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
+                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
+            return deriv
+        data = self.input
+        newvars: MutableMapping[str, Any] = {}
+        e_si = 1.60218e-19
+        u_si = 1.66054e-27
+        eps_si = 8.85419e-12
+        if 'bp2' in data and 'bt2' in data:
+            b = (data['bp2'] + data['bt2']) ** 0.5
+            newvars['b'] = (['n', 'rho'], b.to_numpy())
+            main_species_mask = (data['name'].isin(['H', 'D', 'T']).to_numpy() & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
+            main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
+            vperp_tor = xr.zeros_like(b)
+            vperp_pol = xr.zeros_like(b)
+            vpar_tor = xr.zeros_like(b)
+            vpar_pol = xr.zeros_like(b)
+            if 'vtor' in data:
+                vperp_tor = data['vtor'].isel(name=main_species_mask).mean('name') * data['bp2'] ** 0.5 / b
+                vpar_tor = data['vtor'].isel(name=main_species_mask).mean('name') * data['bt2'] ** 0.5 / b
+            if 'vpol' in data:
+                vperp_pol = data['vpol'].isel(name=main_species_mask).mean('name') * data['bt2'] ** 0.5 / b
+                vpar_pol = data['vpol'].isel(name=main_species_mask).mean('name') * data['bp2'] ** 0.5 / b
+            newvars['vperp'] = (['n', 'rho'], (vperp_tor - vperp_pol).to_numpy())
+            newvars['vpar'] = (['n', 'rho'], (vpar_tor + vpar_pol).to_numpy())
+            if 'c_s' in data:
+                newvars['machperp'] = (['n', 'rho'], newvars['vperp'][-1] / data['c_s'].to_numpy())
+                newvars['machpar'] = (['n', 'rho'], newvars['vpar'][-1] / data['c_s'].to_numpy())
+                if 'a' in data:
+                    norm = (data['a'] / data['c_s']).to_numpy()
+                    newvars['alvperp'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vperp'][-1]))
+                    newvars['alvpar'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vpar'][-1]))
+            if 'rmin' in data and 'q' in data:
+                norm = (data['rmin'] / data['q']).to_numpy()
+                newvars['gamma_exb'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vperp'][-1] / np.where(np.isclose(norm, 0.0), 1.0e-4, norm)))
+                if 'c_s' in data and 'a' in data:
+                    newvars['gamma_exb_norm'] = (['n', 'rho'], newvars['gamma_exb'][-1] * (data['a'] / data['c_s']).to_numpy())
+        if 'pressure_e' in data and 'bp2' in data and 'bt2' in data:
+            beta_e_p = 1.0e6 * data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
+            beta_e_t = 1.0e6 * data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
+            newvars['beta_e'] = (['n', 'rho'], 1.0 / (beta_e_p ** (-1) + beta_e_t ** (-1)).to_numpy())
+        if 'pressure_i_th' in data and 'bp2' in data and 'bt2' in data:
+            beta_i_th_p = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
+            beta_i_th_t = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
+            newvars['beta_i_th'] = (['n', 'rho'], 1.0 / (beta_i_th_p ** (-1) + beta_i_th_t ** (-1)).to_numpy())
+        if 'debye_e' in data and 'debye_i' in data:
+            newvars['debye'] = (['n', 'rho'], ((data['debye_e'] ** (-2) + (data['debye_i'] ** (-2)).sum('name')) ** (-0.5)).to_numpy())
+            f_nu = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
+            inv_b90_ee = (4.0 * np.pi * eps_si / e_si) * 1.0e3 * data['te'] / abs(data['ze'] * data['ze'])
+            f_ee = 1.0e19 * data['ne'] * (e_si * 1.0e3 * data['te'] / (u_si * data['masse'])) ** 0.5 / (inv_b90_ee ** 2) * np.log(inv_b90_ee * data['debye_e'])
+            newvars['nu_ee'] = (['n', 'rho'], (f_ee * f_nu).to_numpy())
+            inv_b90_ei = (4.0 * np.pi * eps_si / e_si) * 1.0e3 * data['te'] / abs(data['ze'] * data['z'])
+            f_ei = 1.0e19 * data['ni'] * (e_si * 1.0e3 * data['te'] / (u_si * data['masse'])) ** 0.5 / (inv_b90_ei ** 2) * np.log(inv_b90_ei * data['debye_e'])
+            newvars['nu_ei'] = (['n', 'rho'], (f_ei * f_nu).sum('name').to_numpy())
+            inv_b90_ii = (4.0 * np.pi * eps_si / e_si) * 1.0e3 * data['ti'] / abs(data['z'] * data['z'])
+            f_ii = 1.0e19 * data['ni'] * (e_si * 1.0e3 * data['ti'] / (u_si * data['mass'])) ** 0.5 / (inv_b90_ii ** 2) * np.log(inv_b90_ii * data['debye_i'])
+            newvars['nu_ii'] = (['n', 'rho', 'name'], (f_ii * f_nu).to_numpy())
+            if 'c_s' in data and 'a' in data:
+                newvars['nu_ee_norm'] = (['n', 'rho'], (f_ee * f_nu * data['a'] / data['c_s']).to_numpy())
+                newvars['nu_ei_norm'] = (['n', 'rho'], (f_ei * f_nu * data['a'] / data['c_s']).sum('name').to_numpy())
+                newvars['nu_ii_norm'] = (['n', 'rho', 'name'], (f_ii * f_nu * data['a'] / data['c_s']).to_numpy())
         self.update_input_data_vars(newvars)
 
 
@@ -1007,8 +1094,8 @@ class gacode_io(io):
             newvars['bt2_vol'] = (['n'], cumulative_simpson((data['bt2'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
             newvars['beta_p'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bp2_vol'][-1])
             newvars['beta_t'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bt2_vol'][-1])
-            newvars['beta'] = 1.0 / (newvars['beta_p'][-1] ** (-1) + newvars['beta_t'][-1] ** (-1))
-            newvars['beta_n'] = newvars['beta'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy()  # pc
+            newvars['beta'] = (['n'], 1.0 / (newvars['beta_p'][-1] ** (-1) + newvars['beta_t'][-1] ** (-1)))
+            newvars['beta_n'] = (['n'], newvars['beta'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy())  # pc
 
         self.update_input_data_vars(newvars)
 
@@ -1137,6 +1224,7 @@ class gacode_io(io):
         self._compute_average_mass()
         self._compute_source_terms()
         self._compute_extended_local_inputs()
+        self._compute_secondary_quantities()
         self._compute_integrated_quantities()
         self._compute_scalings()
 
