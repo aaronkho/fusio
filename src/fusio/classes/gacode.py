@@ -1806,7 +1806,7 @@ class gacode_io(io):
                             data_vars['omega0'] = (['n', 'rho'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
                         tag = 'core_profiles.profiles_1d.grid.rho_tor'
                         if tag in data and 'core_profiles.vacuum_toroidal_field.b0' in data:
-                            torflux = data[tag].interp({rho_cp: np.array([1.0])}, kwargs=ikwargs) ** 2.0 / (np.pi * data['core_profiles.vacuum_toroidal_field.b0'])
+                            torflux = data[tag].interp({rho_cp: np.array([1.0])}, kwargs=ikwargs) ** 2.0 * (0.5 * data['core_profiles.vacuum_toroidal_field.b0'])
                             data_vars['torfluxa'] = (['n'], cocos['scyl'] * torflux.to_numpy().flatten())
 
                     if time_eq in data.coords and psi_eq_i in data.dims and rho_eq in data and 'rho' in coords:
