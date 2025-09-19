@@ -19,6 +19,7 @@ logger = logging.getLogger('fusio')
 class io():
 
     _supported_formats: Final[Sequence[str]] = [
+        'plasma',
         'gacode',
         'imas',
         'omas',
