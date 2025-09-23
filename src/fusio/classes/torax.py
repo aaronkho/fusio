@@ -2112,7 +2112,7 @@ class torax_io(io):
                     nfilt = (~np.isclose(data['z'], 1.0))
                     zeff = xr.ones_like(data['ne'])
                     if np.any(nfilt):
-                        namelist = data['name'].to_numpy()[nfilt].tolist()
+                        namelist = data['name'].to_numpy().tolist()
                         implist = []
                         for ii in range(len(namelist)):
                             if namelist[ii] not in ['H', 'D', 'T']:
@@ -2120,7 +2120,7 @@ class torax_io(io):
                         impcomp = {}
                         zeff = xr.zeros_like(data['ne'])
                         nsum = xr.zeros_like(data['ne'])
-                        for ii in range(len(data['name'])):
+                        for ii in range(len(namelist)):
                             nz = copy.deepcopy(data['ni'].isel(name=ii))
                             if str(data['name'].isel(name=ii).to_numpy()) in namelist and 'therm' in str(data['type'].isel(name=ii).to_numpy()):
                                 sname = str(data['name'].isel(name=ii).to_numpy())
