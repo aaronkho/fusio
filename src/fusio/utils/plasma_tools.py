@@ -179,15 +179,15 @@ def calc_grad_k_from_ak(ak, k, lref):
     grad_k = ak * k / -lref
     return grad_k
 
-def calc_q_from_bp(bp, r, bo, ro):
+def calc_q_circular_from_bp(bp, r, bo, ro):
     q = r * bo / (ro * bp)
     return q
 
-def calc_bp_from_q(q, r, bo, ro):
+def calc_bp_from_q_circular(q, r, bo, ro):
     bp = r * bo / (ro * q)
     return bp
 
-def calc_grad_q_from_s(s, bp, bo, ro):
+def calc_grad_q_circular_from_s(s, bp, bo, ro):
     grad_q = s * bo / (ro * bp)
     return grad_q
 
@@ -195,15 +195,15 @@ def calc_grad_q_from_s_and_q(s, q, r):
     grad_q = calc_grad_k_from_ak(s, q, -r)
     return grad_q
 
-def calc_s_from_grad_bp(grad_bp, bp, r):
+def calc_s_circular_from_grad_bp(grad_bp, bp, r):
     s = 1.0 - r * grad_bp / bp
     return s
 
-def calc_grad_bp_from_grad_q(grad_q, bp, r, bo, ro):
+def calc_grad_bp_from_grad_q_circular(grad_q, bp, r, bo, ro):
     grad_bp = (1.0 - ro * bp * grad_q / bo) * bp / r
     return grad_bp
 
-def calc_grad_bp_from_s(s, bp, r):
+def calc_grad_bp_from_s_circular(s, bp, r):
     grad_bp = (1.0 - s) * bp / r
     return grad_bp
 
@@ -973,3 +973,101 @@ def calc_nustar(zeff, q, r, ro, ne, te):
     kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
     nustar = cl * zeff * nt * kk
     return nustar
+
+def calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa, cos, sin, s_cos, s_sin):
+    n_theta = 1001
+    theta = np.linspace(-np.pi, np.pi, n_theta)
+    if not isinstance(kappa, float):
+        for d in range(kappa.ndim):
+            theta = np.expand_dims(theta, axis=-1)
+    a = copy.deepcopy(theta)
+    a_t = np.ones_like(a)
+    a_tt = np.zeros_like(a)
+    a_r = np.zeros_like(a)
+    for i in range(len(cos)):
+        if i < len(sin):
+            s = np.array([sin[i]]) if isinstance(sin[i], float) else sin[i]
+            a += np.expand_dims(s, axis=0) * np.sin(float(i) * theta)
+            a_t += np.expand_dims(s, axis=0) * float(i) * np.cos(float(i) * theta)
+            a_tt += np.expand_dims(s, axis=0) * float(-i * i) * np.sin(float(i) * theta)
+        if i < len(s_sin):
+            s_s = np.array([s_sin[i]]) if isinstance(sin[i], float) else s_sin[i]
+            a_r += np.expand_dims(s_s, axis=0) * np.sin(float(i) * theta)
+        if i < len(cos):
+            s = np.array([cos[i]]) if isinstance(cos[i], float) else cos[i]
+            a += np.expand_dims(s, axis=0) * np.cos(float(i) * theta)
+            a_t += np.expand_dims(s, axis=0) * float(-i) * np.sin(float(i) * theta)
+            a_tt += np.expand_dims(s, axis=0) * float(-i * i) * np.cos(float(i) * theta)
+        if i < len(s_cos):
+            s_s = np.array([s_cos[i]]) if isinstance(s_cos[i], float) else s_cos[i]
+            a_r += np.expand_dims(s_s, axis=0) * np.cos(float(i) * theta)
+    r = np.expand_dims(rgeo, axis=0) + np.expand_dims(rmin, axis=0) * np.cos(a)
+    r_t = np.expand_dims(-rmin, axis=0) * a_t * np.sin(a)
+    #r_tt = np.expand_dims(-rmin.to_numpy(), axis=0) * (a_t**2 * np.cos(a) + a_tt * np.sin(a))
+    r_r = np.expand_dims(drgeo, axis=0) + np.cos(a) - np.expand_dims(rmin, axis=0) * np.sin(a) * a_r
+    z = np.expand_dims(zgeo, axis=0) + np.expand_dims(kappa * rmin, axis=0) * np.sin(theta)
+    z_t = np.expand_dims(kappa * rmin, axis=0) * np.cos(theta)
+    #z_tt = np.expand_dims(-kappa * rmin, axis=0) * np.sin(theta)
+    z_r = np.expand_dims(dzgeo, axis=0) + np.expand_dims(kappa * (1.0 + s_kappa), axis=0) * np.sin(theta)
+    l_t = (r_t ** 2 + z_t ** 2) ** 0.5
+    j_r = r * (r_r * z_t - r_t * z_r)
+    inv_j_r = 1.0 / np.where(np.isclose(j_r, 0.0), 0.001, j_r)
+    grad_r = np.where(np.isclose(j_r, 0.0), 1.0, r * l_t * inv_j_r)
+    return r, z, l_t, grad_r
+
+def calc_vol_from_contour(r, z, rgeo):
+    xs = np.trapezoid(r, z, axis=0)
+    vol = 2.0 * np.pi * rgeo * xs
+    return vol, xs
+
+def calc_b_from_flux_surface_values(r, grad_r, l_t, rmin, q):
+    r_temp = copy.deepcopy(r)
+    grad_r_temp = copy.deepcopy(grad_r)
+    l_t_temp = copy.deepcopy(l_t)
+    n_theta = r.shape[0]
+    if np.all(r[0] == r[-1]) and np.all(grad_r[0] == grad_r[-1]) and np.all(l_t[0] == l_t[-1]):
+        r_temp = r_temp[:-1]
+        grad_r_temp = grad_r_temp[:-1]
+        l_t_temp = l_t_temp[:-1]
+        n_theta = n_theta - 1
+    c = 2.0 * np.pi * np.sum(l_t_temp / (r_temp * grad_r_temp), axis=0)
+    f = 2.0 * np.pi * rmin / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta))
+    #f[..., 0] = 2.0 * f[..., 1] - f[..., 2]
+    bt = np.expand_dims(f, axis=0) / r
+    bp = np.expand_dims(rmin / q, axis=0) * grad_r / r
+    b = bt ** 2 + bp ** 2
+    return bt, bp, b
+
+def calc_geo_from_flux_surface_values(r, grad_r, l_t, b, rmin, rgeo):
+    r_v = np.expand_dims(rmin * rgeo, axis=0)
+    g_t = r * b * l_t / (np.where(np.isclose(r_v, 0.0), 1.0, r_v) * grad_r)
+    #g_t[..., 0] = 2.0 * g_t[..., 1] - g_t[..., 2]
+    return g_t
+
+def calc_grad_vol_from_flux_surface_values(r, l_t, grad_r):
+    r_temp = copy.deepcopy(r)
+    grad_r_temp = copy.deepcopy(grad_r)
+    l_t_temp = copy.deepcopy(l_t)
+    n_theta = r.shape[0]
+    if np.all(r[0] == r[-1]) and np.all(grad_r[0] == grad_r[-1]) and np.all(l_t[0] == l_t[-1]):
+        r_temp = r_temp[:-1]
+        grad_r_temp = grad_r_temp[:-1]
+        l_t_temp = l_t_temp[:-1]
+        n_theta = n_theta - 1
+    c = 2.0 * np.pi * np.sum(l_t_temp / (r_temp * grad_r_temp), axis=0)
+    sa = 2.0 * np.pi * np.sum(l_t_temp * r_temp, axis=0) * 2.0 * np.pi / float(n_theta)
+    grad_vol = 2.0 * np.pi * np.where(np.isfinite(c), c, 0.0) / float(n_theta)
+    return grad_vol, sa
+
+def calc_flux_surface_average_k_from_b_and_geo(k, b, g_t):
+    k_temp = copy.deepcopy(k)
+    b_temp = copy.deepcopy(b)
+    g_t_temp = copy.deepcopy(g_t)
+    if np.all(k[0] == k[-1]) and np.all(b[0] == b[-1]) and np.all(g_t[0] == g_t[-1]):
+        k_temp = k_temp[:-1]
+        b_temp = b_temp[:-1]
+        g_t_temp = g_t_temp[:-1]
+    denom = np.sum(np.where(np.isfinite(g_t_temp), g_t_temp, 0.0) / b_temp, axis=0)
+    #denom[..., 0] = 2.0 * denom[..., 1] - denom[..., 2]
+    kfsa = np.sum(k_temp * g_t_temp / b_temp, axis=0) / denom
+    return kfsa
