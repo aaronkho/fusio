@@ -257,6 +257,7 @@ class gacode_io(io):
         self,
         eqdsk_data: MutableMapping[str, Any],
         psivec: ArrayLike,
+        trace_last: bool = True,
     ) -> MutableMapping[str, list[int | float]]:
         mxh_data: dict[str, list[int| float]] = {
             'rmaj': [],
@@ -295,6 +296,8 @@ class gacode_io(io):
             rmesh, zmesh = np.meshgrid(rvec, zvec)
             axis = [eqdsk_data['rmagx'], eqdsk_data['zmagx']]
             fs = trace_flux_surfaces(rmesh, zmesh, eqdsk_data['psi'], psivec, axis=axis)
+            if not trace_last:
+                fs[float(psivec[-1])] = np.concatenate((np.atleast_2d(eqdsk_data['rbdry']).T, np.atleast_2d(eqdsk_data['zbdry']).T), axis=-1)
             mxh = {psi: calculate_mxh_coefficients(c[:, 0], c[:, 1], n=6) for psi, c in fs.items()}
             for psi in psivec:
                 mxh_data['rmaj'].append(mxh[psi][2][0] if psi in mxh else np.nan)
@@ -1821,6 +1824,7 @@ class gacode_io(io):
                             #data_vars['polflux'] = (['n', 'rho'], np.expand_dims(ndata['psi'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                             psivec = data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy()
                             data_vars['polflux'] = (['n', 'rho'], np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * np.expand_dims(psivec, axis=0))
+                            print(psivec[0], eqdsk_data['simagx'])
                         tag = 'equilibrium.vacuum_toroidal_field.r0'
                         if tag in data:
                             data_vars['rcentr'] = (['n'], np.atleast_1d(data[tag].to_numpy()))
@@ -1876,10 +1880,10 @@ class gacode_io(io):
                         #if tag in data and 'zmag' not in data_vars:
                         #    data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.repeat(data[tag].to_numpy().flatten(), len(coords['rho']), axis=0), axis=0))
                         tag = 'equilibrium.time_slice.profiles_1d.elongation'
-                        if tag in data and 'kappa' not in data_vars:
+                        if tag in data: # and 'kappa' not in data_vars:
                             #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'elongation': (['rho_int'], data[tag].to_numpy().flatten())})
                             #data_vars['kappa'] = (['n', 'rho'], np.expand_dims(ndata['elongation'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         #if 'equilibrium.time_slice.profiles_1d.triangularity_upper' in data or 'equilibrium.time_slice.profiles_1d.triangularity_lower' in data and 'delta' not in data_vars:
                             #tri = np.zeros(data['rho(-)'].shape)
                             #itri = 0
@@ -1900,6 +1904,7 @@ class gacode_io(io):
                         qrfe = np.zeros((len(coords['rho']), ))
                         qrfi = np.zeros((len(coords['rho']), ))
                         jrf = np.zeros((len(coords['rho']), ))
+                        swall = np.zeros((len(coords['rho']), ))
                         tag = 'core_sources.source.profiles_1d.electrons.energy'
                         if tag in data:
                             srctag = 'ohmic'
@@ -1973,10 +1978,13 @@ class gacode_io(io):
                             if srctag in srclist:
                                 data_vars['jnb'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         tag = 'core_sources.source.profiles_1d.ion.particles'
-                        if tag in data and ion_cs_i in data.coords:
+                        if tag in data and ion_cs_i in data.dims:
                             srctag = 'cold_neutrals'
                             if srctag in srclist:
-                                data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy(), axis=0))
+                                swall += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy().flatten()
+                            srctag = 'pellet'
+                            if srctag in srclist:
+                                swall += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy().flatten()
                             srctag = 'nbi'
                             if srctag in srclist:
                                 data_vars['qpar_beam'] = (['n', 'rho'], np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy(), axis=0))
@@ -1991,6 +1999,8 @@ class gacode_io(io):
                             data_vars['qrfi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(qrfi, axis=0))
                         if np.abs(jrf).sum() > 0.0:
                             data_vars['jrf'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * np.expand_dims(jrf, axis=0))
+                        if np.abs(swall).sum() > 0.0:
+                            data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(swall, axis=0))
 
                     dsvec.append(xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs))
 
