@@ -225,6 +225,7 @@ def calc_ninorm_from_quasineutrality(zi, zi_target, ninorm, ze=1.0):
 def calc_2ion_ninorm_from_ninorm_and_quasineutrality(ni, zia, zib, ne=None):
     ninorma = normalize(ni, ne) if ne is not None else copy.deepcopy(ni)
     ninormb = calc_ninorm_from_quasineutrality(zia, zib, ninorma)
+    return ninorma, ninormb
 
 def calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ni, zeff, zia, zib, zic, ne=None):
     ninorma = normalize(ni, ne) if ne is not None else copy.deepcopy(ni)
@@ -247,7 +248,7 @@ def calc_ni_from_zeff_and_quasineutrality(zeff, zia, zib, zi_target, nia, ne):
 
 def calc_ni_from_quasineutrality(zi, zi_target, ni, ne):
     ninorm = calc_ninorm_from_ni(ni, ne)
-    ninorm_target = calc_ninorm_from_quasineutrality(1.0, zi_target, ninorm)
+    ninorm_target = calc_ninorm_from_quasineutrality(zi, zi_target, ninorm)
     ni_target = calc_ni_from_ninorm(ninorm_target, ne, nscale=1.0)
     return ni_target
 
