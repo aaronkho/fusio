@@ -615,7 +615,7 @@ class torax_io(io):
     ) -> None:
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        #rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         if 'main_ion' in data.coords:
             dropvars = [var for var in data.data_vars if 'main_ion' in data[var].dims and var != 'main_ion']
             self.delete_input_data_vars(dropvars)
@@ -624,8 +624,8 @@ class torax_io(io):
         self.update_input_coords(newcoords)
         newvars: MutableMapping[str, Any] = {}
         total = np.sum([ions[key] for key in ions])
-        composition = [np.expand_dims(np.full((len(time), len(rho)), float(ions[key] / total)), axis=0) for key in ions]
-        newvars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], np.concatenate(composition, axis=0))
+        composition = [np.expand_dims(np.zeros_like(time) + float(ions[key] / total), axis=0) for key in ions]
+        newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.concatenate(composition, axis=0))
         self.update_input_data_vars(newvars)
 
 
@@ -636,19 +636,19 @@ class torax_io(io):
     ) -> None:
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        #rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         if sname in ['H', 'D', 'T'] and sname not in data.get('main_ion', xr.DataArray()):
-            coords: MutableMapping[str, Any] = {'main_ion': np.array([sname]), 'time': time, 'rho': rho}
+            coords: MutableMapping[str, Any] = {'main_ion': np.array([sname]), 'time': time}
             data_vars: MutableMapping[str, Any] = {}
             if 'plasma_composition.main_ion' in data:
                 total = np.atleast_1d(data['plasma_composition.main_ion'].sum('main_ion').to_numpy())
-                data_vars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], np.expand_dims(sfrac / (total - sfrac), axis=0))
+                data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(sfrac / (total - sfrac), axis=0))
             newdata = xr.Dataset(coords=coords, data_vars=data_vars)
             self.input = xr.concat([data, newdata], dim='main_ion', data_vars='minimal', coords='different', join='outer')
             if 'plasma_composition.main_ion' in self.input:
                 val = self.input['plasma_composition.main_ion']
                 newvars: MutableMapping[str, Any] = {}
-                newvars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], (val / val.sum('main_ion')).to_numpy())
+                newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], (val / val.sum('main_ion')).to_numpy())
                 self.update_input_data_vars(newvars)
 
 
@@ -695,6 +695,7 @@ class torax_io(io):
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
+        newattrs['profile_conditions.initial_psi_mode'] = 'geometry'
         #newattrs['geometry.hires_factor'] = 4
         newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
         newattrs['geometry.geometry_type'] = f'{geotype}'
@@ -804,8 +805,8 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         wrho_array = self.input.get('pedestal.rho_norm_ped_top', None)
         if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
-            models = self.input.attrs.get('map_combined_models', [])
-            prefix = f'transport.transport_models.{len(models):d}'
+            models = self.input.attrs.get('map_combined_pedestal_models', [])
+            prefix = f'transport.pedestal_transport_models.{len(models):d}'
             #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
             wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
@@ -819,9 +820,9 @@ class torax_io(io):
             newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
             newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
             newattrs[f'{prefix}.model_name'] = 'constant'
-            newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
+            #newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
             models.append('constant')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_pedestal_models'] = models
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -893,7 +894,8 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
-        newattrs['map_combined_models'] = data.attrs.get('map_combined_models', [])
+        newattrs['map_combined_core_models'] = data.attrs.get('map_combined_core_models', [])
+        newattrs['map_combined_pedestal_models'] = data.attrs.get('map_combined_pedestal_models', [])
         self.update_input_attrs(newattrs)
 
 
@@ -914,7 +916,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
                 #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
@@ -922,7 +924,7 @@ class torax_io(io):
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('constant')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_core_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -975,7 +977,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
                 #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
@@ -983,7 +985,7 @@ class torax_io(io):
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('CGM')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_core_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1020,14 +1022,15 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
-                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(data['pedestal.rho_norm_ped_top'].to_numpy())
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('qualikiz')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_core_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1062,7 +1065,7 @@ class torax_io(io):
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             for n in range(len(models)):
                 if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qualikiz':
                     newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
@@ -1082,7 +1085,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             prefix = f'transport.transport_models.{len(models):d}'
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if 'pedestal.rho_norm_ped_top' in data:
@@ -1091,7 +1094,7 @@ class torax_io(io):
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('qlknn')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_core_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1132,7 +1135,7 @@ class torax_io(io):
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             for n in range(len(models)):
                 if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qlknn':
                     newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
@@ -2001,14 +2004,21 @@ class torax_io(io):
                     da = ds[key].dropna(ttag)
                     if da.size > 0:
                         datadict[f'{key}'] = da
-        models = datadict.pop('map_combined_models', {})
+        core_models = datadict.pop('map_combined_core_models', {})
+        pedestal_models = datadict.pop('map_combined_pedestal_models', {})
         if datadict.get('transport.model_name', '') == 'combined':
             datadict['transport.transport_models'] = []
-            for nn in range(len(models)):
+            for nn in range(len(core_models)):
                 modeldict = {key.replace(f'transport.transport_models.{nn:d}.', ''): val for key, val in datadict.items() if key.startswith(f'transport.transport_models.{nn:d}.')}
                 for key in modeldict:
                     datadict.pop(f'transport.transport_models.{nn:d}.{key}', None)
                 datadict['transport.transport_models'].append(self._unflatten(modeldict))
+            datadict['transport.pedestal_transport_models'] = []
+            for nn in range(len(pedestal_models)):
+                modeldict = {key.replace(f'transport.pedestal_transport_models.{nn:d}.', ''): val for key, val in datadict.items() if key.startswith(f'transport.pedestal_transport_models.{nn:d}.')}
+                for key in modeldict:
+                    datadict.pop(f'transport.pedestal_transport_models.{nn:d}.{key}', None)
+                datadict['transport.pedestal_transport_models'].append(self._unflatten(modeldict))
         srctags = [
             'sources.ei_exchange',
             'sources.ohmic',
