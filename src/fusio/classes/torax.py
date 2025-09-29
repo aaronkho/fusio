@@ -2088,6 +2088,7 @@ class torax_io(io):
         obj: io,
         side: str = 'output',
         item: int = 0,
+        impurities: str = 'n_e_ratios',
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
@@ -2157,23 +2158,27 @@ class torax_io(io):
                                     impcomp[sname] = copy.deepcopy(nz)
                                 nsum += nz
                             zeff += (data['ni'] * data['z'] ** 2.0 / data['ne']).isel(name=ii)
-                        total = 0.0
                         impcoord = []
                         impfracs = []
-                        for key in impcomp:
-                            impcomp[key] = (impcomp[key] / nsum).mean('rho')
-                            total += float(impcomp[key].to_numpy())
-                        for key in impcomp:
-                            impval = (impcomp[key] / total).to_numpy().flatten()
-                            impcoord.append(key)
-                            impfracs.append(np.expand_dims(impval, axis=0))
+                        if impurities == 'fractions':
+                            attrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+                            for key in impcomp:
+                                impval = np.atleast_2d((impcomp[key] / nsum).to_numpy())
+                                impcoord.append(key)
+                                impfracs.append(np.expand_dims(impval, axis=0))
+                        else:
+                            attrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+                            for key in impcomp:
+                                impval = np.atleast_2d((impcomp[key] / data['ne']).to_numpy())
+                                impcoord.append(key)
+                                impfracs.append(np.expand_dims(impval, axis=0))
                         if len(impcoord) == 0:
                             impcoord = ['Ne']
-                            impfracs = [np.atleast_2d([1.0])]
+                            impfracs = [np.atleast_3d([1.0])]
                         if 'z_eff' in data:
                             zeff = data['z_eff']
                         coords['impurity'] = np.array(impcoord).flatten()
-                        data_vars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(impfracs, axis=0))
+                        data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(impfracs, axis=0))
                     data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], np.expand_dims(zeff.to_numpy().flatten(), axis=0))
                 if 'current' in data:
                     data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * np.expand_dims(data['current'].mean(), axis=0))
@@ -2307,6 +2312,7 @@ class torax_io(io):
         obj,
         side: str = 'output',
         window: float | None = None,
+        impurities: str = 'n_e_ratios',
         **kwargs: Any,
     ) -> Self:
 
@@ -2418,20 +2424,29 @@ class torax_io(io):
                         if ii in implist:
                             # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
                             impcomp[sname] = copy.deepcopy(nzz.isel({ion_cp_i: ii}))
-                    total = xr.zeros_like(nqn.mean(rho_cp_i))
+                    nsum = xr.zeros_like(nqn)
                     for key in impcomp:
                         #impcomp[key] = (impcomp[key] / nsum).mean(rho_cp_i)
-                        total += impcomp[key].mean(rho_cp_i)
+                        nsum += impcomp[key]
                     impcoord = []
                     impfracs = []
-                    for key in impcomp:
-                        impcoord.append(key)
-                        impfracs.append(np.expand_dims(np.atleast_1d((impcomp[key].mean(rho_cp_i) / total).to_numpy()), axis=0))
+                    if impurities == 'fractions':
+                        cp_attrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+                        for key in impcomp:
+                            impval = np.atleast_2d((impcomp[key] / nsum).to_numpy())
+                            impcoord.append(key)
+                            impfracs.append(np.expand_dims(impval, axis=0))
+                    else:
+                        cp_attrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+                        for key in impcomp:
+                            impval = np.atleast_2d((impcomp[key] / data['core_profiles.profiles_1d.electrons.density']).to_numpy())
+                            impcoord.append(key)
+                            impfracs.append(np.expand_dims(impval, axis=0))
                     if len(impcoord) == 0:
                         impcoord = ['Ne']
-                        impfracs = [np.atleast_2d([1.0])]
+                        impfracs = [np.atleast_3d([1.0])]
                     cp_coords['impurity'] = np.array(impcoord).flatten()
-                    cp_data_vars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(impfracs, axis=0))
+                    cp_data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(impfracs, axis=0))
                     cp_data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 omas_tag = 'core_profiles.global_quantities.ip'
                 if omas_tag in data:
