@@ -657,9 +657,26 @@ class torax_io(io):
         zeff: float,
     ) -> None:
         data = self.input
-        shape = (data.get('time', xr.DataArray()).size, data.get('rho', xr.DataArray()).size)
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
-        newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.full(shape, float(zeff)))
+        newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.full((len(time), len(rho)), float(zeff)))
+        self.update_input_data_vars(newvars)
+
+
+    def set_constant_effective_charge_profile(
+        self,
+        zeff: xr.DataArray,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvars: MutableMapping[str, Any] = {}
+        if 'rho' in zeff:
+            zeffval = zeff.interp({'rho': rho}, kwargs={'fill_value': (zeff.isel(rho=0).to_numpy(), zeff.isel(rho=-1).to_numpy()), 'bounds_error': False})
+            newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.expand_dims(np.repeat(np.atleast_2d(zeffval.to_numpy()), len(time), axis=0), axis=0))
+        else:
+            logger.error('Radial coordinate named "rho" required in input effective charge profile!')
         self.update_input_data_vars(newvars)
 
 
@@ -674,15 +691,17 @@ class torax_io(io):
             dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
             self.delete_input_data_vars(dropvars)
             self.delete_input_data_vars(['impurity'])
-        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
-        self.update_input_coords(newcoords)
+        newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
         total = np.sum([impurities[key] for key in impurities])
         composition = [np.expand_dims(np.full((len(time), len(rho)), float(impurities[key] / total)), axis=0) for key in impurities]
-        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+        self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
-        newattrs: MutableMapping[str, Any] = {}
-        newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
         self.update_input_attrs(newattrs)
 
 
@@ -697,15 +716,47 @@ class torax_io(io):
             dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity'] + ['plasma_composition.Z_eff']
             self.delete_input_data_vars(dropvars)
             self.delete_input_data_vars(['impurity'])
-        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
-        self.update_input_coords(newcoords)
+        newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
-        composition = [np.expand_dims(np.full((len(time), len(rho)), float(impurities[key])), axis=0) for key in impurities]
-        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
-        self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+        composition = [np.expand_dims(np.full((len(time), len(rho)), float(impurities[key])), axis=0) for key in impurities]
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
+
+
+    def set_constant_flat_impurity_composition_by_electron_density_fraction_and_effective_charge(
+        self,
+        impurities: MutableMapping[str, float],
+        zeff: xr.DataArray | float | None = None,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        composition = [np.full((1, len(time), len(rho)), float(impurities[key])) if impurities[key] is not None else np.full((1, len(time), len(rho)), np.nan) for key in impurities]
+        # TODO: Implement post-processing to handle the species set with NaNs
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+        if isinstance(zeff, xr.DataArray):
+            self.set_constant_effective_charge_profile(zeff)
+        elif isinstance(zeff, float):
+            self.set_constant_flat_effective_charge(zeff)
 
 
     def set_constant_impurity_composition_profile_by_impurity_density_fraction(
@@ -719,17 +770,22 @@ class torax_io(io):
             dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
             self.delete_input_data_vars(dropvars)
             self.delete_input_data_vars(['impurity'])
-        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
-        self.update_input_coords(newcoords)
+        newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
         composition = []
         for key in impurities:
-            impval = impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False})
-            composition.append(np.expand_dims(np.atleast_2d(impval.to_numpy()), axis=0))
-        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            if 'rho' in impurities[key]:
+                impval = impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False}).to_numpy()
+                composition.append(np.expand_dims(np.repeat(np.atleast_2d(impval), len(time), axis=0), axis=0))
+            else:
+                logger.error('Radial coordinate named "rho" required in all input impurity composition profiles!')
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+        self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
-        newattrs: MutableMapping[str, Any] = {}
-        newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
         self.update_input_attrs(newattrs)
 
 
@@ -744,18 +800,81 @@ class torax_io(io):
             dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity'] + ['plasma_composition.Z_eff']
             self.delete_input_data_vars(dropvars)
             self.delete_input_data_vars(['impurity'])
-        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
-        self.update_input_coords(newcoords)
+        newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
         composition = []
         for key in impurities:
-            impval = impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False})
-            composition.append(np.expand_dims(np.atleast_2d(impval.to_numpy()), axis=0))
-        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            if 'rho' in impurities[key]:
+                impval = impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False}).to_numpy()
+                composition.append(np.expand_dims(np.repeat(np.atleast_2d(impval), len(time), axis=0), axis=0))
+            else:
+                logger.error('Radial coordinate name "rho" required in all input impurity composition profiles')
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+        self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
-        newattrs: MutableMapping[str, Any] = {}
-        newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
         self.update_input_attrs(newattrs)
+
+
+    def set_constant_impurity_composition_profile_by_electron_density_fraction_and_effective_charge(
+        self,
+        impurities: MutableMapping[str, xr.DataArray],
+        zeff: xr.DataArray | float | None = None,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        composition = []
+        for key in impurities:
+            if 'rho' in impurities[key]:
+                impval = (
+                    impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False}).to_numpy()
+                    if impurities[key] is not None else
+                    np.full((len(rho), ), np.nan)
+                )
+                composition.append(np.expand_dims(np.repeat(np.atleast_2d(impval), len(time), axis=0), axis=0))
+            else:
+                logger.error('Radial coordinate name "rho" required in all input impurity composition profiles')
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+        if isinstance(zeff, xr.DataArray):
+            self.set_constant_effective_charge_profile(zeff)
+        elif isinstance(zeff, float):
+            self.set_constant_flat_effective_charge(zeff)
+
+
+    def add_balancing_impurity_species(
+        self,
+        sname: str,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'plasma_composition.impurity.impurity_mode' in data.attrs and data.attrs['plasma_composition.impurity.impurity_mode'] in ['n_e_ratios', 'n_e_ratios_Z_eff']:
+            if sname not in ['H', 'D', 'T'] and sname in self.allowed_radiation_species and sname not in data.get('impurity', xr.DataArray()):
+                coords: MutableMapping[str, Any] = {'impurity': np.array([sname]), 'time': time}
+                data_vars: MutableMapping[str, Any] = {}
+                data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.expand_dims(np.full((len(time), len(rho)), np.nan), axis=0))
+                newdata = xr.Dataset(coords=coords, data_vars=data_vars)
+                self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer')
+                newattrs: MutableMapping[str, Any] = {}
+                newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
+                self.update_input_attrs(newattrs)
 
 
     def add_geometry(
@@ -2056,18 +2175,20 @@ class torax_io(io):
                 time = ds[ttag].to_numpy().flatten()
                 if 'main_ion' in dims:
                     for species in ds['main_ion'].to_numpy().flatten():
-                        da = ds[key].dropna(ttag).sel(main_ion=species)
+                        da = ds[key].sel(main_ion=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0)
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
                 elif 'impurity' in dims:
                     for species in ds['impurity'].to_numpy().flatten():
-                        da = ds[key].dropna(ttag).sel(impurity=species)
+                        da = ds[key].sel(impurity=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
+                        else:
+                            datadict[f'{key}.{species}'] = None
                 elif rtag is not None and rtag in dims:
                     da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
                     if da.size > 0:
