@@ -865,16 +865,24 @@ class torax_io(io):
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newattrs: MutableMapping[str, Any] = {}
         if 'plasma_composition.impurity.impurity_mode' in data.attrs and data.attrs['plasma_composition.impurity.impurity_mode'] in ['n_e_ratios', 'n_e_ratios_Z_eff']:
-            if sname not in ['H', 'D', 'T'] and sname in self.allowed_radiation_species and sname not in data.get('impurity', xr.DataArray()):
+            if sname in data.get('impurity', xr.DataArray()):
+                imp_idx = data['impurity'].to_numpy().flatten().tolist().index(sname)
+                impurities = data['plasma_composition.impurity.species'].to_numpy()
+                impurities[imp_idx, ...] = np.nan
+                newvars: MutableMapping[str, Any] = {}
+                newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], impurities)
+                newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
+                self.update_input_data_vars(newvars)
+            elif sname not in ['H', 'D', 'T'] and sname in self.allowed_radiation_species:
                 coords: MutableMapping[str, Any] = {'impurity': np.array([sname]), 'time': time}
                 data_vars: MutableMapping[str, Any] = {}
                 data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.expand_dims(np.full((len(time), len(rho)), np.nan), axis=0))
                 newdata = xr.Dataset(coords=coords, data_vars=data_vars)
                 self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer')
-                newattrs: MutableMapping[str, Any] = {}
                 newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
-                self.update_input_attrs(newattrs)
+        self.update_input_attrs(newattrs)
 
 
     def add_geometry(
