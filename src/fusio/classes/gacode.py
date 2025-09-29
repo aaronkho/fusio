@@ -1561,7 +1561,7 @@ class gacode_io(io):
                             imp_splits.append(impdict[key].get('value', ['float', [0.0]])[1][-1])
                             impname, impa, impz = define_ion_species(short_name=f'{key}')
                             aimps.append(impa)
-                            zimps.append(np.zeros_like(nimp) + impz)
+                            zimps.append(np.zeros_like(ne) + impz)
                         if len(imp_splits) > 0:
                             nimps = [val * nimps[0] for val in imp_splits]
                     if len(nimps) > 0:
