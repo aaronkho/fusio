@@ -615,7 +615,7 @@ class torax_io(io):
     ) -> None:
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        #rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         if 'main_ion' in data.coords:
             dropvars = [var for var in data.data_vars if 'main_ion' in data[var].dims and var != 'main_ion']
             self.delete_input_data_vars(dropvars)
@@ -624,8 +624,8 @@ class torax_io(io):
         self.update_input_coords(newcoords)
         newvars: MutableMapping[str, Any] = {}
         total = np.sum([ions[key] for key in ions])
-        composition = [np.expand_dims(np.full((len(time), len(rho)), float(ions[key] / total)), axis=0) for key in ions]
-        newvars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], np.concatenate(composition, axis=0))
+        composition = [np.expand_dims(np.zeros_like(time) + float(ions[key] / total), axis=0) for key in ions]
+        newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.concatenate(composition, axis=0))
         self.update_input_data_vars(newvars)
 
 
@@ -636,19 +636,19 @@ class torax_io(io):
     ) -> None:
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        #rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         if sname in ['H', 'D', 'T'] and sname not in data.get('main_ion', xr.DataArray()):
-            coords: MutableMapping[str, Any] = {'main_ion': np.array([sname]), 'time': time, 'rho': rho}
+            coords: MutableMapping[str, Any] = {'main_ion': np.array([sname]), 'time': time}
             data_vars: MutableMapping[str, Any] = {}
             if 'plasma_composition.main_ion' in data:
                 total = np.atleast_1d(data['plasma_composition.main_ion'].sum('main_ion').to_numpy())
-                data_vars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], np.expand_dims(sfrac / (total - sfrac), axis=0))
+                data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(sfrac / (total - sfrac), axis=0))
             newdata = xr.Dataset(coords=coords, data_vars=data_vars)
             self.input = xr.concat([data, newdata], dim='main_ion', data_vars='minimal', coords='different', join='outer')
             if 'plasma_composition.main_ion' in self.input:
                 val = self.input['plasma_composition.main_ion']
                 newvars: MutableMapping[str, Any] = {}
-                newvars['plasma_composition.main_ion'] = (['main_ion', 'time', 'rho'], (val / val.sum('main_ion')).to_numpy())
+                newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], (val / val.sum('main_ion')).to_numpy())
                 self.update_input_data_vars(newvars)
 
 
@@ -657,13 +657,30 @@ class torax_io(io):
         zeff: float,
     ) -> None:
         data = self.input
-        shape = (data.get('time', xr.DataArray()).size, data.get('rho', xr.DataArray()).size)
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
-        newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.full(shape, float(zeff)))
+        newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.full((len(time), len(rho)), float(zeff)))
         self.update_input_data_vars(newvars)
 
 
-    def set_constant_flat_impurity_composition(
+    def set_constant_effective_charge_profile(
+        self,
+        zeff: xr.DataArray,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvars: MutableMapping[str, Any] = {}
+        if 'rho' in zeff:
+            zeffval = zeff.interp({'rho': rho}, kwargs={'fill_value': (zeff.isel(rho=0).to_numpy(), zeff.isel(rho=-1).to_numpy()), 'bounds_error': False})
+            newvars['plasma_composition.Z_eff'] = (['time', 'rho'], np.expand_dims(np.repeat(np.atleast_2d(zeffval.to_numpy()), len(time), axis=0), axis=0))
+        else:
+            logger.error('Radial coordinate named "rho" required in input effective charge profile!')
+        self.update_input_data_vars(newvars)
+
+
+    def set_constant_flat_impurity_composition_by_impurity_density_fraction(
         self,
         impurities: MutableMapping[str, float],
     ) -> None:
@@ -674,15 +691,197 @@ class torax_io(io):
             dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
             self.delete_input_data_vars(dropvars)
             self.delete_input_data_vars(['impurity'])
-        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
-        self.update_input_coords(newcoords)
+        newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
         total = np.sum([impurities[key] for key in impurities])
         composition = [np.expand_dims(np.full((len(time), len(rho)), float(impurities[key] / total)), axis=0) for key in impurities]
-        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+        self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def set_constant_flat_impurity_composition_by_electron_density_fraction(
+        self,
+        impurities: MutableMapping[str, float],
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity'] + ['plasma_composition.Z_eff']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+        composition = [np.expand_dims(np.full((len(time), len(rho)), float(impurities[key])), axis=0) for key in impurities]
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def set_constant_flat_impurity_composition_by_electron_density_fraction_and_effective_charge(
+        self,
+        impurities: MutableMapping[str, float],
+        zeff: xr.DataArray | float | None = None,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        composition = [np.full((1, len(time), len(rho)), float(impurities[key])) if impurities[key] is not None else np.full((1, len(time), len(rho)), np.nan) for key in impurities]
+        # TODO: Implement post-processing to handle the species set with NaNs
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+        if isinstance(zeff, xr.DataArray):
+            self.set_constant_effective_charge_profile(zeff)
+        elif isinstance(zeff, float):
+            self.set_constant_flat_effective_charge(zeff)
+
+
+    def set_constant_impurity_composition_profile_by_impurity_density_fraction(
+        self,
+        impurities: MutableMapping[str, xr.DataArray],
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        composition = []
+        for key in impurities:
+            if 'rho' in impurities[key]:
+                impval = impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False}).to_numpy()
+                composition.append(np.expand_dims(np.repeat(np.atleast_2d(impval), len(time), axis=0), axis=0))
+            else:
+                logger.error('Radial coordinate named "rho" required in all input impurity composition profiles!')
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def set_constant_impurity_composition_profile_by_electron_density_fraction(
+        self,
+        impurities: MutableMapping[str, xr.DataArray],
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity'] + ['plasma_composition.Z_eff']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        composition = []
+        for key in impurities:
+            if 'rho' in impurities[key]:
+                impval = impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False}).to_numpy()
+                composition.append(np.expand_dims(np.repeat(np.atleast_2d(impval), len(time), axis=0), axis=0))
+            else:
+                logger.error('Radial coordinate name "rho" required in all input impurity composition profiles')
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def set_constant_impurity_composition_profile_by_electron_density_fraction_and_effective_charge(
+        self,
+        impurities: MutableMapping[str, xr.DataArray],
+        zeff: xr.DataArray | float | None = None,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        composition = []
+        for key in impurities:
+            if 'rho' in impurities[key]:
+                impval = (
+                    impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False}).to_numpy()
+                    if impurities[key] is not None else
+                    np.full((len(rho), ), np.nan)
+                )
+                composition.append(np.expand_dims(np.repeat(np.atleast_2d(impval), len(time), axis=0), axis=0))
+            else:
+                logger.error('Radial coordinate name "rho" required in all input impurity composition profiles')
+        if len(composition) > 0:
+            newcoords['impurity'] = [key for key in impurities]
+            newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+            newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+        if isinstance(zeff, xr.DataArray):
+            self.set_constant_effective_charge_profile(zeff)
+        elif isinstance(zeff, float):
+            self.set_constant_flat_effective_charge(zeff)
+
+
+    def add_balancing_impurity_species(
+        self,
+        sname: str,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newattrs: MutableMapping[str, Any] = {}
+        if 'plasma_composition.impurity.impurity_mode' in data.attrs and data.attrs['plasma_composition.impurity.impurity_mode'] in ['n_e_ratios', 'n_e_ratios_Z_eff']:
+            if sname in data.get('impurity', xr.DataArray()):
+                imp_idx = data['impurity'].to_numpy().flatten().tolist().index(sname)
+                impurities = data['plasma_composition.impurity.species'].to_numpy()
+                impurities[imp_idx, ...] = np.nan
+                newvars: MutableMapping[str, Any] = {}
+                newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], impurities)
+                newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
+                self.update_input_data_vars(newvars)
+            elif sname not in ['H', 'D', 'T'] and sname in self.allowed_radiation_species:
+                coords: MutableMapping[str, Any] = {'impurity': np.array([sname]), 'time': time}
+                data_vars: MutableMapping[str, Any] = {}
+                data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.expand_dims(np.full((len(time), len(rho)), np.nan), axis=0))
+                newdata = xr.Dataset(coords=coords, data_vars=data_vars)
+                self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer')
+                newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
         self.update_input_attrs(newattrs)
 
 
@@ -695,6 +894,7 @@ class torax_io(io):
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
+        newattrs['profile_conditions.initial_psi_mode'] = 'geometry'
         #newattrs['geometry.hires_factor'] = 4
         newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
         newattrs['geometry.geometry_type'] = f'{geotype}'
@@ -804,8 +1004,8 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         wrho_array = self.input.get('pedestal.rho_norm_ped_top', None)
         if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
-            models = self.input.attrs.get('map_combined_models', [])
-            prefix = f'transport.transport_models.{len(models):d}'
+            models = self.input.attrs.get('map_combined_pedestal_models', [])
+            prefix = f'transport.pedestal_transport_models.{len(models):d}'
             #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
             wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
@@ -819,9 +1019,9 @@ class torax_io(io):
             newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
             newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
             newattrs[f'{prefix}.model_name'] = 'constant'
-            newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
+            #newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
             models.append('constant')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_pedestal_models'] = models
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -893,7 +1093,8 @@ class torax_io(io):
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
         newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
-        newattrs['map_combined_models'] = data.attrs.get('map_combined_models', [])
+        newattrs['map_combined_core_models'] = data.attrs.get('map_combined_core_models', [])
+        newattrs['map_combined_pedestal_models'] = data.attrs.get('map_combined_pedestal_models', [])
         self.update_input_attrs(newattrs)
 
 
@@ -914,7 +1115,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
                 #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
@@ -922,7 +1123,7 @@ class torax_io(io):
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('constant')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_core_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -975,7 +1176,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
                 #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
@@ -983,7 +1184,7 @@ class torax_io(io):
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('CGM')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_core_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1020,14 +1221,15 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
-                newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(data['pedestal.rho_norm_ped_top'].to_numpy())
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('qualikiz')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_core_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1062,7 +1264,7 @@ class torax_io(io):
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             for n in range(len(models)):
                 if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qualikiz':
                     newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
@@ -1082,7 +1284,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         prefix = 'transport'
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             prefix = f'transport.transport_models.{len(models):d}'
             #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
             if 'pedestal.rho_norm_ped_top' in data:
@@ -1091,7 +1293,7 @@ class torax_io(io):
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('qlknn')
-            newattrs['map_combined_models'] = models
+            newattrs['map_combined_core_models'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1132,7 +1334,7 @@ class torax_io(io):
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
         if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_models', [])
+            models = data.attrs.get('map_combined_core_models', [])
             for n in range(len(models)):
                 if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qlknn':
                     newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
@@ -1981,18 +2183,20 @@ class torax_io(io):
                 time = ds[ttag].to_numpy().flatten()
                 if 'main_ion' in dims:
                     for species in ds['main_ion'].to_numpy().flatten():
-                        da = ds[key].dropna(ttag).sel(main_ion=species)
+                        da = ds[key].sel(main_ion=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0)
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
                 elif 'impurity' in dims:
                     for species in ds['impurity'].to_numpy().flatten():
-                        da = ds[key].dropna(ttag).sel(impurity=species)
+                        da = ds[key].sel(impurity=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da
+                        else:
+                            datadict[f'{key}.{species}'] = None
                 elif rtag is not None and rtag in dims:
                     da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
                     if da.size > 0:
@@ -2001,14 +2205,21 @@ class torax_io(io):
                     da = ds[key].dropna(ttag)
                     if da.size > 0:
                         datadict[f'{key}'] = da
-        models = datadict.pop('map_combined_models', {})
+        core_models = datadict.pop('map_combined_core_models', {})
+        pedestal_models = datadict.pop('map_combined_pedestal_models', {})
         if datadict.get('transport.model_name', '') == 'combined':
             datadict['transport.transport_models'] = []
-            for nn in range(len(models)):
+            for nn in range(len(core_models)):
                 modeldict = {key.replace(f'transport.transport_models.{nn:d}.', ''): val for key, val in datadict.items() if key.startswith(f'transport.transport_models.{nn:d}.')}
                 for key in modeldict:
                     datadict.pop(f'transport.transport_models.{nn:d}.{key}', None)
                 datadict['transport.transport_models'].append(self._unflatten(modeldict))
+            datadict['transport.pedestal_transport_models'] = []
+            for nn in range(len(pedestal_models)):
+                modeldict = {key.replace(f'transport.pedestal_transport_models.{nn:d}.', ''): val for key, val in datadict.items() if key.startswith(f'transport.pedestal_transport_models.{nn:d}.')}
+                for key in modeldict:
+                    datadict.pop(f'transport.pedestal_transport_models.{nn:d}.{key}', None)
+                datadict['transport.pedestal_transport_models'].append(self._unflatten(modeldict))
         srctags = [
             'sources.ei_exchange',
             'sources.ohmic',
@@ -2078,6 +2289,7 @@ class torax_io(io):
         obj: io,
         side: str = 'output',
         item: int = 0,
+        impurities: str = 'n_e_ratios',
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
@@ -2147,23 +2359,27 @@ class torax_io(io):
                                     impcomp[sname] = copy.deepcopy(nz)
                                 nsum += nz
                             zeff += (data['ni'] * data['z'] ** 2.0 / data['ne']).isel(name=ii)
-                        total = 0.0
                         impcoord = []
                         impfracs = []
-                        for key in impcomp:
-                            impcomp[key] = (impcomp[key] / nsum).mean('rho')
-                            total += float(impcomp[key].to_numpy())
-                        for key in impcomp:
-                            impval = (impcomp[key] / total).to_numpy().flatten()
-                            impcoord.append(key)
-                            impfracs.append(np.expand_dims(impval, axis=0))
+                        if impurities == 'fractions':
+                            attrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+                            for key in impcomp:
+                                impval = np.atleast_2d((impcomp[key] / nsum).to_numpy())
+                                impcoord.append(key)
+                                impfracs.append(np.expand_dims(impval, axis=0))
+                        else:
+                            attrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+                            for key in impcomp:
+                                impval = np.atleast_2d((impcomp[key] / data['ne']).to_numpy())
+                                impcoord.append(key)
+                                impfracs.append(np.expand_dims(impval, axis=0))
                         if len(impcoord) == 0:
                             impcoord = ['Ne']
-                            impfracs = [np.atleast_2d([1.0])]
+                            impfracs = [np.atleast_3d([1.0])]
                         if 'z_eff' in data:
                             zeff = data['z_eff']
                         coords['impurity'] = np.array(impcoord).flatten()
-                        data_vars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(impfracs, axis=0))
+                        data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(impfracs, axis=0))
                     data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], np.expand_dims(zeff.to_numpy().flatten(), axis=0))
                 if 'current' in data:
                     data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * np.expand_dims(data['current'].mean(), axis=0))
@@ -2297,6 +2513,7 @@ class torax_io(io):
         obj,
         side: str = 'output',
         window: float | None = None,
+        impurities: str = 'n_e_ratios',
         **kwargs: Any,
     ) -> Self:
 
@@ -2408,20 +2625,29 @@ class torax_io(io):
                         if ii in implist:
                             # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
                             impcomp[sname] = copy.deepcopy(nzz.isel({ion_cp_i: ii}))
-                    total = xr.zeros_like(nqn.mean(rho_cp_i))
+                    nsum = xr.zeros_like(nqn)
                     for key in impcomp:
                         #impcomp[key] = (impcomp[key] / nsum).mean(rho_cp_i)
-                        total += impcomp[key].mean(rho_cp_i)
+                        nsum += impcomp[key]
                     impcoord = []
                     impfracs = []
-                    for key in impcomp:
-                        impcoord.append(key)
-                        impfracs.append(np.expand_dims(np.atleast_1d((impcomp[key].mean(rho_cp_i) / total).to_numpy()), axis=0))
+                    if impurities == 'fractions':
+                        cp_attrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+                        for key in impcomp:
+                            impval = np.atleast_2d((impcomp[key] / nsum).to_numpy())
+                            impcoord.append(key)
+                            impfracs.append(np.expand_dims(impval, axis=0))
+                    else:
+                        cp_attrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+                        for key in impcomp:
+                            impval = np.atleast_2d((impcomp[key] / data['core_profiles.profiles_1d.electrons.density']).to_numpy())
+                            impcoord.append(key)
+                            impfracs.append(np.expand_dims(impval, axis=0))
                     if len(impcoord) == 0:
                         impcoord = ['Ne']
-                        impfracs = [np.atleast_2d([1.0])]
+                        impfracs = [np.atleast_3d([1.0])]
                     cp_coords['impurity'] = np.array(impcoord).flatten()
-                    cp_data_vars['plasma_composition.impurity'] = (['impurity', 'time'], np.concatenate(impfracs, axis=0))
+                    cp_data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(impfracs, axis=0))
                     cp_data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 omas_tag = 'core_profiles.global_quantities.ip'
                 if omas_tag in data:

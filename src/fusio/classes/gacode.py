@@ -1524,54 +1524,65 @@ class gacode_io(io):
                 data['shape_sin5'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
                 data['shape_sin6'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
                 if 'n_i' in data and 'n_e' in data:
-                    split_dt = True
+                    names = []
+                    masses = []
+                    charges = []
                     ne = np.expand_dims(1.0e-19 * data['n_e'].to_numpy().flatten(), axis=-1)
                     ni = np.expand_dims(1.0e-19 * data['n_i'].to_numpy().flatten(), axis=-1)
-                    zeff = ni / ne
+                    if 'config' in data.attrs:
+                        iondict = data.attrs['config'].get('plasma_composition', {}).get('main_ion', {})
+                        main_splits = []
+                        for key in iondict:
+                            names.append(f'{key}')
+                            main_splits.append(iondict[key].get('value', ['float', [0.0]])[1][-1])
+                            iname, ia, iz = define_ion_species(short_name=f'{key}')
+                            masses.append(ia)
+                            charges.append(iz)
+                        if len(main_splits) > 0:
+                            ni = np.concatenate([val * ni for val in main_splits], axis=-1)
+                    zeff = np.expand_dims(np.sum(ni, axis=-1), axis=-1) / ne
+                    simps = []
+                    aimps = []
                     zimps = []
-                    if 'n_impurity' in data:
-                        nimp = np.expand_dims(1.0e-19 * data['n_impurity'].to_numpy().flatten(), axis=-1)
-                        if 'Z_impurity' in data and 'n_e' in data:
-                            zimp = np.expand_dims(data['Z_impurity'].to_numpy().flatten(), axis=-1)
-                            zimps = [zimp[0, 0]]
-                        if split_dt:
-                            ni = np.concatenate([0.5 * ni, 0.5 * ni], axis=-1)
-                        if 'config' in data.attrs:
-                            impdict = data.attrs['config'].get('plasma_composition', {}).get('impurity', {})
-                            multi_nimp = []
-                            multi_zimp = []
-                            for key in impdict:
-                                fraction = impdict[key].get('value', ['float', [0.0]])[1][-1]
-                                impname, impa, impz = define_ion_species(short_name=key)
-                                multi_zimp.append(impz)
-                                multi_nimp.append(fraction * nimp)
-                            if len(multi_nimp) > 0:
-                                nimp = np.concatenate(multi_nimp, axis=-1)
-                                zimps = multi_zimp
+                    nimps = []
+                    if 'impurity_symbol' in data and 'Z_impurity_species' in data and 'n_impurity_species' in data:
+                        for key in data['impurity_symbol'].to_numpy().flatten().tolist():
+                            impname, impa, impz = define_ion_species(short_name=f'{key}')
+                            simps.append(f'{key}')
+                            aimps.append(impa)
+                            zimps.append(np.expand_dims(data['Z_impurity_species'].sel(impurity_symbol=f'{key}').interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy().flatten(), axis=-1))
+                            nimps.append(np.expand_dims(data['n_impurity_species'].sel(impurity_symbol=f'{key}').interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy().flatten(), axis=-1))
+                    elif 'config' in data.attrs and 'n_impurity' in data:
+                        nimps.append(np.expand_dims(1.0e-19 * data['n_impurity'].to_numpy().flatten(), axis=-1))
+                        impdict = data.attrs['config'].get('plasma_composition', {}).get('impurity', {})
+                        imp_splits = []
+                        for key in impdict:
+                            simps.append(f'{key}')
+                            imp_splits.append(impdict[key].get('value', ['float', [0.0]])[1][-1])
+                            impname, impa, impz = define_ion_species(short_name=f'{key}')
+                            aimps.append(impa)
+                            zimps.append(np.zeros_like(ne) + impz)
+                        if len(imp_splits) > 0:
+                            nimps = [val * nimps[0] for val in imp_splits]
+                    if len(nimps) > 0:
+                        nimp = np.concatenate(nimps, axis=-1)
+                        nimp[0, :] = nimp[1, :]
                         ni = np.concatenate([ni, nimp], axis=-1)
-                    names = ['D']
-                    types = ['[therm]']
-                    masses = [2.0]
-                    zs = [1.0]
-                    if split_dt:
-                        names.append('T')
-                        types.append('[therm]')
-                        masses.append(3.0)
-                        zs.append(1.0)
+                    types = ['[therm]' for i in names]
                     ii = len(names)
-                    for zz in range(len(zimps)):
-                        impname, impa, impz = define_ion_species(z=zimps[zz])
-                        names.append(impname)
+                    for zz in range(len(simps)):
+                        zimps[zz][0] = zimps[zz][1]
+                        names.append(simps[zz])
                         types.append('[therm]')
-                        masses.append(impa)
-                        zs.append(impz)
-                        zeff += np.expand_dims(ni[:, zz+ii], axis=-1) * (impz ** 2.0) / ne
+                        masses.append(aimps[zz])
+                        charges.append(float(np.mean(zimps[zz])))
+                        zeff += np.expand_dims(ni[:, zz+ii], axis=-1) * (zimps[zz] ** 2.0) / ne
                     coords['name'] = np.array(names)
                     data_vars['ni'] = (['n', 'rho', 'name'], np.expand_dims(ni, axis=0))
                     data_vars['nion'] = (['n'], np.array([len(names)], dtype=int))
                     data_vars['type'] = (['n', 'name'], np.expand_dims(types, axis=0))
                     data_vars['mass'] = (['n', 'name'], np.expand_dims(masses, axis=0))
-                    data_vars['z'] = (['n', 'name'], np.expand_dims(zs, axis=0))
+                    data_vars['z'] = (['n', 'name'], np.expand_dims(charges, axis=0))
                     data_vars['z_eff'] = (['n', 'rho'], np.expand_dims(zeff.flatten(), axis=0))
                 if 'T_i' in data:
                     ti = np.expand_dims(data['T_i'].to_numpy().flatten(), axis=-1)
