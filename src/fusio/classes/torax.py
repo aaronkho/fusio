@@ -663,7 +663,7 @@ class torax_io(io):
         self.update_input_data_vars(newvars)
 
 
-    def set_constant_flat_impurity_composition(
+    def set_constant_flat_impurity_composition_by_impurity_density_fraction(
         self,
         impurities: MutableMapping[str, float],
     ) -> None:
@@ -683,6 +683,78 @@ class torax_io(io):
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
         newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+        self.update_input_attrs(newattrs)
+
+
+    def set_constant_flat_impurity_composition_by_electron_density_fraction(
+        self,
+        impurities: MutableMapping[str, float],
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity'] + ['plasma_composition.Z_eff']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
+        self.update_input_coords(newcoords)
+        newvars: MutableMapping[str, Any] = {}
+        composition = [np.expand_dims(np.full((len(time), len(rho)), float(impurities[key])), axis=0) for key in impurities]
+        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+        self.update_input_data_vars(newvars)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
+        self.update_input_attrs(newattrs)
+
+
+    def set_constant_impurity_composition_profile_by_impurity_density_fraction(
+        self,
+        impurities: MutableMapping[str, xr.DataArray],
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
+        self.update_input_coords(newcoords)
+        newvars: MutableMapping[str, Any] = {}
+        composition = []
+        for key in impurities:
+            impval = impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False})
+            composition.append(np.expand_dims(np.atleast_2d(impval.to_numpy()), axis=0))
+        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+        self.update_input_data_vars(newvars)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['plasma_composition.impurity.impurity_mode'] = 'fractions'
+        self.update_input_attrs(newattrs)
+
+
+    def set_constant_impurity_composition_profile_by_electron_density_fraction(
+        self,
+        impurities: MutableMapping[str, xr.DataArray],
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if 'impurity' in data.coords:
+            dropvars = [var for var in data.data_vars if 'impurity' in data[var].dims and var != 'impurity'] + ['plasma_composition.Z_eff']
+            self.delete_input_data_vars(dropvars)
+            self.delete_input_data_vars(['impurity'])
+        newcoords: MutableMapping[str, Any] = {'impurity': [key for key in impurities]}
+        self.update_input_coords(newcoords)
+        newvars: MutableMapping[str, Any] = {}
+        composition = []
+        for key in impurities:
+            impval = impurities[key].interp({'rho': rho}, kwargs={'fill_value': (impurities[key].isel(rho=0).to_numpy(), impurities[key].isel(rho=-1).to_numpy()), 'bounds_error': False})
+            composition.append(np.expand_dims(np.atleast_2d(impval.to_numpy()), axis=0))
+        newvars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(composition, axis=0))
+        self.update_input_data_vars(newvars)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios'
         self.update_input_attrs(newattrs)
 
 
