@@ -539,8 +539,8 @@ class gacode_io(io):
             denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1] / b[:-1], axis=0)
             denom[..., 0] = 2.0 * denom[..., 1] - denom[..., 2]
             newvars['gradr_miller'] = (['n', 'rho'], np.sum(grad_r[:-1] * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['bp2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['bt2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['bp2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['bt2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
             newvars['surfxs'] = (['n', 'rho'], np.trapezoid(r, z, axis=0))
@@ -918,7 +918,9 @@ class gacode_io(io):
             beta_i_th_t = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
             newvars['beta_i_th'] = (['n', 'rho'], 1.0 / (beta_i_th_p ** (-1) + beta_i_th_t ** (-1)).to_numpy())
         if 'debye_e' in data and 'debye_i' in data:
-            newvars['debye'] = (['n', 'rho'], ((data['debye_e'] ** (-2) + (data['debye_i'] ** (-2)).sum('name')) ** (-0.5)).to_numpy())
+            debye = (data['debye_e'] ** (-2) + (data['debye_i'] ** (-2)).sum('name')) ** (-0.5)
+            newvars['debye'] = (['n', 'rho'], debye.to_numpy())
+            newvars['debye_norm'] = (['n', 'rho'], (debye / data['rho_s_unit']).to_numpy())
             f_nu = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
             inv_b90_ee = (4.0 * np.pi * eps_si / e_si) * 1.0e3 * data['te'] / abs(data['ze'] * data['ze'])
             f_ee = 1.0e19 * data['ne'] * (e_si * 1.0e3 * data['te'] / (u_si * data['masse'])) ** 0.5 / (inv_b90_ee ** 2) * np.log(inv_b90_ee * data['debye_e'])
@@ -970,7 +972,7 @@ class gacode_io(io):
             pe = cumulative_simpson((data['qe'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
             pi = cumulative_simpson((data['qi'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
             se = cumulative_simpson((data['ge'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            pce = 1.5 * 1.0e-3 * 16.0218 * data['te'].to_numpy() * se  # MW
+            pce = 1.5 * 1.0e-3 * 1.60218e-19 * data['te'].to_numpy() * se  # MW
             mt = cumulative_simpson((data['qmom'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
             newvars['pe'] = (['n', 'rho'], pe)
             newvars['pi'] = (['n', 'rho'], pi)
