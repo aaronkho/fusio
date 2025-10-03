@@ -559,8 +559,8 @@ class gacode_io(io):
     ) -> None:
         data = self.input
         newvars: MutableMapping[str, Any] = {}
-        if 'name' in data and 'mass' in data and 'ni' in data and 'volp_miller' in data:
-            main_species_mask = (data['name'].isin(['H', 'D', 'T']).to_numpy() & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
+        if 'z' in data and 'mass' in data and 'ni' in data and 'volp_miller' in data:
+            main_species_mask = (np.isclose(data['z'].to_numpy(), 1.0) & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
             n_i_vol = cumulative_simpson(
                 np.transpose((data['ni'].isel(name=main_species) * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
@@ -883,7 +883,7 @@ class gacode_io(io):
         if 'bp2' in data and 'bt2' in data:
             b = (data['bp2'] + data['bt2']) ** 0.5
             newvars['b'] = (['n', 'rho'], b.to_numpy())
-            main_species_mask = (data['name'].isin(['H', 'D', 'T']).to_numpy() & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
+            main_species_mask = (np.isclose(data['z'].to_numpy(), 1.0) & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
             vperp_tor = xr.zeros_like(b)
             vperp_pol = xr.zeros_like(b)
