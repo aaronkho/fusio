@@ -1,4 +1,5 @@
 import copy
+import warnings
 import logging
 import numpy as np
 import pandas as pd
@@ -577,6 +578,7 @@ def calc_ne_from_nustar_nrl(nustar, zeff, q, r, ro, te):
     data = {'te': te * 1.0e-3, 'knu': nu}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_ne20 = lambda row: root_scalar(
         lambda ne: calc_coulomb_logarithm_nrl_from_te_and_ne(row['te'] * 1.0e3, ne * 1.0e20) * ne - row['knu'],
         x0=0.01,
@@ -593,6 +595,7 @@ def calc_ne_from_nustar_nrl(nustar, zeff, q, r, ro, te):
             maxiter=100,
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
+    warnings.resetwarnings()
     ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
     logger.debug(f'<{calc_ne_from_nustar_nrl.__name__}>: data')
     logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
@@ -606,6 +609,7 @@ def calc_te_from_nustar_nrl(nustar, zeff, q, r, ro, ne, verbose=0):
     data = {'ne': ne * 1.0e-20, 'knu': nu}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_te3 = lambda row: root_scalar(
         lambda te: calc_coulomb_logarithm_nrl_from_te_and_ne(te * 1.0e3, row['ne'] * 1.0e20) / (te ** 2) - row['knu'],
         x0=1.0,
@@ -622,6 +626,7 @@ def calc_te_from_nustar_nrl(nustar, zeff, q, r, ro, ne, verbose=0):
             maxiter=100,
         )
         sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
+    warnings.resetwarnings()
     te = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
     logger.debug(f'<{calc_te_from_nustar_nrl.__name__}>: data')
     logger.debug(pd.DataFrame(data={'nustar': nustar, 'ne': ne, 'te': te}))
@@ -705,6 +710,7 @@ def calc_ne_from_nustar_nrl_alpha_and_ap(nustar, alpha, zeff, q, r, ro, bo, ap):
     data = {'logterm': -np.log(kalp), 'constant': nustar / (knu * kalp * kalp)}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_ne20 = lambda row: root_scalar(
         lambda ne: (15.2 + row['logterm'] - 1.5 * np.log(ne)) * (ne ** 3) - row['constant'],
         x0=0.01,
@@ -721,6 +727,7 @@ def calc_ne_from_nustar_nrl_alpha_and_ap(nustar, alpha, zeff, q, r, ro, bo, ap):
             maxiter=100,
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
+    warnings.resetwarnings()
     ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
     logger.debug(f'<{calc_ne_from_nustar_nrl_alpha_and_ap.__name__}>: data')
     logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'ne': ne}))
@@ -733,6 +740,7 @@ def calc_te_from_nustar_nrl_alpha_and_ap(nustar, alpha, zeff, q, r, ro, bo, ap, 
     data = {'logterm': -np.log(kalp), 'constant': nustar * kalp / knu}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_te3 = lambda row: root_scalar(
         lambda te: (15.2 - 0.5 * row['logterm'] + 1.5 * np.log(te)) / (te ** 3) - row['constant'],
         x0=1.0,
@@ -749,6 +757,7 @@ def calc_te_from_nustar_nrl_alpha_and_ap(nustar, alpha, zeff, q, r, ro, bo, ap, 
             maxiter=100,
         )
         sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
+    warnings.resetwarnings()
     te = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
     logger.debug(f'<{calc_te_from_nustar_nrl_alpha_and_ap.__name__}>: data')
     logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'te': te}))
@@ -876,6 +885,7 @@ def calc_ne_from_nueenorm(nueenorm, te, mref, lref, ze=1.0):
     data = {'logterm': np.log(nl), 'constant': nueenorm * (inv_b90_ee ** 2) / nc}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_ne20 = lambda row: root_scalar(
         lambda ne: (row['logterm'] - 0.5 * np.log(ne * 1.0e20)) * (ne * 1.0e20) - row['constant'],
         x0=0.01,
@@ -892,7 +902,10 @@ def calc_ne_from_nueenorm(nueenorm, te, mref, lref, ze=1.0):
             maxiter=100,
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
+    warnings.resetwarnings()
     ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    logger.debug(f'<{calc_ne_from_nueenorm.__name__}>: data')
+    logger.debug(pd.DataFrame(data={'nueenorm': nueenorm, 'te': te, 'ne': ne}))
     return ne
 
 def calc_bunit_from_ldenorm(ldenorm, ne, mref, ze=1.0):
@@ -909,6 +922,7 @@ def calc_ne_from_nustar(nustar, zeff, q, r, ro, te):
     data = {'te': te * 1.0e-3, 'knu': nu}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_ne20 = lambda row: root_scalar(
         lambda ne: calc_coulomb_logarithm_from_te_and_ne(row['te'] * 1.0e3, ne * 1.0e20) * ne - row['knu'],
         x0=0.01,
@@ -925,6 +939,7 @@ def calc_ne_from_nustar(nustar, zeff, q, r, ro, te):
             maxiter=100,
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
+    warnings.resetwarnings()
     ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
     logger.debug(f'<{calc_ne_from_nustar.__name__}>: data')
     logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
@@ -938,6 +953,7 @@ def calc_te_from_nustar(nustar, zeff, q, r, ro, ne, verbose=0):
     data = {'ne': ne * 1.0e-20, 'knu': nu}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_te3 = lambda row: root_scalar(
         lambda te: calc_coulomb_logarithm_from_te_and_ne(te * 1.0e3, row['ne'] * 1.0e20) / (te ** 2) - row['knu'],
         x0=1.0,
@@ -954,6 +970,7 @@ def calc_te_from_nustar(nustar, zeff, q, r, ro, ne, verbose=0):
             maxiter=100,
         )
         sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
+    warnings.resetwarnings()
     te = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
     logger.debug(f'<{calc_te_from_nustar.__name__}>: data')
     logger.debug(pd.DataFrame(data={'nustar': nustar, 'ne': ne, 'te': te}))
