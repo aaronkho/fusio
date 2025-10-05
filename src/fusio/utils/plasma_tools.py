@@ -224,13 +224,19 @@ def calc_ninorm_from_quasineutrality(zi, zi_target, ninorm, ze=1.0):
     return ninorm_target
 
 def calc_2ion_ninorm_from_ninorm_and_quasineutrality(ni, zia, zib, ne=None):
-    ninorma = normalize(ni, ne) if ne is not None else copy.deepcopy(ni)
+    ninorma = calc_ninorm_from_ni(ni, ne) if ne is not None else copy.deepcopy(ni)
     ninormb = calc_ninorm_from_quasineutrality(zia, zib, ninorma)
     return ninorma, ninormb
 
 def calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ni, zeff, zia, zib, zic, ne=None):
-    ninorma = normalize(ni, ne) if ne is not None else copy.deepcopy(ni)
+    ninorma = calc_ninorm_from_ni(ni, ne) if ne is not None else copy.deepcopy(ni)
     ninormb = calc_ninorm_from_zeff_and_quasineutrality(zeff, zia, zic, zib, ninorma)
+    ninormc = calc_ninorm_from_quasineutrality(1.0, zic, ninorma * zia + ninormb * zib)
+    return ninorma, ninormb, ninormc
+
+def calc_3ion_ninorm_from_ninorm_and_quasineutrality(nia, nib, zia, zib, zic, ne=None):
+    ninorma = calc_ninorm_from_ni(nia, ne) if ne is not None else copy.deepcopy(nia)
+    ninormb = calc_ninorm_from_ni(nib, ne) if ne is not None else copy.deepcopy(nib)
     ninormc = calc_ninorm_from_quasineutrality(1.0, zic, ninorma * zia + ninormb * zib)
     return ninorma, ninormb, ninormc
 
@@ -254,13 +260,19 @@ def calc_ni_from_quasineutrality(zi, zi_target, ni, ne):
     return ni_target
 
 def calc_2ion_ni_from_ni_and_quasineutrality(ni, zia, zib, ne, norm_inputs=False):
-    nia = unnormalize(ni, ne) if norm_inputs else copy.deepcopy(ni)
+    nia = calc_ni_from_ninorm(ni, ne, nscale=1.0) if norm_inputs else copy.deepcopy(ni)
     nib = calc_ni_from_quasineutrality(zia, zib, nia, ne)
     return nia, nib
 
 def calc_3ion_ni_from_ni_zeff_and_quasineutrality(ni, zeff, zia, zib, zic, ne, norm_inputs=False):
-    nia = unnormalize(ni, ne) if norm_inputs else copy.deepcopy(ni)
+    nia = calc_ni_from_ninorm(ni, ne, nscale=1.0) if norm_inputs else copy.deepcopy(ni)
     nib = calc_ni_from_zeff_and_quasineutrality(zeff, zia, zic, zib, nia, ne)
+    nic = calc_ni_from_quasineutrality(1.0, zic, nia * zia + nib * zib, ne)
+    return nia, nib, nic
+
+def calc_3ion_ni_from_ni_and_quasineutrality(nia, nib, zia, zib, zic, ne, norm_inputs=False):
+    nia = calc_ni_from_ninorm(nia, ne, nscale=1.0) if norm_inputs else copy.deepcopy(nia)
+    nib = calc_ni_from_ninorm(nib, ne, nscale=1.0) if norm_inputs else copy.deepcopy(nib)
     nic = calc_ni_from_quasineutrality(1.0, zic, nia * zia + nib * zib, ne)
     return nia, nib, nic
 
@@ -268,7 +280,7 @@ def calc_ani_from_azeff_and_gradient_quasineutrality(azeff, zeff, zia, zib, zi_t
     zze = (zib - zeff) * ze
     zza = (zib - zia) * zia
     zz_target = (zib - zi_target) * zi_target
-    ani_target = (azeff * zeff * ze + ane * zze - ania * zza * ninorma) / (ninorm_target * zz_target)
+    ani_target = (azeff * zeff * ze + ane * zze - ania * ninorma * zza) / (ninorm_target * zz_target)
     return ani_target
 
 # def calc_ani_from_gradient_quasineutrality(zia, zib, zi_target, ninorma, ninormb, ninorm_target, ane, ania, anib, ze=1.0):
@@ -279,20 +291,34 @@ def calc_ani_from_gradient_quasineutrality(zi, zi_target, ninorm, ninorm_target,
     ani_target = (ane * ze - ninorm * ani * zi) / (ninorm_target * zi_target)
     return ani_target
 
-def calc_2ion_ani_from_ani_and_gradient_quasineutrality(ani, zia, zib, ane, ni, lref=None, ne=None):
-    ania = calc_ak_from_grad_k(ani, ni, lref) if lref is not None else copy.deepcopy(ani)
-    ninorma, ninormb = calc_2ion_ni_from_ni_and_quasineutrality(ni, zia, zib, ne)
+def calc_2ion_ani_from_ani_and_gradient_quasineutrality(ani, zia, zib, ane, ninorm, ne=1.0, lref=None):
+    nenorm = copy.deepcopy(ne) if lref is not None else 1.0
+    ane = calc_ak_from_grad_k(ane, nenorm, lref) if lref is not None else copy.deepcopy(ane)
+    ania = calc_ak_from_grad_k(ani, ninorm, lref) if lref is not None else copy.deepcopy(ani)
+    ninorma, ninormb = calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorm, zia, zib, ne=nenorm)
     anib = calc_ani_from_gradient_quasineutrality(zia, zib, ninorma, ninormb, ane, ania)
     return ania, anib
 
-def calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(ani, azeff, zeff, zia, zib, zic, ane, ni, lref=None, ne=None):
-    ania = calc_ak_from_grad_k(ani, ni, lref) if lref is not None else copy.deepcopy(ani)
-    ninorma, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ni, zeff, zia, zib, zic, ne)
-    anib = calc_ani_from_azeff_and_gradient_quasineutrality(azeff, zeff, zia, zic, zib, ninorma, ninormb, ane, ania)
+def calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(ani, azeff, zeff, zia, zib, zic, ane, ninorm, ne=1.0, lref=None):
+    nenorm = copy.deepcopy(ne) if lref is not None else 1.0
+    ane = calc_ak_from_grad_k(ane, nenorm, lref) if lref is not None else copy.deepcopy(ane)
+    ania = calc_ak_from_grad_k(ani, ninorm, lref) if lref is not None else copy.deepcopy(ani)
+    azeff_temp = calc_ak_from_grad_k(azeff, zeff, lref) if lref is not None else copy.deepcopy(azeff)
+    ninorma, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorm, zeff, zia, zib, zic, ne=nenorm)
+    anib = calc_ani_from_azeff_and_gradient_quasineutrality(azeff_temp, zeff, zia, zic, zib, ninorma, ninormb, ane, ania)
     anic = calc_ani_from_gradient_quasineutrality(1.0, zic, 1.0, ninormc, ane, ninorma * ania * zia + ninormb * anib * zib)
     return ania, anib, anic
 
-def calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(grad_zeff, zeff, zia, zib, zi_target, nia, ni_target, grad_ne, grad_nia, ne, lref):
+def calc_3ion_ani_from_ani_and_gradient_quasineutrality(ania, anib, zia, zib, zic, ane, ninorma, ninormb, ne=1.0, lref=None):
+    nenorm = copy.deepcopy(ne) if lref is not None else 1.0
+    ane = calc_ak_from_grad_k(ane, nenorm, lref) if lref is not None else copy.deepcopy(ane)
+    ania_temp = calc_ak_from_grad_k(ania, ninorma, lref) if lref is not None else copy.deepcopy(ania)
+    anib_temp = calc_ak_from_grad_k(anib, ninormb, lref) if lref is not None else copy.deepcopy(anib)
+    ninorma_temp, ninormb_temp, ninormc = calc_3ion_ninorm_from_ninorm_and_quasineutrality(ninorma, ninormb, zia, zib, zic, ne=nenorm)
+    anic = calc_ani_from_gradient_quasineutrality(1.0, zic, 1.0, ninormc, ane, ninorma_temp * ania_temp * zia + ninormb_temp * anib_temp * zib)
+    return ania_temp, anib_temp, anic
+
+def calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(grad_zeff, zeff, zia, zib, zi_target, nia, ni_target, grad_nia, ne, grad_ne, lref):
     azeff = calc_ak_from_grad_k(grad_zeff, zeff, lref)
     ninorma = calc_ninorm_from_ni(nia, ne)
     ninorm_target = calc_ninorm_from_ni(ni_target, ne)
@@ -313,7 +339,7 @@ def calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(grad_zeff, zeff, zi
 #     grad_ni_target = calc_grad_k_from_ak(ani_target, ni_target, lref)
 #     return grad_ni_target
 
-def calc_grad_ni_from_gradient_quasineutrality(zi, zi_target, ni, ni_target, grad_ne, grad_ni, ne, lref):
+def calc_grad_ni_from_gradient_quasineutrality(zi, zi_target, ni, ni_target, grad_ni, ne, grad_ne, lref):
     ninorm = calc_ninorm_from_ni(ni, ne)
     ninorm_target = calc_ninorm_from_ni(ni_target, ne)
     ane = calc_ak_from_grad_k(grad_ne, ne, lref)
@@ -322,22 +348,29 @@ def calc_grad_ni_from_gradient_quasineutrality(zi, zi_target, ni, ni_target, gra
     grad_ni_target = calc_grad_k_from_ak(ani_target, ni_target, lref)
     return grad_ni_target
 
-def calc_2ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(grad_ni, zia, zib, grad_ne, ni, ne, lref, norm_inputs=False):
+def calc_2ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(grad_ni, zia, zib, ni, grad_ne, ne, lref, norm_inputs=False):
+    nia, nib = calc_2ion_ni_from_ni_and_quasineutrality(ni, zia, zib, ne, norm_inputs=norm_inputs)
     grad_ne_temp = calc_grad_k_from_ak(grad_ne, ne, lref) if norm_inputs else copy.deepcopy(grad_ne)
-    grad_nia = calc_grad_k_from_ak(grad_ni, ni, lref) if norm_inputs else copy.deepcopy(grad_ni)
-    nia, nib = calc_2ion_ni_from_ni_and_quasineutrality(ni, zia, zib, ne, norm_inputs)
-    grad_nib = calc_grad_ni_from_gradient_quasineutrality(zia, zib, nia, nib, grad_ne_temp, grad_nia, ne, lref)
+    grad_nia = calc_grad_k_from_ak(grad_ni, nia, lref) if norm_inputs else copy.deepcopy(grad_ni)
+    grad_nib = calc_grad_ni_from_gradient_quasineutrality(zia, zib, nia, nib, grad_nia, ne, grad_ne_temp, lref)
     return grad_nia, grad_nib
 
-def calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(grad_ni, grad_zeff, zeff, zia, zib, zic, grad_ne, ni, ne, lref, norm_inputs=False):
+def calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(grad_ni, grad_zeff, zeff, zia, zib, zic, ni, grad_ne, ne, lref, norm_inputs=False):
+    nia, nib, nic = calc_3ion_ni_from_ni_zeff_and_quasineutrality(ni, zeff, zia, zib, zic, ne, norm_inputs=norm_inputs)
     grad_ne_temp = calc_grad_k_from_ak(grad_ne, ne, lref) if norm_inputs else copy.deepcopy(grad_ne)
-    grad_nia = calc_grad_k_from_ak(grad_ni, ni, lref) if norm_inputs else copy.deepcopy(grad_ni)
+    grad_nia = calc_grad_k_from_ak(grad_ni, nia, lref) if norm_inputs else copy.deepcopy(grad_ni)
     grad_zeff_temp = calc_grad_k_from_ak(grad_zeff, zeff, lref) if norm_inputs else copy.deepcopy(grad_zeff)
-    nia, nib, nic = calc_3ion_ni_from_ni_zeff_and_quasineutrality(ni, zeff, zia, zib, zic, ne, norm_inputs)
-    grad_nib = calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(grad_zeff_temp, zeff, zia, zic, zib, nia, nib, grad_ne_temp, grad_nia, ne, lref)
-    #grad_nic = calc_grad_ni_from_gradient_quasineutrality(zia, zib, zic, nia, nib, nic, grad_ne_temp, grad_nia, grad_nib, ne, lref)
-    grad_nic = calc_grad_ni_from_gradient_quasineutrality(1.0, zic, ne, nic, grad_ne_temp, ne * (grad_nia * zia / nia + grad_nib * zib / nib), ne, lref)
+    grad_nib = calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(grad_zeff_temp, zeff, zia, zic, zib, nia, nib, grad_nia, ne, grad_ne_temp, lref)
+    grad_nic = calc_grad_ni_from_gradient_quasineutrality(1.0, zic, ne, nic, grad_nia * zia + grad_nib * zib, ne, grad_ne_temp, lref)
     return grad_nia, grad_nib, grad_nic
+
+def calc_3ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(grad_nia, grad_nib, zia, zib, zic, nia, nib, grad_ne, ne, lref, norm_inputs=False):
+    nia_temp, nib_temp, nic = calc_3ion_ni_from_ni_and_quasineutrality(nia, nib, zia, zib, zic, ne, norm_inputs=norm_inputs)
+    grad_ne_temp = calc_grad_k_from_ak(grad_ne, ne, lref) if norm_inputs else copy.deepcopy(grad_ne)
+    grad_nia_temp = calc_grad_k_from_ak(grad_nia, nia_temp, lref) if norm_inputs else copy.deepcopy(grad_nia)
+    grad_nib_temp = calc_grad_k_from_ak(grad_nib, nib_temp, lref) if norm_inputs else copy.deepcopy(grad_nib)
+    grad_nic = calc_grad_ni_from_gradient_quasineutrality(1.0, zic, ne, nic, grad_nia_temp * zia + grad_nib_temp * zib, ne, grad_ne_temp, lref)
+    return grad_nia_temp, grad_nib_temp, grad_nic
 
 def calc_p_from_pnorm(pnorm, ne, te):
     c = constants_si()
@@ -345,66 +378,105 @@ def calc_p_from_pnorm(pnorm, ne, te):
     return p
 
 def calc_pnorm_from_p(p, ne, te):
-    c= constants_si()
+    c = constants_si()
     pnorm = p / (c['e'] * ne * te)
     return pnorm
 
-def calc_3ion_pnorm_with_3ions(ninorma, ninormb, ninormc, tinorma, tinormb, tinormc):
-    pnorm = 1.0 + ninorma * tinorma + ninormb * tinormb + ninormc * tinormc
+def calc_2ion_pnorm_with_2ions(ninorma, ninormb, tinorma, tinormb, ne=None, te=None):
+    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
+    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
+    tinorma_temp = calc_tinorm_from_ti(tinorma, te) if te is not None else copy.deepcopy(tinorma)
+    tinormb_temp = calc_tinorm_from_ti(tinormb, te) if te is not None else copy.deepcopy(tinormb)
+    pnorm = 1.0 + ninorma_temp * tinorma_temp + ninormb_temp * tinormb_temp
     return pnorm
 
-def calc_3ion_pnorm_with_2ions_and_quasineutrality(ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic):
-    ninormc = calc_ninorm_from_quasineutrality(zia, zib, zic, ninorma, ninormb)
-    pnorm = calc_3ion_pnorm_with_3ions(ninorma, ninormb, ninormc, tinorma, tinormb, tinormc)
+def calc_2ion_pnorm_with_1ion_and_quasineutrality(ninorma, tinorma, tinormb, zia, zib, ne=None, te=None):
+    ninorma_temp, ninormb = calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorma, zia, zib, ne=ne)
+    pnorm = calc_2ion_pnorm_with_2ions(ninorma_temp, ninormb, tinorma, tinormb, ne=None, te=te)
     return pnorm
 
-def calc_3ion_pnorm_with_1ion_zeff_and_quasineutrality(ninorma, tinorma, tinormb, tinormc, zeff, zia, zib, zic):
-    ninorma_temp, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorma, zeff, zia, zib, zic)
-    pnorm = calc_3ion_pnorm_with_3ions(ninorma_temp, ninormb, ninormc, tinorma, tinormb, tinormc)
+def calc_3ion_pnorm_with_3ions(ninorma, ninormb, ninormc, tinorma, tinormb, tinormc, ne=None, te=None):
+    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
+    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
+    ninormc_temp = calc_ninorm_from_ni(ninormc, ne) if ne is not None else copy.deepcopy(ninormc)
+    tinorma_temp = calc_tinorm_from_ti(tinorma, te) if te is not None else copy.deepcopy(tinorma)
+    tinormb_temp = calc_tinorm_from_ti(tinormb, te) if te is not None else copy.deepcopy(tinormb)
+    tinormc_temp = calc_tinorm_from_ti(tinormc, te) if te is not None else copy.deepcopy(tinormc)
+    pnorm = 1.0 + ninorma_temp * tinorma_temp + ninormb_temp * tinormb_temp + ninormc_temp * tinormc_temp
     return pnorm
 
-def calc_3ion_p_with_3ions(ne, nia, nib, nic, te, tia, tib, tic, norm_inputs=False):
-    p = 0.0 * ne
-    if norm_inputs:
-        pnorm = calc_3ion_pnorm_with_3ions(nia, nib, nic, tia, tib, tic)
-        p = calc_p_from_pnorm(pnorm, ne, te)
-    else:
-        p = ee * (ne * te + nia * tia + nib * tib + nic * tic)
-    logger.debug(f'<{calc_3ion_p_with_3ions.__name__}>: p\n{p}\n')
+def calc_3ion_pnorm_with_2ions_and_quasineutrality(ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic, ne=None, te=None):
+    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
+    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
+    ninormc = calc_ninorm_from_quasineutrality(1.0, zic, ninorma_temp * zia + ninormb_temp * zib)
+    pnorm = calc_3ion_pnorm_with_3ions(ninorma_temp, ninormb_temp, ninormc, tinorma, tinormb, tinormc, ne=None, te=te)
+    return pnorm
+
+def calc_3ion_pnorm_with_1ion_zeff_and_quasineutrality(ninorma, tinorma, tinormb, tinormc, zeff, zia, zib, zic, ne=None, te=None):
+    ninorma_temp, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorma, zeff, zia, zib, zic, ne=ne)
+    pnorm = calc_3ion_pnorm_with_3ions(ninorma_temp, ninormb, ninormc, tinorma, tinormb, tinormc, ne=None, te=te)
+    return pnorm
+
+def calc_2ion_p_with_2ions(nia, nib, tia, tib, ne, te, norm_inputs=False):
+    ninorma = calc_ninorm_from_ni(nia, ne) if not norm_inputs else copy.deepcopy(nia)
+    ninormb = calc_ninorm_from_ni(nib, ne) if not norm_inputs else copy.deepcopy(nib)
+    tinorma = calc_tinorm_from_ti(tia, te) if not norm_inputs else copy.deepcopy(tia)
+    tinormb = calc_tinorm_from_ti(tib, te) if not norm_inputs else copy.deepcopy(tib)
+    pnorm = calc_2ion_pnorm_with_2ions(ninorma, ninormb, tinorma, tinormb)
+    p = calc_p_from_pnorm(pnorm, ne, te)
     return p
 
-def calc_3ion_p_with_2ions_and_quasineutrality(ne, nia, nib, te, tia, tib, tic, zia, zib, zic, norm_inputs=False):
-    nic = (
-        calc_ninorm_from_quasineutrality(zia, zib, zic, nia, nib)
-        if norm_inputs else
-        calc_ni_from_quasineutrality(zia, zib, zic, nia, nib, ne)
-    )
-    p = calc_3ion_p_with_3ions(ne, nia, nib, nic, te, tia, tib, tic, norm_inputs)
+def calc_2ion_p_with_1ion_and_quasineutrality(nia, tia, tib, zia, zib, ne, te, norm_inputs=False):
+    nia_temp, nib = calc_2ion_ni_from_ni_and_quasineutrality(nia, zia, zib, ne, norm_inputs=norm_inputs)
+    tia_temp = calc_ti_from_tinorm(tia, te, tscale=1.0) if norm_inputs else copy.deepcopy(tia)
+    tib_temp = calc_ti_from_tinorm(tib, te, tscale=1.0) if norm_inputs else copy.deepcopy(tib)
+    p = calc_2ion_p_with_2ions(nia_temp, nib, tia_temp, tib_temp, ne, te, norm_inputs=False)
     return p
 
-def calc_3ion_p_with_1ion_zeff_and_quasineutrality(ne, nia, te, tia, tib, tic, zeff, zia, zib, zic, norm_inputs=False):
-    nia_temp, nib, nic = (
-        calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(nia, zeff, zia, zib, zic)
-        if norm_inputs else
-        calc_3ion_ni_from_ni_zeff_and_quasineutrality(nia, zeff, zia, zib, zic, ne)
-    )
-    p = calc_3ion_p_with_3ions(ne, nia_temp, nib, nic, te, tia, tib, tic, norm_inputs)
+def calc_3ion_p_with_3ions(nia, nib, nic, tia, tib, tic, ne, te, norm_inputs=False):
+    ne_temp = None if norm_inputs else copy.deepcopy(ne)
+    te_temp = None if norm_inputs else copy.deepcopy(te)
+    pnorm = calc_3ion_pnorm_with_3ions(nia, nib, nic, tia, tib, tic, ne=ne_temp, te=te_temp)
+    p = calc_p_from_pnorm(pnorm, ne, te)
     return p
 
-def calc_zeff_from_3ion_ni_with_3ions(ne, nia, nib, nic, zia, zib, zic, norm_inputs=False):
-    ninorma = copy.deepcopy(nia) if norm_inputs else calc_ninorm_from_ni(nia, ne)
-    ninormb = copy.deepcopy(nib) if norm_inputs else calc_ninorm_from_ni(nib, ne)
-    ninormc = copy.deepcopy(nic) if norm_inputs else calc_ninorm_from_ni(nic, ne)
+def calc_3ion_p_with_2ions_and_quasineutrality(nia, nib, tia, tib, tic, zia, zib, zic, ne, te, norm_inputs=False):
+    nia_temp, nib_temp, nic = calc_3ion_ni_from_ni_and_quasineutrality(nia, nib, zia, zib, zic, ne, norm_inputs=norm_inputs)
+    tia_temp = calc_ti_from_tinorm(tia, te, tscale=1.0) if norm_inputs else copy.deepcopy(tia)
+    tib_temp = calc_ti_from_tinorm(tib, te, tscale=1.0) if norm_inputs else copy.deepcopy(tib)
+    tic_temp = calc_ti_from_tinorm(tic, te, tscale=1.0) if norm_inputs else copy.deepcopy(tic)
+    p = calc_3ion_p_with_3ions(nia_temp, nib_temp, nic, tia_temp, tib_temp, tic_temp, ne, te, norm_inputs=False)
+    return p
+
+def calc_3ion_p_with_1ion_zeff_and_quasineutrality(nia, tia, tib, tic, zeff, zia, zib, zic, ne, te, norm_inputs=False):
+    nia_temp, nib, nic = calc_3ion_ni_from_ni_zeff_and_quasineutrality(nia, zeff, zia, zib, zic, ne, norm_inputs=norm_inputs)
+    tia_temp = calc_ti_from_tinorm(tia, te, tscale=1.0) if norm_inputs else copy.deepcopy(tia)
+    tib_temp = calc_ti_from_tinorm(tib, te, tscale=1.0) if norm_inputs else copy.deepcopy(tib)
+    tic_temp = calc_ti_from_tinorm(tic, te, tscale=1.0) if norm_inputs else copy.deepcopy(tic)
+    p = calc_3ion_p_with_3ions(nia_temp, nib, nic, tia_temp, tib_temp, tic_temp, ne, te, norm_inputs=False)
+    return p
+
+def calc_zeff_from_2ion_ni_with_2ions(nia, nib, zia, zib, ne=None):
+    ninorma = calc_ninorm_from_ni(nia, ne) if ne is not None else copy.deepcopy(nia)
+    ninormb = calc_ninorm_from_ni(nib, ne) if ne is not None else copy.deepcopy(nib)
+    zeff = ninorma * (zia ** 2) + ninormb * (zib ** 2)
+    return zeff
+
+def calc_zeff_from_2ion_ni_with_1ion_and_quasineutrality(nia, zia, zib, ne=None):
+    ninorma, ninormb = calc_2ion_ninorm_from_ninorm_and_quasineutrality(nia, zia, zib, ne=ne)
+    zeff = calc_zeff_from_2ion_ni_with_2ions(ninorma, ninormb, zia, zib, ne=None)
+    return zeff
+
+def calc_zeff_from_3ion_ni_with_3ions(nia, nib, nic, zia, zib, zic, ne=None):
+    ninorma = calc_ninorm_from_ni(nia, ne) if ne is not None else copy.deepcopy(nia)
+    ninormb = calc_ninorm_from_ni(nib, ne) if ne is not None else copy.deepcopy(nib)
+    ninormc = calc_ninorm_from_ni(nic, ne) if ne is not None else copy.deepcopy(nic)
     zeff = ninorma * (zia ** 2) + ninormb * (zib ** 2) + ninormc * (zic ** 2)
     return zeff
 
-def calc_zeff_from_3ion_ni_with_2ions_and_quasineutrality(ne, nia, nib, zia, zib, zic, norm_inputs=False):
-    nic = (
-        calc_ninorm_from_quasineutrality(zia, zib, zic, nia, nib)
-        if norm_inputs else
-        calc_ni_from_quasineutrality(zia, zib, zic, nia, nib, ne)
-    )
-    zeff = calc_zeff_from_3ion_ni_with_3ions(ne, nia, nib, nic, zia, zib, zic, norm_inputs)
+def calc_zeff_from_3ion_ni_with_2ions_and_quasineutrality(nia, nib, zia, zib, zic, ne=None):
+    ninorma, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_and_quasineutrality(nia, nib, zia, zib, zic, ne=ne)
+    zeff = calc_zeff_from_3ion_ni_with_3ions(ninorma, ninormb, ninormc, zia, zib, zic, ne=None)
     return zeff
 
 def calc_grad_p_from_ap(ap, ne, te, lref):
