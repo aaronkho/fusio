@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 import xarray as xr
-from fusio.utils import plasma_tools as p
+from fusio.utils import plasma_tools as pt
 
 
 @pytest.mark.usefixtures(
@@ -13,7 +13,7 @@ from fusio.utils import plasma_tools as p
 class TestPlasmaTools():
 
     def test_constants(self):
-        c = p.constants_si()
+        c = pt.constants_si()
         assert c.get('e') == 1.60218e-19
         assert c.get('u') == 1.66054e-27
         assert c.get('eps') == 8.85419e-12
@@ -22,71 +22,71 @@ class TestPlasmaTools():
         assert c.get('mp') == (1.0 + 7.2764e-3) * 1.66054e-27
 
     def test_unnormalize(self):
-        assert p.unnormalize(0.5, 5.0) == 2.5
+        assert pt.unnormalize(0.5, 5.0) == 2.5
 
     def test_normalize(self):
-        assert p.normalize(2.5, 5.0) == 0.5
+        assert pt.normalize(2.5, 5.0) == 0.5
 
     def test_calc_a_from_epsilon(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         epsilon = dimensionless_2ion_plasma_state['epsilon_lcfs']
         rmaj = physical_2ion_plasma_state['r_geometric_lcfs']
-        a = p.calc_a_from_epsilon(epsilon, rmaj)
+        a = pt.calc_a_from_epsilon(epsilon, rmaj)
         xr.testing.assert_allclose(a, physical_2ion_plasma_state['r_minor_lcfs'])
 
     def test_calc_epsilon_from_a(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         a = physical_2ion_plasma_state['r_minor_lcfs']
         rmaj = physical_2ion_plasma_state['r_geometric_lcfs']
-        epsilon = p.calc_epsilon_from_a(a, rmaj)
+        epsilon = pt.calc_epsilon_from_a(a, rmaj)
         xr.testing.assert_allclose(epsilon, dimensionless_2ion_plasma_state['epsilon_lcfs'])
 
     def test_calc_r_from_x(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         x = dimensionless_2ion_plasma_state['x']
         lref = physical_2ion_plasma_state['r_minor_lcfs']
-        rmin = p.calc_r_from_x(x, lref)
+        rmin = pt.calc_r_from_x(x, lref)
         xr.testing.assert_allclose(rmin, physical_2ion_plasma_state['r_minor'])
 
     def test_calc_x_from_r(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         rmin = physical_2ion_plasma_state['r_minor']
         lref = physical_2ion_plasma_state['r_minor_lcfs']
-        x = p.calc_x_from_r(rmin, lref)
+        x = pt.calc_x_from_r(rmin, lref)
         xr.testing.assert_allclose(x, dimensionless_2ion_plasma_state['x'])
 
     def test_calc_ni_from_ninorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         ninorm = dimensionless_2ion_plasma_state['density_i_norm']
         nref = physical_2ion_plasma_state['density_e']
-        ni = p.calc_ni_from_ninorm(ninorm, nref, nscale=1.0)
+        ni = pt.calc_ni_from_ninorm(ninorm, nref, nscale=1.0)
         xr.testing.assert_allclose(ni, physical_2ion_plasma_state['density_i'])
 
     def test_calc_ti_from_tinorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         tinorm = dimensionless_2ion_plasma_state['temperature_i_norm']
         tref = physical_2ion_plasma_state['temperature_e']
-        ti = p.calc_ti_from_tinorm(tinorm, tref, tscale=1.0)
+        ti = pt.calc_ti_from_tinorm(tinorm, tref, tscale=1.0)
         xr.testing.assert_allclose(ti, physical_2ion_plasma_state['temperature_i'])
 
     def test_calc_ninorm_from_ni(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         ni = physical_2ion_plasma_state['density_i']
         nref = physical_2ion_plasma_state['density_e']
-        ninorm = p.calc_ninorm_from_ni(ni, nref)
+        ninorm = pt.calc_ninorm_from_ni(ni, nref)
         xr.testing.assert_allclose(ninorm, dimensionless_2ion_plasma_state['density_i_norm'])
 
     def test_calc_tinorm_from_ti(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         ti = physical_2ion_plasma_state['temperature_i']
         tref = physical_2ion_plasma_state['temperature_e']
-        tinorm = p.calc_tinorm_from_ti(ti, tref)
+        tinorm = pt.calc_tinorm_from_ti(ti, tref)
         xr.testing.assert_allclose(tinorm, dimensionless_2ion_plasma_state['temperature_i_norm'])
 
     def test_calc_ak_from_grad_k(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         k = physical_2ion_plasma_state['temperature_e']
         grad_k = physical_2ion_plasma_state['grad_temperature_e']
         lref = physical_2ion_plasma_state['r_minor_lcfs']
-        ak = p.calc_ak_from_grad_k(grad_k, k, lref)
+        ak = pt.calc_ak_from_grad_k(grad_k, k, lref)
         xr.testing.assert_allclose(ak, dimensionless_2ion_plasma_state['grad_temperature_e_norm'])
 
     def test_calc_grad_k_from_ak(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         k = physical_2ion_plasma_state['temperature_e']
         ak = dimensionless_2ion_plasma_state['grad_temperature_e_norm']
         lref = physical_2ion_plasma_state['r_minor_lcfs']
-        grad_k = p.calc_grad_k_from_ak(ak, k, lref)
+        grad_k = pt.calc_grad_k_from_ak(ak, k, lref)
         xr.testing.assert_allclose(grad_k, physical_2ion_plasma_state['grad_temperature_e'])
 
     def test_calc_q_circular_from_bp(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
@@ -94,7 +94,7 @@ class TestPlasmaTools():
         bt = physical_2ion_plasma_state['field_geometric'].sel(direction='toroidal', drop=True)
         rmin = physical_2ion_plasma_state['r_minor']
         rmaj = physical_2ion_plasma_state['r_geometric']
-        q = p.calc_q_circular_from_bp(bp, rmin, bt, rmaj)
+        q = pt.calc_q_circular_from_bp(bp, rmin, bt, rmaj)
         xr.testing.assert_allclose(q, dimensionless_2ion_plasma_state['safety_factor_circular'])
 
     def test_calc_bp_from_q_circular(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
@@ -102,7 +102,7 @@ class TestPlasmaTools():
         bt = physical_2ion_plasma_state['field_geometric'].sel(direction='toroidal', drop=True)
         rmin = physical_2ion_plasma_state['r_minor']
         rmaj = physical_2ion_plasma_state['r_geometric']
-        bp = p.calc_bp_from_q_circular(q, rmin, bt, rmaj)
+        bp = pt.calc_bp_from_q_circular(q, rmin, bt, rmaj)
         xr.testing.assert_allclose(bp, physical_2ion_plasma_state['field_geometric'].sel(direction='poloidal', drop=True))
 
     def test_calc_grad_q_circular_from_s(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
@@ -110,21 +110,21 @@ class TestPlasmaTools():
         bp = physical_2ion_plasma_state['field_geometric'].sel(direction='poloidal', drop=True)
         bt = physical_2ion_plasma_state['field_geometric'].sel(direction='toroidal', drop=True)
         rmaj = physical_2ion_plasma_state['r_geometric']
-        grad_q = p.calc_grad_q_circular_from_s(s, bp, bt, rmaj)
+        grad_q = pt.calc_grad_q_circular_from_s(s, bp, bt, rmaj)
         xr.testing.assert_allclose(grad_q, dimensionless_2ion_plasma_state['grad_safety_factor_circular'])
 
     def test_calc_grad_q_from_s_and_q(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         s = dimensionless_2ion_plasma_state['magnetic_shear_circular']
         q = dimensionless_2ion_plasma_state['safety_factor_circular']
         rmin = physical_2ion_plasma_state['r_minor']
-        grad_q = p.calc_grad_q_from_s_and_q(s, q, rmin)
+        grad_q = pt.calc_grad_q_from_s_and_q(s, q, rmin)
         xr.testing.assert_allclose(grad_q, dimensionless_2ion_plasma_state['grad_safety_factor_circular'])
 
     def test_calc_s_circular_from_grad_bp(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         grad_bp = physical_2ion_plasma_state['grad_field_geometric'].sel(direction='poloidal', drop=True)
         bp = physical_2ion_plasma_state['field_geometric'].sel(direction='poloidal', drop=True)
         rmin = physical_2ion_plasma_state['r_minor']
-        s = p.calc_s_circular_from_grad_bp(grad_bp, bp, rmin)
+        s = pt.calc_s_circular_from_grad_bp(grad_bp, bp, rmin)
         xr.testing.assert_allclose(s, dimensionless_2ion_plasma_state['magnetic_shear_circular'])
 
     def test_calc_grad_bp_from_grad_q_circular(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
@@ -133,14 +133,14 @@ class TestPlasmaTools():
         bt = physical_2ion_plasma_state['field_geometric'].sel(direction='toroidal', drop=True)
         rmin = physical_2ion_plasma_state['r_minor']
         rmaj = physical_2ion_plasma_state['r_geometric']
-        grad_bp = p.calc_grad_bp_from_grad_q_circular(grad_q, bp, rmin, bt, rmaj)
+        grad_bp = pt.calc_grad_bp_from_grad_q_circular(grad_q, bp, rmin, bt, rmaj)
         xr.testing.assert_allclose(grad_bp, physical_2ion_plasma_state['grad_field_geometric'].sel(direction='poloidal', drop=True))
 
     def test_calc_grad_bp_from_s_circular(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         s = dimensionless_2ion_plasma_state['magnetic_shear_circular']
         bp = physical_2ion_plasma_state['field_geometric'].sel(direction='poloidal', drop=True)
         rmin = physical_2ion_plasma_state['r_minor']
-        grad_bp = p.calc_grad_bp_from_s_circular(s, bp, rmin)
+        grad_bp = pt.calc_grad_bp_from_s_circular(s, bp, rmin)
         xr.testing.assert_allclose(grad_bp, physical_2ion_plasma_state['grad_field_geometric'].sel(direction='poloidal', drop=True))
 
     def test_calc_ninorm_from_zeff_and_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
@@ -149,14 +149,14 @@ class TestPlasmaTools():
         zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
         zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
         zeff = dimensionless_3ion_plasma_state['effective_charge']
-        ninormc = p.calc_ninorm_from_zeff_and_quasineutrality(zeff, zia, zib, zic, ninorma)
+        ninormc = pt.calc_ninorm_from_zeff_and_quasineutrality(zeff, zia, zib, zic, ninorma)
         xr.testing.assert_allclose(ninormc, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True))
 
     def test_calc_ninorm_from_quasineutrality(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
         zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
         ninorma = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
-        ninormb = p.calc_ninorm_from_quasineutrality(zia, zib, ninorma)
+        ninormb = pt.calc_ninorm_from_quasineutrality(zia, zib, ninorma)
         xr.testing.assert_allclose(ninormb, dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True))
 
     def test_calc_2ion_ninorm_from_ni_and_quasineutrality(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
@@ -165,8 +165,8 @@ class TestPlasmaTools():
         ni_test2 = physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
         zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
         zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
-        ninorma_test1, ninormb_test1 = p.calc_2ion_ninorm_from_ninorm_and_quasineutrality(ni_test1, zia, zib, ne=ne)
-        ninorma_test2, ninormb_test2 = p.calc_2ion_ninorm_from_ninorm_and_quasineutrality(ni_test2, zib, zia, ne=ne)
+        ninorma_test1, ninormb_test1 = pt.calc_2ion_ninorm_from_ninorm_and_quasineutrality(ni_test1, zia, zib, ne=ne)
+        ninorma_test2, ninormb_test2 = pt.calc_2ion_ninorm_from_ninorm_and_quasineutrality(ni_test2, zib, zia, ne=ne)
         xr.testing.assert_allclose(ninorma_test1, dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True))
         xr.testing.assert_allclose(ninormb_test1, dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True))
         xr.testing.assert_allclose(ninorma_test2, dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True))
@@ -177,8 +177,8 @@ class TestPlasmaTools():
         ninorm_test2 = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
         zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
         zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
-        ninorma_test1, ninormb_test1 = p.calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorm_test1, zia, zib, ne=None)
-        ninorma_test2, ninormb_test2 = p.calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorm_test2, zib, zia, ne=None)
+        ninorma_test1, ninormb_test1 = pt.calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorm_test1, zia, zib, ne=None)
+        ninorma_test2, ninormb_test2 = pt.calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorm_test2, zib, zia, ne=None)
         xr.testing.assert_allclose(ninorma_test1, ninorm_test1)
         xr.testing.assert_allclose(ninormb_test1, ninorm_test2)
         xr.testing.assert_allclose(ninorma_test2, ninorm_test2)
@@ -192,8 +192,8 @@ class TestPlasmaTools():
         zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
         zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
         zeff = dimensionless_3ion_plasma_state['effective_charge']
-        ninorma_test1, ninormb_test1, ninormc_test1 = p.calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ni_test1, zeff, zia, zib, zic, ne=ne)
-        ninorma_test2, ninormb_test2, ninormc_test2 = p.calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ni_test2, zeff, zib, zic, zia, ne=ne)
+        ninorma_test1, ninormb_test1, ninormc_test1 = pt.calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ni_test1, zeff, zia, zib, zic, ne=ne)
+        ninorma_test2, ninormb_test2, ninormc_test2 = pt.calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ni_test2, zeff, zib, zic, zia, ne=ne)
         xr.testing.assert_allclose(ninorma_test1, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True))
         xr.testing.assert_allclose(ninormb_test1, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True))
         xr.testing.assert_allclose(ninormc_test1, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True))
@@ -208,14 +208,47 @@ class TestPlasmaTools():
         zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
         zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
         zeff = dimensionless_3ion_plasma_state['effective_charge']
-        ninorma_test1, ninormb_test1, ninormc_test1 = p.calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorm_test1, zeff, zia, zib, zic, ne=None)
-        ninorma_test2, ninormb_test2, ninormc_test2 = p.calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorm_test2, zeff, zib, zic, zia, ne=None)
+        ninorma_test1, ninormb_test1, ninormc_test1 = pt.calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorm_test1, zeff, zia, zib, zic, ne=None)
+        ninorma_test2, ninormb_test2, ninormc_test2 = pt.calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorm_test2, zeff, zib, zic, zia, ne=None)
         xr.testing.assert_allclose(ninorma_test1, ninorm_test1)
         xr.testing.assert_allclose(ninormb_test1, ninorm_test2)
         xr.testing.assert_allclose(ninormc_test1, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True))
         xr.testing.assert_allclose(ninorma_test2, ninorm_test2)
         xr.testing.assert_allclose(ninormb_test2, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True))
         xr.testing.assert_allclose(ninormc_test2, ninorm_test1)
+
+    def test_calc_3ion_ninorm_from_ni_and_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        nic = physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        ninorma_test1, ninormb_test1, ninormc_test1 = pt.calc_3ion_ninorm_from_ninorm_and_quasineutrality(nia, nib, zia, zib, zic, ne=ne)
+        ninorma_test2, ninormb_test2, ninormc_test2 = pt.calc_3ion_ninorm_from_ninorm_and_quasineutrality(nib, nic, zib, zic, zia, ne=ne)
+        xr.testing.assert_allclose(ninorma_test1, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(ninormb_test1, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(ninormc_test1, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(ninorma_test2, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(ninormb_test2, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(ninormc_test2, dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True))
+
+    def test_calc_3ion_ninorm_from_ninorm_and_quasineutrality(self, dimensionless_3ion_plasma_state):
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ninormc = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        ninorma_test1, ninormb_test1, ninormc_test1 = pt.calc_3ion_ninorm_from_ninorm_and_quasineutrality(ninorma, ninormb, zia, zib, zic, ne=None)
+        ninorma_test2, ninormb_test2, ninormc_test2 = pt.calc_3ion_ninorm_from_ninorm_and_quasineutrality(ninormb, ninormc, zib, zic, zia, ne=None)
+        xr.testing.assert_allclose(ninorma_test1, ninorma)
+        xr.testing.assert_allclose(ninormb_test1, ninormb)
+        xr.testing.assert_allclose(ninormc_test1, ninormc)
+        xr.testing.assert_allclose(ninorma_test2, ninormb)
+        xr.testing.assert_allclose(ninormb_test2, ninormc)
+        xr.testing.assert_allclose(ninormc_test2, ninorma)
 
     def test_calc_ni_from_zeff_and_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
         ne = physical_3ion_plasma_state['density_e']
@@ -224,7 +257,7 @@ class TestPlasmaTools():
         zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
         zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
         zeff = dimensionless_3ion_plasma_state['effective_charge']
-        nic = p.calc_ni_from_zeff_and_quasineutrality(zeff, zia, zib, zic, nia, ne)
+        nic = pt.calc_ni_from_zeff_and_quasineutrality(zeff, zia, zib, zic, nia, ne)
         xr.testing.assert_allclose(nic, physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True))
 
     def test_calc_ni_from_quasineutrality(self, physical_2ion_plasma_state):
@@ -232,7 +265,7 @@ class TestPlasmaTools():
         nia = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
         zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
         zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
-        nib = p.calc_ni_from_quasineutrality(zia, zib, nia, ne)
+        nib = pt.calc_ni_from_quasineutrality(zia, zib, nia, ne)
         xr.testing.assert_allclose(nib, physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True))
 
     def test_calc_2ion_ni_from_ni_and_quasineutrality(self, physical_2ion_plasma_state):
@@ -241,21 +274,21 @@ class TestPlasmaTools():
         ni_test2 = physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
         zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
         zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
-        nia_test1, nib_test1 = p.calc_2ion_ni_from_ni_and_quasineutrality(ni_test1, zia, zib, ne, norm_inputs=False)
-        nia_test2, nib_test2 = p.calc_2ion_ni_from_ni_and_quasineutrality(ni_test2, zib, zia, ne, norm_inputs=False)
+        nia_test1, nib_test1 = pt.calc_2ion_ni_from_ni_and_quasineutrality(ni_test1, zia, zib, ne, norm_inputs=False)
+        nia_test2, nib_test2 = pt.calc_2ion_ni_from_ni_and_quasineutrality(ni_test2, zib, zia, ne, norm_inputs=False)
         xr.testing.assert_allclose(nia_test1, ni_test1)
         xr.testing.assert_allclose(nib_test1, ni_test2)
         xr.testing.assert_allclose(nia_test2, ni_test2)
         xr.testing.assert_allclose(nib_test2, ni_test1)
 
-    def test_calc_2ion_ni_from_niorm_and_quasineutrality(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+    def test_calc_2ion_ni_from_ninorm_and_quasineutrality(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         ne = physical_2ion_plasma_state['density_e']
         ninorm_test1 = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
         ninorm_test2 = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
-        zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
-        zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
-        nia_test1, nib_test1 = p.calc_2ion_ni_from_ni_and_quasineutrality(ninorm_test1, zia, zib, ne, norm_inputs=True)
-        nia_test2, nib_test2 = p.calc_2ion_ni_from_ni_and_quasineutrality(ninorm_test2, zib, zia, ne, norm_inputs=True)
+        zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        nia_test1, nib_test1 = pt.calc_2ion_ni_from_ni_and_quasineutrality(ninorm_test1, zia, zib, ne, norm_inputs=True)
+        nia_test2, nib_test2 = pt.calc_2ion_ni_from_ni_and_quasineutrality(ninorm_test2, zib, zia, ne, norm_inputs=True)
         xr.testing.assert_allclose(nia_test1, physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True))
         xr.testing.assert_allclose(nib_test1, physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True))
         xr.testing.assert_allclose(nia_test2, physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True))
@@ -269,8 +302,8 @@ class TestPlasmaTools():
         zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
         zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
         zeff = dimensionless_3ion_plasma_state['effective_charge']
-        nia_test1, nib_test1, nic_test1 = p.calc_3ion_ni_from_ni_zeff_and_quasineutrality(ni_test1, zeff, zia, zib, zic, ne, norm_inputs=False)
-        nia_test2, nib_test2, nic_test2 = p.calc_3ion_ni_from_ni_zeff_and_quasineutrality(ni_test2, zeff, zib, zic, zia, ne, norm_inputs=False)
+        nia_test1, nib_test1, nic_test1 = pt.calc_3ion_ni_from_ni_zeff_and_quasineutrality(ni_test1, zeff, zia, zib, zic, ne, norm_inputs=False)
+        nia_test2, nib_test2, nic_test2 = pt.calc_3ion_ni_from_ni_zeff_and_quasineutrality(ni_test2, zeff, zib, zic, zia, ne, norm_inputs=False)
         xr.testing.assert_allclose(nia_test1, ni_test1)
         xr.testing.assert_allclose(nib_test1, ni_test2)
         xr.testing.assert_allclose(nic_test1, physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True))
@@ -278,132 +311,664 @@ class TestPlasmaTools():
         xr.testing.assert_allclose(nib_test2, physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True))
         xr.testing.assert_allclose(nic_test2, ni_test1)
 
-    # def calc_ani_from_azeff_and_gradient_quasineutrality(azeff, zeff, zia, zib, zi_target, ninorma, ninorm_target, ane, ania, ze=1.0):
-    #     zze = (zib - zeff) * ze
-    #     zza = (zib - zia) * zia
-    #     zz_target = (zib - zi_target) * zi_target
-    #     ani_target = (azeff * zeff * ze + ane * zze - ania * zza * ninorma) / (ninorm_target * zz_target)
-    #     return ani_target
+    def test_calc_3ion_ni_from_ninorm_zeff_and_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        ninorm_test1 = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninorm_test2 = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        nia_test1, nib_test1, nic_test1 = pt.calc_3ion_ni_from_ni_zeff_and_quasineutrality(ninorm_test1, zeff, zia, zib, zic, ne, norm_inputs=True)
+        nia_test2, nib_test2, nic_test2 = pt.calc_3ion_ni_from_ni_zeff_and_quasineutrality(ninorm_test2, zeff, zib, zic, zia, ne, norm_inputs=True)
+        xr.testing.assert_allclose(nia_test1, physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(nib_test1, physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(nic_test1, physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(nia_test2, physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(nib_test2, physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(nic_test2, physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True))
 
-    # def calc_ani_from_gradient_quasineutrality(zi, zi_target, ninorm, ninorm_target, ane, ani, ze=1.0):
-    #     ani_target = (ane * ze - ninorm * ani * zi) / (ninorm_target * zi_target)
-    #     return ani_target
+    def test_calc_3ion_ni_from_ni_and_quasineutrality(self, physical_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        nic = physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        nia_test1, nib_test1, nic_test1 = pt.calc_3ion_ni_from_ni_and_quasineutrality(nia, nib, zia, zib, zic, ne, norm_inputs=False)
+        nia_test2, nib_test2, nic_test2 = pt.calc_3ion_ni_from_ni_and_quasineutrality(nib, nic, zib, zic, zia, ne, norm_inputs=False)
+        xr.testing.assert_allclose(nia_test1, nia)
+        xr.testing.assert_allclose(nib_test1, nib)
+        xr.testing.assert_allclose(nic_test1, nic)
+        xr.testing.assert_allclose(nia_test2, nib)
+        xr.testing.assert_allclose(nib_test2, nic)
+        xr.testing.assert_allclose(nic_test2, nia)
 
-    # def calc_2ion_ani_from_ani_and_gradient_quasineutrality(ani, zia, zib, ane, ni, lref=None, ne=None):
-    #     ania = calc_ak_from_grad_k(ani, ni, lref) if lref is not None else copy.deepcopy(ani)
-    #     ninorma, ninormb = calc_2ion_ni_from_ni_and_quasineutrality(ni, zia, zib, ne)
-    #     anib = calc_ani_from_gradient_quasineutrality(zia, zib, ninorma, ninormb, ane, ania)
-    #     return ania, anib
+    def test_calc_3ion_ni_from_ninorm_and_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ninormc = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        nia_test1, nib_test1, nic_test1 = pt.calc_3ion_ni_from_ni_and_quasineutrality(ninorma, ninormb, zia, zib, zic, ne, norm_inputs=True)
+        nia_test2, nib_test2, nic_test2 = pt.calc_3ion_ni_from_ni_and_quasineutrality(ninormb, ninormc, zib, zic, zia, ne, norm_inputs=True)
+        xr.testing.assert_allclose(nia_test1, physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(nib_test1, physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(nic_test1, physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(nia_test2, physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(nib_test2, physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(nic_test2, physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True))
 
-    # def calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(ani, azeff, zeff, zia, zib, zic, ane, ni, lref=None, ne=None):
-    #     ania = calc_ak_from_grad_k(ani, ni, lref) if lref is not None else copy.deepcopy(ani)
-    #     ninorma, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ni, zeff, zia, zib, zic, ne)
-    #     anib = calc_ani_from_azeff_and_gradient_quasineutrality(azeff, zeff, zia, zic, zib, ninorma, ninormb, ane, ania)
-    #     anic = calc_ani_from_gradient_quasineutrality(1.0, zic, 1.0, ninormc, ane, ninorma * ania * zia + ninormb * anib * zib)
-    #     return ania, anib, anic
+    def test_calc_ani_from_azeff_and_gradient_quasineutrality(self, dimensionless_3ion_plasma_state):
+        ane = dimensionless_3ion_plasma_state['grad_density_e_norm']
+        ania = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        azeff = dimensionless_3ion_plasma_state['grad_effective_charge_norm']
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormc = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True)
+        anic = pt.calc_ani_from_azeff_and_gradient_quasineutrality(azeff, zeff, zia, zib, zic, ninorma, ninormc, ane, ania)
+        xr.testing.assert_allclose(anic, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True))
 
-    # def calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(grad_zeff, zeff, zia, zib, zi_target, nia, ni_target, grad_ne, grad_nia, ne, lref):
-    #     azeff = calc_ak_from_grad_k(grad_zeff, zeff, lref)
-    #     ninorma = calc_ninorm_from_ni(nia, ne)
-    #     ninorm_target = calc_ninorm_from_ni(ni_target, ne)
-    #     ane = calc_ak_from_grad_k(grad_ne, ne, lref)
-    #     ania = calc_ak_from_grad_k(grad_nia, nia, lref)
-    #     ani_target = calc_ani_from_azeff_and_gradient_quasineutrality(azeff, zeff, zia, zib, zi_target, ninorma, ninorm_target, ane, ania)
-    #     grad_ni_target = calc_grad_k_from_ak(ani_target, ni_target, lref)
-    #     return grad_ni_target
+    def test_calc_ani_from_gradient_quasineutrality(self, dimensionless_2ion_plasma_state):
+        ane = dimensionless_2ion_plasma_state['grad_density_e_norm']
+        ania = dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True)
+        ninorma = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        anib = pt.calc_ani_from_gradient_quasineutrality(zia, zib, ninorma, ninormb, ane, ania)
+        xr.testing.assert_allclose(anib, dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True))
 
-    # def calc_grad_ni_from_gradient_quasineutrality(zi, zi_target, ni, ni_target, grad_ne, grad_ni, ne, lref):
-    #     ninorm = calc_ninorm_from_ni(ni, ne)
-    #     ninorm_target = calc_ninorm_from_ni(ni_target, ne)
-    #     ane = calc_ak_from_grad_k(grad_ne, ne, lref)
-    #     ani = calc_ak_from_grad_k(grad_ni, ni, lref)
-    #     ani_target = calc_ani_from_gradient_quasineutrality(zi, zi_target, ninorm, ninorm_target, ane, ani)
-    #     grad_ni_target = calc_grad_k_from_ak(ani_target, ni_target, lref)
-    #     return grad_ni_target
+    def test_calc_2ion_ani_from_ani_and_gradient_quasineutrality(self, dimensionless_2ion_plasma_state):
+        ane = dimensionless_2ion_plasma_state['grad_density_e_norm']
+        ninorm_test1 = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninorm_test2 = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ani_test1 = dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True)
+        ani_test2 = dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True)
+        zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        ania_test1, anib_test1 = pt.calc_2ion_ani_from_ani_and_gradient_quasineutrality(ani_test1, zia, zib, ane, ninorm_test1, ne=None, lref=None)
+        ania_test2, anib_test2 = pt.calc_2ion_ani_from_ani_and_gradient_quasineutrality(ani_test2, zib, zia, ane, ninorm_test2, ne=None, lref=None)
+        xr.testing.assert_allclose(ania_test1, ani_test1)
+        xr.testing.assert_allclose(anib_test1, ani_test2)
+        xr.testing.assert_allclose(ania_test2, ani_test2)
+        xr.testing.assert_allclose(anib_test2, ani_test1)
 
-    # def calc_2ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(grad_ni, zia, zib, grad_ne, ni, ne, lref, norm_inputs=False):
-    #     grad_ne_temp = calc_grad_k_from_ak(grad_ne, ne, lref) if norm_inputs else copy.deepcopy(grad_ne)
-    #     grad_nia = calc_grad_k_from_ak(grad_ni, ni, lref) if norm_inputs else copy.deepcopy(grad_ni)
-    #     nia, nib = calc_2ion_ni_from_ni_and_quasineutrality(ni, zia, zib, ne, norm_inputs)
-    #     grad_nib = calc_grad_ni_from_gradient_quasineutrality(zia, zib, nia, nib, grad_ne_temp, grad_nia, ne, lref)
-    #     return grad_nia, grad_nib
+    def test_calc_2ion_ani_from_grad_ni_and_gradient_quasineutrality(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        lref = physical_2ion_plasma_state['r_minor_lcfs']
+        ne = physical_2ion_plasma_state['density_e']
+        grad_ne = physical_2ion_plasma_state['grad_density_e']
+        ni_test1 = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        ni_test2 = physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        grad_ni_test1 = physical_2ion_plasma_state['grad_density_i'].sel(ion='D', drop=True)
+        grad_ni_test2 = physical_2ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True)
+        zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        ania_test1, anib_test1 = pt.calc_2ion_ani_from_ani_and_gradient_quasineutrality(grad_ni_test1, zia, zib, grad_ne, ni_test1, ne=ne, lref=lref)
+        ania_test2, anib_test2 = pt.calc_2ion_ani_from_ani_and_gradient_quasineutrality(grad_ni_test2, zib, zia, grad_ne, ni_test2, ne=ne, lref=lref)
+        xr.testing.assert_allclose(ania_test1, dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(anib_test1, dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(ania_test2, dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(anib_test2, dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True))
 
-    # def calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(grad_ni, grad_zeff, zeff, zia, zib, zic, grad_ne, ni, ne, lref, norm_inputs=False):
-    #     grad_ne_temp = calc_grad_k_from_ak(grad_ne, ne, lref) if norm_inputs else copy.deepcopy(grad_ne)
-    #     grad_nia = calc_grad_k_from_ak(grad_ni, ni, lref) if norm_inputs else copy.deepcopy(grad_ni)
-    #     grad_zeff_temp = calc_grad_k_from_ak(grad_zeff, zeff, lref) if norm_inputs else copy.deepcopy(grad_zeff)
-    #     nia, nib, nic = calc_3ion_ni_from_ni_zeff_and_quasineutrality(ni, zeff, zia, zib, zic, ne, norm_inputs)
-    #     grad_nib = calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(grad_zeff_temp, zeff, zia, zic, zib, nia, nib, grad_ne_temp, grad_nia, ne, lref)
-    #     grad_nic = calc_grad_ni_from_gradient_quasineutrality(1.0, zic, ne, nic, grad_ne_temp, ne * (grad_nia * zia / nia + grad_nib * zib / nib), ne, lref)
-    #     return grad_nia, grad_nib, grad_nic
+    def test_calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(self, dimensionless_3ion_plasma_state):
+        ane = dimensionless_3ion_plasma_state['grad_density_e_norm']
+        ninorm_test1 = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninorm_test2 = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ani_test1 = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True)
+        ani_test2 = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        azeff = dimensionless_3ion_plasma_state['grad_effective_charge_norm']
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        ania_test1, anib_test1, anic_test1 = pt.calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(ani_test1, azeff, zeff, zia, zib, zic, ane, ninorm_test1, ne=None, lref=None)
+        ania_test2, anib_test2, anic_test2 = pt.calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(ani_test2, azeff, zeff, zib, zic, zia, ane, ninorm_test2, ne=None, lref=None)
+        xr.testing.assert_allclose(ania_test1, ani_test1)
+        xr.testing.assert_allclose(anib_test1, ani_test2)
+        xr.testing.assert_allclose(anic_test1, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(ania_test2, ani_test2)
+        xr.testing.assert_allclose(anib_test2, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(anic_test2, ani_test1)
 
-    # def calc_p_from_pnorm(pnorm, ne, te):
-    #     c = constants_si()
-    #     p = c['e'] * ne * te * pnorm
-    #     return p
+    def test_calc_3ion_ani_from_grad_ni_grad_zeff_and_gradient_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        lref = physical_3ion_plasma_state['r_minor_lcfs']
+        ne = physical_3ion_plasma_state['density_e']
+        grad_ne = physical_3ion_plasma_state['grad_density_e']
+        ni_test1 = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        ni_test2 = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        grad_ni_test1 = physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True)
+        grad_ni_test2 = physical_3ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        grad_zeff = dimensionless_3ion_plasma_state['grad_effective_charge']
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        ania_test1, anib_test1, anic_test1 = pt.calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(grad_ni_test1, grad_zeff, zeff, zia, zib, zic, grad_ne, ni_test1, ne=ne, lref=lref)
+        ania_test2, anib_test2, anic_test2 = pt.calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(grad_ni_test2, grad_zeff, zeff, zib, zic, zia, grad_ne, ni_test2, ne=ne, lref=lref)
+        xr.testing.assert_allclose(ania_test1, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(anib_test1, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(anic_test1, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(ania_test2, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(anib_test2, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(anic_test2, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True))
 
-    # def calc_pnorm_from_p(p, ne, te):
-    #     c= constants_si()
-    #     pnorm = p / (c['e'] * ne * te)
-    #     return pnorm
+    def test_calc_3ion_ani_from_ani_and_gradient_quasineutrality(self, dimensionless_3ion_plasma_state):
+        ane = dimensionless_3ion_plasma_state['grad_density_e_norm']
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ninormc = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True)
+        ania = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True)
+        anib = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True)
+        anic = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        ania_test1, anib_test1, anic_test1 = pt.calc_3ion_ani_from_ani_and_gradient_quasineutrality(ania, anib, zia, zib, zic, ane, ninorma, ninormb, ne=None, lref=None)
+        ania_test2, anib_test2, anic_test2 = pt.calc_3ion_ani_from_ani_and_gradient_quasineutrality(anib, anic, zib, zic, zia, ane, ninormb, ninormc, ne=None, lref=None)
+        xr.testing.assert_allclose(ania_test1, ania)
+        xr.testing.assert_allclose(anib_test1, anib)
+        xr.testing.assert_allclose(anic_test1, anic)
+        xr.testing.assert_allclose(ania_test2, anib)
+        xr.testing.assert_allclose(anib_test2, anic)
+        xr.testing.assert_allclose(anic_test2, ania)
 
-    # def calc_3ion_pnorm_with_3ions(ninorma, ninormb, ninormc, tinorma, tinormb, tinormc):
-    #     pnorm = 1.0 + ninorma * tinorma + ninormb * tinormb + ninormc * tinormc
-    #     return pnorm
+    def test_calc_3ion_ani_from_grad_ni_and_gradient_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        lref = physical_3ion_plasma_state['r_minor_lcfs']
+        ne = physical_3ion_plasma_state['density_e']
+        grad_ne = physical_3ion_plasma_state['grad_density_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        nic = physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True)
+        grad_nia = physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True)
+        grad_nib = physical_3ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True)
+        grad_nic = physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        ania_test1, anib_test1, anic_test1 = pt.calc_3ion_ani_from_ani_and_gradient_quasineutrality(grad_nia, grad_nib, zia, zib, zic, grad_ne, nia, nib, ne=ne, lref=lref)
+        ania_test2, anib_test2, anic_test2 = pt.calc_3ion_ani_from_ani_and_gradient_quasineutrality(grad_nib, grad_nic, zib, zic, zia, grad_ne, nib, nic, ne=ne, lref=lref)
+        xr.testing.assert_allclose(ania_test1, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(anib_test1, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(anic_test1, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(ania_test2, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(anib_test2, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(anic_test2, dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True))
 
-    # def calc_3ion_pnorm_with_2ions_and_quasineutrality(ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic):
-    #     ninormc = calc_ninorm_from_quasineutrality(zia, zib, zic, ninorma, ninormb)
-    #     pnorm = calc_3ion_pnorm_with_3ions(ninorma, ninormb, ninormc, tinorma, tinormb, tinormc)
-    #     return pnorm
+    def test_calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        lref = physical_3ion_plasma_state['r_minor_lcfs']
+        ne = physical_3ion_plasma_state['density_e']
+        grad_ne = physical_3ion_plasma_state['grad_density_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nic = physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True)
+        grad_nia = physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        grad_zeff = dimensionless_3ion_plasma_state['grad_effective_charge']
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        grad_nic = pt.calc_grad_ni_from_grad_zeff_and_gradient_quasineutrality(grad_zeff, zeff, zia, zib, zic, nia, nic, grad_nia, ne, grad_ne, lref)
+        xr.testing.assert_allclose(grad_nic, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True))
 
-    # def calc_3ion_pnorm_with_1ion_zeff_and_quasineutrality(ninorma, tinorma, tinormb, tinormc, zeff, zia, zib, zic):
-    #     ninorma_temp, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorma, zeff, zia, zib, zic)
-    #     pnorm = calc_3ion_pnorm_with_3ions(ninorma_temp, ninormb, ninormc, tinorma, tinormb, tinormc)
-    #     return pnorm
+    def test_calc_grad_ni_from_gradient_quasineutrality(self, physical_2ion_plasma_state):
+        lref = physical_2ion_plasma_state['r_minor_lcfs']
+        ne = physical_2ion_plasma_state['density_e']
+        grad_ne = physical_2ion_plasma_state['grad_density_e']
+        nia = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        grad_nia = physical_2ion_plasma_state['grad_density_i'].sel(ion='D', drop=True)
+        zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        grad_nib = pt.calc_grad_ni_from_gradient_quasineutrality(zia, zib, nia, nib, grad_nia, ne, grad_ne, lref)
+        xr.testing.assert_allclose(grad_nib, physical_2ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True))
 
-    # def calc_3ion_p_with_3ions(ne, nia, nib, nic, te, tia, tib, tic, norm_inputs=False):
-    #     p = 0.0 * ne
-    #     if norm_inputs:
-    #         pnorm = calc_3ion_pnorm_with_3ions(nia, nib, nic, tia, tib, tic)
-    #         p = calc_p_from_pnorm(pnorm, ne, te)
-    #     else:
-    #         p = ee * (ne * te + nia * tia + nib * tib + nic * tic)
-    #     logger.debug(f'<{calc_3ion_p_with_3ions.__name__}>: p\n{p}\n')
-    #     return p
+    def test_calc_2ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(self, physical_2ion_plasma_state):
+        lref = physical_2ion_plasma_state['r_minor_lcfs']
+        ne = physical_2ion_plasma_state['density_e']
+        grad_ne = physical_2ion_plasma_state['grad_density_e']
+        ni_test1 = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        ni_test2 = physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        grad_ni_test1 = physical_2ion_plasma_state['grad_density_i'].sel(ion='D', drop=True)
+        grad_ni_test2 = physical_2ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True)
+        zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        grad_nia_test1, grad_nib_test1 = pt.calc_2ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(grad_ni_test1, zia, zib, ni_test1, grad_ne, ne, lref, norm_inputs=False)
+        grad_nia_test2, grad_nib_test2 = pt.calc_2ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(grad_ni_test2, zib, zia, ni_test2, grad_ne, ne, lref, norm_inputs=False)
+        xr.testing.assert_allclose(grad_nia_test1, grad_ni_test1)
+        xr.testing.assert_allclose(grad_nib_test1, grad_ni_test2)
+        xr.testing.assert_allclose(grad_nia_test2, grad_ni_test2)
+        xr.testing.assert_allclose(grad_nib_test2, grad_ni_test1)
 
-    # def calc_3ion_p_with_2ions_and_quasineutrality(ne, nia, nib, te, tia, tib, tic, zia, zib, zic, norm_inputs=False):
-    #     nic = (
-    #         calc_ninorm_from_quasineutrality(zia, zib, zic, nia, nib)
-    #         if norm_inputs else
-    #         calc_ni_from_quasineutrality(zia, zib, zic, nia, nib, ne)
-    #     )
-    #     p = calc_3ion_p_with_3ions(ne, nia, nib, nic, te, tia, tib, tic, norm_inputs)
-    #     return p
+    def test_calc_2ion_grad_ni_from_ani_and_gradient_quasineutrality(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        lref = physical_2ion_plasma_state['r_minor_lcfs']
+        ne = physical_2ion_plasma_state['density_e']
+        ane = dimensionless_2ion_plasma_state['grad_density_e_norm']
+        ninorm_test1 = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninorm_test2 = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ani_test1 = dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True)
+        ani_test2 = dimensionless_2ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True)
+        zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        grad_nia_test1, grad_nib_test1 = pt.calc_2ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(ani_test1, zia, zib, ninorm_test1, ane, ne, lref, norm_inputs=True)
+        grad_nia_test2, grad_nib_test2 = pt.calc_2ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(ani_test2, zib, zia, ninorm_test2, ane, ne, lref, norm_inputs=True)
+        xr.testing.assert_allclose(grad_nia_test1, physical_2ion_plasma_state['grad_density_i'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(grad_nib_test1, physical_2ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(grad_nia_test2, physical_2ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(grad_nib_test2, physical_2ion_plasma_state['grad_density_i'].sel(ion='D', drop=True))
 
-    # def calc_3ion_p_with_1ion_zeff_and_quasineutrality(ne, nia, te, tia, tib, tic, zeff, zia, zib, zic, norm_inputs=False):
-    #     nia_temp, nib, nic = (
-    #         calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(nia, zeff, zia, zib, zic)
-    #         if norm_inputs else
-    #         calc_3ion_ni_from_ni_zeff_and_quasineutrality(nia, zeff, zia, zib, zic, ne)
-    #     )
-    #     p = calc_3ion_p_with_3ions(ne, nia_temp, nib, nic, te, tia, tib, tic, norm_inputs)
-    #     return p
+    def test_calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        lref = physical_3ion_plasma_state['r_minor_lcfs']
+        ne = physical_3ion_plasma_state['density_e']
+        grad_ne = physical_3ion_plasma_state['grad_density_e']
+        ni_test1 = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        ni_test2 = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        grad_ni_test1 = physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True)
+        grad_ni_test2 = physical_3ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        grad_zeff = dimensionless_3ion_plasma_state['grad_effective_charge']
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        grad_nia_test1, grad_nib_test1, grad_nic_test1 = pt.calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(grad_ni_test1, grad_zeff, zeff, zia, zib, zic, ni_test1, grad_ne, ne, lref, norm_inputs=False)
+        grad_nia_test2, grad_nib_test2, grad_nic_test2 = pt.calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(grad_ni_test2, grad_zeff, zeff, zib, zic, zia, ni_test2, grad_ne, ne, lref, norm_inputs=False)
+        xr.testing.assert_allclose(grad_nia_test1, grad_ni_test1)
+        xr.testing.assert_allclose(grad_nib_test1, grad_ni_test2)
+        xr.testing.assert_allclose(grad_nic_test1, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(grad_nia_test2, grad_ni_test2)
+        xr.testing.assert_allclose(grad_nib_test2, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(grad_nic_test2, grad_ni_test1)
 
-    # def calc_zeff_from_3ion_ni_with_3ions(ne, nia, nib, nic, zia, zib, zic, norm_inputs=False):
-    #     ninorma = copy.deepcopy(nia) if norm_inputs else calc_ninorm_from_ni(nia, ne)
-    #     ninormb = copy.deepcopy(nib) if norm_inputs else calc_ninorm_from_ni(nib, ne)
-    #     ninormc = copy.deepcopy(nic) if norm_inputs else calc_ninorm_from_ni(nic, ne)
-    #     zeff = ninorma * (zia ** 2) + ninormb * (zib ** 2) + ninormc * (zic ** 2)
-    #     return zeff
+    def test_calc_3ion_grad_ni_from_ani_azeff_and_gradient_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        lref = physical_3ion_plasma_state['r_minor_lcfs']
+        ne = physical_3ion_plasma_state['density_e']
+        ane = dimensionless_3ion_plasma_state['grad_density_e_norm']
+        ninorm_test1 = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninorm_test2 = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ani_test1 = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True)
+        ani_test2 = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        azeff = dimensionless_3ion_plasma_state['grad_effective_charge_norm']
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        grad_nia_test1, grad_nib_test1, grad_nic_test1 = pt.calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(ani_test1, azeff, zeff, zia, zib, zic, ninorm_test1, ane, ne, lref, norm_inputs=True)
+        grad_nia_test2, grad_nib_test2, grad_nic_test2 = pt.calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(ani_test2, azeff, zeff, zib, zic, zia, ninorm_test2, ane, ne, lref, norm_inputs=True)
+        xr.testing.assert_allclose(grad_nia_test1, physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(grad_nib_test1, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(grad_nic_test1, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(grad_nia_test2, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(grad_nib_test2, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(grad_nic_test2, physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True))
 
-    # def calc_zeff_from_3ion_ni_with_2ions_and_quasineutrality(ne, nia, nib, zia, zib, zic, norm_inputs=False):
-    #     nic = (
-    #         calc_ninorm_from_quasineutrality(zia, zib, zic, nia, nib)
-    #         if norm_inputs else
-    #         calc_ni_from_quasineutrality(zia, zib, zic, nia, nib, ne)
-    #     )
-    #     zeff = calc_zeff_from_3ion_ni_with_3ions(ne, nia, nib, nic, zia, zib, zic, norm_inputs)
-    #     return zeff
+    def test_calc_3ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(self, physical_3ion_plasma_state):
+        lref = physical_3ion_plasma_state['r_minor_lcfs']
+        ne = physical_3ion_plasma_state['density_e']
+        grad_ne = physical_3ion_plasma_state['grad_density_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        nic = physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True)
+        grad_nia = physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True)
+        grad_nib = physical_3ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True)
+        grad_nic = physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        grad_nia_test1, grad_nib_test1, grad_nic_test1 = pt.calc_3ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(grad_nia, grad_nib, zia, zib, zic, nia, nib, grad_ne, ne, lref, norm_inputs=False)
+        grad_nia_test2, grad_nib_test2, grad_nic_test2 = pt.calc_3ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(grad_nib, grad_nic, zib, zic, zia, nib, nic, grad_ne, ne, lref, norm_inputs=False)
+        xr.testing.assert_allclose(grad_nia_test1, grad_nia)
+        xr.testing.assert_allclose(grad_nib_test1, grad_nib)
+        xr.testing.assert_allclose(grad_nic_test1, grad_nic)
+        xr.testing.assert_allclose(grad_nia_test2, grad_nib)
+        xr.testing.assert_allclose(grad_nib_test2, grad_nic)
+        xr.testing.assert_allclose(grad_nic_test2, grad_nia)
+
+    def test_calc_3ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        lref = physical_3ion_plasma_state['r_minor_lcfs']
+        ne = physical_3ion_plasma_state['density_e']
+        ane = dimensionless_3ion_plasma_state['grad_density_e_norm']
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ninormc = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True)
+        ania = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='D', drop=True)
+        anib = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ne', drop=True)
+        anic = dimensionless_3ion_plasma_state['grad_density_i_norm'].sel(ion='Ar', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        grad_nia_test1, grad_nib_test1, grad_nic_test1 = pt.calc_3ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(ania, anib, zia, zib, zic, ninorma, ninormb, ane, ne, lref, norm_inputs=True)
+        grad_nia_test2, grad_nib_test2, grad_nic_test2 = pt.calc_3ion_grad_ni_from_grad_ni_and_gradient_quasineutrality(anib, anic, zib, zic, zia, ninormb, ninormc, ane, ne, lref, norm_inputs=True)
+        xr.testing.assert_allclose(grad_nia_test1, physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True))
+        xr.testing.assert_allclose(grad_nib_test1, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(grad_nic_test1, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(grad_nia_test2, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ne', drop=True))
+        xr.testing.assert_allclose(grad_nib_test2, physical_3ion_plasma_state['grad_density_i'].sel(ion='Ar', drop=True))
+        xr.testing.assert_allclose(grad_nic_test2, physical_3ion_plasma_state['grad_density_i'].sel(ion='D', drop=True))
+
+    def test_calc_p_from_pnorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        pnorm = (dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sel(ion='D', drop=True)
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        p = pt.calc_p_from_pnorm(pnorm, ne, te)
+        xr.testing.assert_allclose(p, pt.e_si * (physical_2ion_plasma_state['density_i'] * physical_2ion_plasma_state['temperature_i']).sel(ion='D', drop=True))
+
+    def test_calc_pnorm_from_p(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        p = pt.e_si * (physical_2ion_plasma_state['density_i'] * physical_2ion_plasma_state['temperature_i']).sel(ion='D', drop=True)
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        pnorm = pt.calc_pnorm_from_p(p, ne, te)
+        xr.testing.assert_allclose(pnorm, (dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sel(ion='D', drop=True))
+
+    def test_calc_2ion_pnorm_with_2ions_norm(self, dimensionless_2ion_plasma_state):
+        ninorma = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        tinorma = dimensionless_2ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_2ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        pnorm = pt.calc_2ion_pnorm_with_2ions(ninorma, ninormb, tinorma, tinormb, ne=None, te=None)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_2ion_pnorm_with_2ions_unnorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        nia = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        tia = physical_2ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_2ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        pnorm = pt.calc_2ion_pnorm_with_2ions(nia, nib, tia, tib, ne=ne, te=te)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_2ion_pnorm_with_1ion_and_quasineutrality_norm(self, dimensionless_2ion_plasma_state):
+        ninorma = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        tinorma = dimensionless_2ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_2ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        pnorm = pt.calc_2ion_pnorm_with_1ion_and_quasineutrality(ninorma, tinorma, tinormb, zia, zib, ne=None, te=None)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_2ion_pnorm_with_1ion_and_quasineutrality_unnorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        nia = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        tia = physical_2ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_2ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        pnorm = pt.calc_2ion_pnorm_with_1ion_and_quasineutrality(nia, tia, tib, zia, zib, ne=ne, te=te)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_3ion_pnorm_with_3ions_norm(self, dimensionless_3ion_plasma_state):
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ninormc = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True)
+        tinorma = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        tinormc = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ar', drop=True)
+        pnorm = pt.calc_3ion_pnorm_with_3ions(ninorma, ninormb, ninormc, tinorma, tinormb, tinormc)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_3ion_plasma_state['density_i_norm'] * dimensionless_3ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_3ion_pnorm_with_3ions_unnorm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        nic = physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True)
+        tia = physical_3ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_3ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        tic = physical_3ion_plasma_state['temperature_i'].sel(ion='Ar', drop=True)
+        pnorm = pt.calc_3ion_pnorm_with_3ions(nia, nib, nic, tia, tib, tic, ne=ne, te=te)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_3ion_plasma_state['density_i_norm'] * dimensionless_3ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_3ion_pnorm_with_2ions_and_quasineutrality_norm(self, dimensionless_3ion_plasma_state):
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        tinorma = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        tinormc = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ar', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        pnorm = pt.calc_3ion_pnorm_with_2ions_and_quasineutrality(ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_3ion_plasma_state['density_i_norm'] * dimensionless_3ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_3ion_pnorm_with_2ions_and_quasineutrality_unnorm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        tia = physical_3ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_3ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        tic = physical_3ion_plasma_state['temperature_i'].sel(ion='Ar', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        pnorm = pt.calc_3ion_pnorm_with_2ions_and_quasineutrality(nia, nib, tia, tib, tic, zia, zib, zic, ne=ne, te=te)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_3ion_plasma_state['density_i_norm'] * dimensionless_3ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_3ion_pnorm_with_1ion_zeff_and_quasineutrality_norm(self, dimensionless_3ion_plasma_state):
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        tinorma = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        tinormc = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ar', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        pnorm = pt.calc_3ion_pnorm_with_1ion_zeff_and_quasineutrality(ninorma, tinorma, tinormb, tinormc, zeff, zia, zib, zic)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_3ion_plasma_state['density_i_norm'] * dimensionless_3ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_3ion_pnorm_with_1ion_zeff_and_quasineutrality_unnorm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        tia = physical_3ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_3ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        tic = physical_3ion_plasma_state['temperature_i'].sel(ion='Ar', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        pnorm = pt.calc_3ion_pnorm_with_1ion_zeff_and_quasineutrality(nia, tia, tib, tic, zeff, zia, zib, zic, ne=ne, te=te)
+        xr.testing.assert_allclose(pnorm, 1.0 + (dimensionless_3ion_plasma_state['density_i_norm'] * dimensionless_3ion_plasma_state['temperature_i_norm']).sum('ion'))
+
+    def test_calc_2ion_p_with_2ions_unnorm(self, physical_2ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        nia = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        tia = physical_2ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_2ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        p = pt.calc_2ion_p_with_2ions(nia, nib, tia, tib, ne, te, norm_inputs=False)
+        xr.testing.assert_allclose(p, c['e'] * (physical_2ion_plasma_state['density_e'] * physical_2ion_plasma_state['temperature_e'] + (physical_2ion_plasma_state['density_i'] * physical_2ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_2ion_p_with_2ions_norm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        ninorma = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        tinorma = dimensionless_2ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_2ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        p = pt.calc_2ion_p_with_2ions(ninorma, ninormb, tinorma, tinormb, ne, te, norm_inputs=True)
+        xr.testing.assert_allclose(p, c['e'] * (physical_2ion_plasma_state['density_e'] * physical_2ion_plasma_state['temperature_e'] + (physical_2ion_plasma_state['density_i'] * physical_2ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_2ion_p_with_1ion_and_quasineutrality_unnorm(self, physical_2ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        nia = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        tia = physical_2ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_2ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        p = pt.calc_2ion_p_with_1ion_and_quasineutrality(nia, tia, tib, zia, zib, ne, te, norm_inputs=False)
+        xr.testing.assert_allclose(p, c['e'] * (physical_2ion_plasma_state['density_e'] * physical_2ion_plasma_state['temperature_e'] + (physical_2ion_plasma_state['density_i'] * physical_2ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_2ion_p_with_1ion_and_quasineutrality_norm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        ninorma = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        tinorma = dimensionless_2ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_2ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        p = pt.calc_2ion_p_with_1ion_and_quasineutrality(ninorma, tinorma, tinormb, zia, zib, ne, te, norm_inputs=True)
+        xr.testing.assert_allclose(p, c['e'] * (physical_2ion_plasma_state['density_e'] * physical_2ion_plasma_state['temperature_e'] + (physical_2ion_plasma_state['density_i'] * physical_2ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_3ion_p_with_3ions_unnorm(self, physical_3ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        nic = physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True)
+        tia = physical_3ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_3ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        tic = physical_3ion_plasma_state['temperature_i'].sel(ion='Ar', drop=True)
+        p = pt.calc_3ion_p_with_3ions(nia, nib, nic, tia, tib, tic, ne, te, norm_inputs=False)
+        xr.testing.assert_allclose(p, c['e'] * (physical_3ion_plasma_state['density_e'] * physical_3ion_plasma_state['temperature_e'] + (physical_3ion_plasma_state['density_i'] * physical_3ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_3ion_p_with_3ions_norm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        ninormc = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ar', drop=True)
+        tinorma = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        tinormc = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ar', drop=True)
+        p = pt.calc_3ion_p_with_3ions(ninorma, ninormb, ninormc, tinorma, tinormb, tinormc, ne, te, norm_inputs=True)
+        xr.testing.assert_allclose(p, c['e'] * (physical_3ion_plasma_state['density_e'] * physical_3ion_plasma_state['temperature_e'] + (physical_3ion_plasma_state['density_i'] * physical_3ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_3ion_p_with_2ions_and_quasineutrality_unnorm(self, physical_3ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        tia = physical_3ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_3ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        tic = physical_3ion_plasma_state['temperature_i'].sel(ion='Ar', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        p = pt.calc_3ion_p_with_2ions_and_quasineutrality(nia, nib, tia, tib, tic, zia, zib, zic, ne, te, norm_inputs=False)
+        xr.testing.assert_allclose(p, c['e'] * (physical_3ion_plasma_state['density_e'] * physical_3ion_plasma_state['temperature_e'] + (physical_3ion_plasma_state['density_i'] * physical_3ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_3ion_p_with_2ions_and_quasineutrality_norm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        tinorma = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        tinormc = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ar', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        p = pt.calc_3ion_p_with_2ions_and_quasineutrality(ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic, ne, te, norm_inputs=True)
+        xr.testing.assert_allclose(p, c['e'] * (physical_3ion_plasma_state['density_e'] * physical_3ion_plasma_state['temperature_e'] + (physical_3ion_plasma_state['density_i'] * physical_3ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_3ion_p_with_1ion_zeff_and_quasineutrality_unnorm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        tia = physical_3ion_plasma_state['temperature_i'].sel(ion='D', drop=True)
+        tib = physical_3ion_plasma_state['temperature_i'].sel(ion='Ne', drop=True)
+        tic = physical_3ion_plasma_state['temperature_i'].sel(ion='Ar', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        p = pt.calc_3ion_p_with_1ion_zeff_and_quasineutrality(nia, tia, tib, tic, zeff, zia, zib, zic, ne, te, norm_inputs=False)
+        xr.testing.assert_allclose(p, c['e'] * (physical_3ion_plasma_state['density_e'] * physical_3ion_plasma_state['temperature_e'] + (physical_3ion_plasma_state['density_i'] * physical_3ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_3ion_p_with_1ion_zeff_and_quasineutrality_norm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_3ion_plasma_state['density_e']
+        te = physical_3ion_plasma_state['temperature_e']
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        tinorma = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='D', drop=True)
+        tinormb = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ne', drop=True)
+        tinormc = dimensionless_3ion_plasma_state['temperature_i_norm'].sel(ion='Ar', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        zeff = dimensionless_3ion_plasma_state['effective_charge']
+        p = pt.calc_3ion_p_with_1ion_zeff_and_quasineutrality(ninorma, tinorma, tinormb, tinormc, zeff, zia, zib, zic, ne, te, norm_inputs=True)
+        xr.testing.assert_allclose(p, c['e'] * (physical_3ion_plasma_state['density_e'] * physical_3ion_plasma_state['temperature_e'] + (physical_3ion_plasma_state['density_i'] * physical_3ion_plasma_state['temperature_i']).sum('ion')))
+
+    def test_calc_zeff_from_2ion_ni_with_2ions_unnorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        nia = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_2ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zeff = pt.calc_zeff_from_2ion_ni_with_2ions(nia, nib, zia, zib, ne=ne)
+        xr.testing.assert_allclose(zeff, dimensionless_2ion_plasma_state['effective_charge'])
+
+    def test_calc_zeff_from_2ion_ni_with_2ions_norm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ninorma = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zeff = pt.calc_zeff_from_2ion_ni_with_2ions(ninorma, ninormb, zia, zib, ne=None)
+        xr.testing.assert_allclose(zeff, dimensionless_2ion_plasma_state['effective_charge'])
+
+    def test_calc_zeff_from_2ion_ni_with_1ion_and_quasineutrality_unnorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        nia = physical_2ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        zia = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zeff = pt.calc_zeff_from_2ion_ni_with_1ion_and_quasineutrality(nia, zia, zib, ne=ne)
+        xr.testing.assert_allclose(zeff, dimensionless_2ion_plasma_state['effective_charge'])
+
+    def test_calc_zeff_from_2ion_ni_with_1ion_and_quasineutrality_norm(self, dimensionless_2ion_plasma_state):
+        ninorma = dimensionless_2ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        zia = dimensionless_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_2ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zeff = pt.calc_zeff_from_2ion_ni_with_1ion_and_quasineutrality(ninorma, zia, zib, ne=None)
+        xr.testing.assert_allclose(zeff, dimensionless_2ion_plasma_state['effective_charge'])
+
+    def test_calc_zeff_from_3ion_ni_with_3ions_unnorm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        nic = physical_3ion_plasma_state['density_i'].sel(ion='Ar', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        zeff = pt.calc_zeff_from_3ion_ni_with_3ions(nia, nib, nic, zia, zib, zic, ne=ne)
+        xr.testing.assert_allclose(zeff, dimensionless_3ion_plasma_state['effective_charge'])
+
+    def test_calc_zeff_from_3ion_ni_with_2ions_and_quasineutrality_unnorm(self, physical_3ion_plasma_state, dimensionless_3ion_plasma_state):
+        ne = physical_3ion_plasma_state['density_e']
+        nia = physical_3ion_plasma_state['density_i'].sel(ion='D', drop=True)
+        nib = physical_3ion_plasma_state['density_i'].sel(ion='Ne', drop=True)
+        zia = physical_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = physical_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = physical_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        zeff = pt.calc_zeff_from_3ion_ni_with_2ions_and_quasineutrality(nia, nib, zia, zib, zic, ne=ne)
+        xr.testing.assert_allclose(zeff, dimensionless_3ion_plasma_state['effective_charge'])
+
+    def test_calc_zeff_from_3ion_ni_with_2ions_and_quasineutrality_norm(self, dimensionless_3ion_plasma_state):
+        ninorma = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='D', drop=True)
+        ninormb = dimensionless_3ion_plasma_state['density_i_norm'].sel(ion='Ne', drop=True)
+        zia = dimensionless_3ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zib = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ne', drop=True)
+        zic = dimensionless_3ion_plasma_state['charge_i'].sel(ion='Ar', drop=True)
+        zeff = pt.calc_zeff_from_3ion_ni_with_2ions_and_quasineutrality(ninorma, ninormb, zia, zib, zic, ne=None)
+        xr.testing.assert_allclose(zeff, dimensionless_3ion_plasma_state['effective_charge'])
 
     # def calc_grad_p_from_ap(ap, ne, te, lref):
     #     c = constants_si()
