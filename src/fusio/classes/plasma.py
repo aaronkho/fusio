@@ -8,8 +8,9 @@ import numpy as np
 import xarray as xr
 
 import datetime
-from scipy.integrate import cumulative_simpson  # type: ignore[import-untyped]
+from scipy.integrate import quad, cumulative_simpson  # type: ignore[import-untyped]
 from .io import io
+from ..utils.plasma_tools import define_ion_species
 
 logger = logging.getLogger('fusio')
 
@@ -18,6 +19,8 @@ class plasma_io(io):
 
 
     basevars: Final[Sequence[str]] = [
+        'atomic_number_i',
+        'type_i',
         'mass_e',
         'mass_i',
         'charge_e',
@@ -62,6 +65,14 @@ class plasma_io(io):
         'current_source': 'A/m^2',
         'heat_exchange_ei': 'W/m^3',
         'contour': 'm',
+    }
+    constants: Final[Mapping[str, float]] = {
+        'e_si': 1.60218e-19,  # C
+        'u_si': 1.66054e-27,  # kg
+        'eps_si': 8.85419e-12,  # F/m
+        'mu_si': 4.0e-7 * np.pi,  # H/m
+        'atm_si': 1.01325e5,  # Pa
+        'me_si': 5.4858e-4 * 1.66054e-27,  # kg
     }
     directions: Final[Sequence[str]] = [
         'toroidal',
@@ -175,179 +186,257 @@ class plasma_io(io):
                     self.update_output_data_vars(newvars)
 
 
+    def interpolate(
+        self,
+        v: float | NDArray,
+        xvar: str,
+        yvar: str,
+        cvar: str,
+        extrapolate: bool = False,
+        side: str = 'input',
+    ) -> NDArray:
+        data = self.input if side == 'input' else self.output
+        if xvar in data and yvar in data and cvar in data[f'{xvar}'].dims and cvar in data[f'{yvar}'].dims:
+            idim_y = data[f'{yvar}'].dims.index(cvar)
+            dimlist = [f'{v}' for v in data[f'{yvar}'].dims if f'{v}' != f'{cvar}'] + [f'{cvar}']
+            newxdims = {f'{v}': data[f'{v}'].to_numpy() for v in dimlist if v not in data[f'{xvar}'].dims}
+            x = data[f'{xvar}'].expand_dims(newxdims).transpose(dimlist).to_numpy()
+            y = data[f'{yvar}'].transpose(dimlist).to_numpy()
+            outdims = [i for i in range(len(dimlist) - 1)].insert(idim_y, len(dimlist) - 1)
+            return np.transpose(self._vectorized_numpy_interpolation(v, x, y, extrapolate=extrapolate), axes=outdims)
+        else:
+            logger.error(f'Invalid variable names given to {self.format} interpolate function! Aborting interpolation...')
+
+
+    def _vectorized_numpy_derivative(
+        self,
+        x: NDArray,
+        y: NDArray,
+    ) -> NDArray:
+        deriv = np.zeros_like(x)
+        if x.shape[-1] > 2:
+            x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
+            x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
+            x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
+            y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
+            y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
+            y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
+            deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
+        elif x.shape[-1] > 1:
+            deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
+            deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
+        return deriv
+
+
+    def _vectorized_numpy_integration(
+        self,
+        y: NDArray,
+        x: NDArray,
+    ) -> NDArray:
+        return cumulative_simpson(y, x=x, initial=0.0)
+
+
+    def _vectorized_numpy_interpolation(
+        self,
+        v: float | NDArray,
+        x: NDArray,
+        y: NDArray,
+        extrapolate: bool = False,
+    ) -> NDArray:
+        vm = np.array([v]) if isinstance(v, float) else copy.deepcopy(v)
+        xm = x.reshape(-1, x.shape[-1])
+        ym = y.reshape(-1, y.shape[-1])
+        if vm.shape[0] != xm.shape[0]:
+            vm = np.repeat(np.expand_dims(vm, axis=0), xm.shape[0], axis=0)
+        interp = np.zeros_like(vm)
+        for i in range(xm.shape[0]):
+            interp[i] = np.interp(vm[i], xm[i], ym[i])
+            um = vm[i] > np.nanmax(xm[i])
+            if np.any(um) and extrapolate:
+                s = (ym[i, -1] - ym[i, -2]) / (xm[i, -1] - xm[i, -2])
+                interp[i][um] = ym[i, -1] + s * (vm[i][um] - xm[i, -1])
+            lm = vm[i] < np.nanmin(xm[i])
+            if np.any(lm) and extrapolate:
+                s = (ym[i, 0] - ym[i, 1]) / (xm[i, 0] - xm[i, 1])
+                interp[i][um] = ym[i, 0] + s * (vm[i][um] - xm[i, 0])
+        interp = interp.reshape(*y.shape[:-1])
+        return interp
+
+
+    def _vectorized_numpy_find(
+        self,
+        v: float | NDArray,
+        x: NDArray,
+        y: NDArray,
+        last: bool = False,
+    ) -> NDArray:
+        xm = x.reshape(-1, x.shape[-1])
+        ym = y.reshape(-1, y.shape[-1])
+        found = np.full((xm.shape[0], ), np.nan)
+        for i in range(xm.shape[0]):
+            yidx = np.where(((ym[i] - v)[1:] * (ym[i] - v)[:-1]) < 0.0)[0]
+            if len(yidx) > 0:
+                yi = yidx[-1] if last else yidx[0]
+                found[i] = (v - ym[i, yi]) * (xm[i, yi + 1] - xm[i, yi]) / (ym[i, yi + 1] - ym[i, yi])
+        found = found.reshape(*y.shape[:-1])
+        return found
+
+
     def _compute_derived_coordinates(
         self,
     ) -> None:
-        data = self.input
         newvars: MutableMapping[str, Any] = {}
-        if 'rho' in data:
-            if 'rmin' in data:
-                a = data['rmin'].isel(rho=-1)
-                newvars['a'] = (['n'], a.to_numpy())
-                newvars['roa'] = (['n', 'rho'], (data['rmin'] / a).to_numpy())
-                if 'rmaj' in data:
-                    newvars['aspect_local'] = (['n', 'rho'], (data['rmaj'] / data['rmin']).to_numpy())
-                    newvars['aspect'] = (['n'], (data['rmaj'] / data['rmin']).isel(rho=-1).to_numpy())
-                    newvars['eps_local'] = (['n', 'rho'], (data['rmin'] / data['rmaj']).to_numpy())
-                    newvars['eps'] = (['n'], (data['rmin'] / data['rmaj']).isel(rho=-1).to_numpy())
-                    newvars['rmajoa'] = (['n', 'rho'], (data['rmaj'] / a).to_numpy())
-                if 'zmag' in data:
-                    newvars['zmagoa'] = (['n', 'rho'], (data['zmag'] / a).to_numpy())
-            if 'torfluxa' in data:
-                torflux = 2.0 * np.pi * data['torfluxa'] * data['rho'] ** 2
-                newvars['torflux'] = (['n', 'rho'], torflux.to_numpy())
-                newvars['psi_tor_norm'] = (['n', 'rho'], (torflux / torflux.isel(rho=-1)).to_numpy())
-                newvars['rho_tor'] = (['n', 'rho'], np.sqrt((torflux / torflux.isel(rho=-1)).to_numpy()))
-            if 'polflux' in data:
-                polfluxn = (data['polflux'] - data['polflux'].isel(rho=0)) / (data['polflux'].isel(rho=-1) - data['polflux'].isel(rho=0))
-                newvars['psi_pol_norm'] = (['n', 'rho'], polfluxn.to_numpy())
-                newvars['rho_pol'] = (['n', 'rho'], np.sqrt(polfluxn.to_numpy()))
+        if self.has_input:
+            data = self.input
+            r_minor_lcfs = data['r_minor'].interp(coords={'radius': 1.0}, kwargs={'fill_value': 'extrapolate'})
+            r_geometric_lcfs = data['r_geometric'].interp(coords={'radius': 1.0}, kwargs={'fill_value': 'extrapolate'})
+            z_geometric_lcfs = data['z_geometric'].interp(coords={'radius': 1.0}, kwargs={'fill_value': 'extrapolate'})
+            magnetic_flux_lcfs = data['magnetic_flux'].interp(coords={'radius': 1.0}, kwargs={'fill_value': 'extrapolate'})
+            newvars['r_minor_lcfs'] = (['time'], r_minor_lcfs.to_numpy())
+            newvars['r_geometric_lcfs'] = (['time'], r_geometric_lcfs.to_numpy())
+            newvars['z_geometric_lcfs'] = (['time'], z_geometric_lcfs.to_numpy())
+            newvars['r_minor_norm'] = (['time', 'radius'], (data['r_minor'] / r_minor_lcfs).to_numpy())
+            newvars['r_geometric_norm'] = (['time', 'radius'], (data['r_geometric'] / r_minor_lcfs).to_numpy())
+            newvars['r_geometric_norm_lcfs'] = (['time'], (r_geometric_lcfs / r_minor_lcfs).to_numpy())
+            newvars['z_geometric_norm'] = (['time', 'radius'], (data['z_geometric'] / r_minor_lcfs).to_numpy())
+            newvars['z_geometric_norm_lcfs'] = (['time'], (z_geometric_lcfs / r_minor_lcfs).to_numpy())
+            newvars['aspect_ratio'] = (['time', 'radius'], (data['r_geometric'] / data['r_minor']).to_numpy())
+            newvars['aspect_ratio_lcfs'] = (['time'], (r_geometric_lcfs / r_minor_lcfs).to_numpy())
+            newvars['epsilon'] = (['time', 'radius'], (data['r_minor'] / data['r_geometric']).to_numpy())
+            newvars['epsilon_lcfs'] = (['time'], (r_minor_lcfs / r_geometric_lcfs).to_numpy())
+            newvars['magnetic_flux_norm'] = (['time', 'radius', 'direction'], (data['magnetic_flux'] / magnetic_flux_lcfs).to_numpy())
+            newvars['rho'] = (['time', 'radius', 'direction'], ((data['magnetic_flux'] / (0.5 * data['field_axis'])) ** 0.5).to_numpy())
+            newvars['rho_norm'] = (['time', 'radius', 'direction'], ((data['magnetic_flux'] / magnetic_flux_lcfs) ** 0.5).to_numpy())
+            contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
+            contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
+            xs_area = np.trapezoid(contour_r, contour_z, axis=-1)
+            vol = 2.0 * np.pi * data['r_geometric'].to_numpy() * xs_area
+            volp = self._vectorized_numpy_derivative(data['r_minor'].to_numpy(), vol)
+            newvars['cross_sectional_area'] = (['time', 'radius'], xs_area)
+            newvars['volume'] = (['time', 'radius'], vol)
+            newvars['dvolume_dr'] = (['time', 'radius'], volp)
         self.update_input_data_vars(newvars)
 
 
     def _compute_derived_reference_quantities(
         self,
     ) -> None:
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if x.shape[-1] > 2:
-                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
-                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
-                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
-                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
-                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
-                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif x.shape[-1] > 1:
-                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-            return deriv
-        e_si = 1.60218e-19  # C
-        u_si = 1.66054e-27  # kg
-        data = self.input
-        newvars = {}
-        if 'rho' in data:
-            mref = data.get('mref', xr.zeros_like(data['n']) + 2.0).to_numpy()
-            if 'mref' not in data:
-                newvars['mref'] = (['n'], mref)
-            if 'rmin' in data and 'torflux' in data:
-                bunit = derivative(0.5 * data['rmin'].to_numpy() ** 2, data['torflux'].to_numpy() / (2.0 * np.pi))
-                newvars['b_unit'] = (['n', 'rho'], bunit)
-            if 'te' in data:
-                newvars['c_s'] = (['n', 'rho'], (1.0e3 * e_si * data['te'].to_numpy() / (u_si * mref)) ** (0.5))
-                if 'b_unit' in newvars:
-                    newvars['rho_s_unit'] = (['n', 'rho'], (1.0e3 * data['te'].to_numpy() * u_si * mref / e_si) ** (0.5) / np.abs(newvars['b_unit'][-1]))
-                if 'masse' in data:
-                    newvars['c_the'] = (['n', 'rho'], ((2.0 * 1.0e3 * e_si * data['te'] / (u_si * data['masse'])) ** (0.5)).to_numpy())
-            if 'ti' in data and 'masse' in data:
-                newvars['c_thi'] = (['n', 'rho', 'name'], ((2.0 * 1.0e3 * e_si * data['ti'] / (u_si * data['mass'])) ** (0.5)).to_numpy())
-            if 'rcentr' in data:
-                newvars['rgeo'] = (['n'], data['rcentr'].to_numpy())
-            if 'bcentr' in data:
-                newvars['b_zero'] = (['n'], np.abs(data['bcentr'].to_numpy()))
+        newvars: MutableMapping[str, Any] = {}
+        if self.has_input:
+            data = self.input
+            main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
+            main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
+            n_i_vol = self._vectorized_numpy_integration(
+                np.transpose((data['density_i'].isel(ion=main_species) * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(main_species), axis=1)
+            )
+            mass_ave = np.sum((data['mass_i'].isel(ion=main_species).to_numpy() * n_i_vol[..., -1] / np.expand_dims(np.sum(n_i_vol[..., -1], axis=1), axis=1)), axis=-1)
+            mass_ref = data.get('mass_ref', xr.zeros_like(data['time']) + 2.0)
+            length_ref = data.get('length_ref', xr.zeros_like(data['time']) + data['r_minor_lcfs'])
+            field_unit = self._vectorized_numpy_derivative(0.5 * data['r_minor'].to_numpy() ** 2, data['magnetic_flux'].sel(direction='toroidal').to_numpy() / (2.0 * np.pi))
+            safety_factor = self._vectorized_numpy_derivative(data['magnetic_flux'].sel(direction='toroidal').to_numpy(), data['magnetic_flux'].sel(direction='poloidal').to_numpy())
+            safety_factor[..., 0] = 2.0 * safety_factor[..., 1] - safety_factor[..., 2]
+            newvars['mass_ref'] = (['time'], mass_ref.to_numpy())
+            newvars['mass_main_average'] = (['time'], mass_ave)
+            newvars['length_ref'] = (['time'], length_ref.to_numpy())
+            newvars['field_unit'] = (['time', 'radius'], field_unit)
+            newvars['velocity_sound_ref'] = (['time', 'radius'], ((self.constants['e_si'] * data['temperature_e'] / (self.constants['u_si'] * mass_ref)) ** 0.5).to_numpy())
+            newvars['velocity_sound_i'] = (['time', 'radius', 'ion'], ((self.constants['e_si'] * data['temperature_e'] / (self.constants['u_si'] * data['mass_i'])) ** 0.5).to_numpy())
+            newvars['gyroradius_ref_unit'] = (['time', 'radius'], ((data['temperature_e'] * self.constants['u_si'] * mass_ref / self.constants['e_si']) ** 0.5).to_numpy() / np.abs(field_unit))
+            newvars['velocity_thermal_e'] = (['time', 'radius'], ((2.0 * self.constants['e_si'] * data['temperature_e'] / (self.constants['u_si'] * data['mass_e'])) ** 0.5).to_numpy())
+            newvars['velocity_thermal_i'] = (['time', 'radius', 'ion'], ((2.0 * self.constants['e_si'] * data['temperature_i'] / (self.constants['u_si'] * data['mass_i'])) ** 0.5).to_numpy())
+            newvars['safety_factor'] = (['time', 'radius'], safety_factor)
+            newvars['magnetic_shear'] = (['time', 'radius'], (data['r_minor'].to_numpy() / safety_factor) * self._vectorized_numpy_derivative(data['r_minor'].to_numpy(), safety_factor))
+            #newvars['dqdr'] = (['n', 'rho'], self._vectorized_numpy_derivative(data['r_minor'].to_numpy(), data['q'].to_numpy()))
         self.update_input_data_vars(newvars)
 
 
     def _compute_derived_geometry(
         self,
     ) -> None:
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if x.shape[-1] > 2:
-                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
-                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
-                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
-                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
-                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
-                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif x.shape[-1] > 1:
-                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-            return deriv
-        data = self.input
+        newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
-        if 'roa' in data:
+        if self.has_input:
+            data = self.input
+            n_coeffs = 7
+            contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
+            contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
+            mxh_r0 = (np.nanmax(contour_r, axis=-1) + np.nanmin(contour_r, axis=-1)) / 2.0
+            mxh_dr0 = self._vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_r0)
+            mxh_z0 = (np.nanmax(contour_z, axis=-1) + np.nanmin(contour_z, axis=-1)) / 2.0
+            mxh_dz0 = self._vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_z0)
+            mxh_r = (np.nanmax(contour_r, axis=-1) - np.nanmin(contour_r, axis=-1)) / 2.0
+            mxh_kappa = (np.nanmax(contour_z, axis=-1) - np.nanmin(contour_z, axis=-1)) / (2.0 * mxh_r)
+            mxh_s_kappa = data['r_minor_norm'].to_numpy() / mxh_kappa * self._vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_kappa)
+            r_norm = (contour_r - np.expand_dims(mxh_r0, axis=-1)) / np.expand_dims(mxh_r, axis=-1)
+            r_norm = np.where(r_norm > 1.0, 1.0, np.where(r_norm < -1.0, -1.0, r_norm))
+            z_norm = (contour_z - np.expand_dims(mxh_z0, axis=-1)) / np.expand_dims(mxh_kappa * mxh_r, axis=-1)
+            z_norm = np.where(z_norm > 1.0, 1.0, np.where(z_norm < -1.0, -1.0, z_norm))
+            angle_r_norm = np.where(z_norm[..., :-1] < 0.0, 2.0 * np.pi - np.arccos(r_norm[..., :-1]), np.arccos(r_norm[..., :-1]))
+            angle_r_norm = np.concatenate([angle_r_norm, np.expand_dims(angle_r_norm[..., 0], axis=-1) + 2.0 * np.pi], axis=-1)
+            angle_z_norm = np.where(r_norm[..., :-1] < 0.0, np.pi - np.arcsin(z_norm[..., :-1]), np.arcsin(z_norm[..., :-1]))
+            angle_z_norm = np.where(angle_z_norm < 0.0, 2.0 * np.pi + angle_z_norm, angle_z_norm)
+            angle_z_norm = np.concatenate([angle_z_norm, np.expand_dims(angle_z_norm[..., 0], axis=-1) + 2.0 * np.pi], axis=-1)
+            mxh_sin = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
+            mxh_cos = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
+            for i in range(n_coeffs):
+                sint_func = lambda angle_z, angle_r: quad(np.interp, 0.0, 2.0 * np.pi, weight='sin', wvar=i, args=(angle_z, angle_r - angle_z))[0]
+                sint_vfunc = np.vectorize(sint_func, signature='(n),(n)->()')
+                cint_func = lambda angle_z, angle_r: quad(np.interp, 0.0, 2.0 * np.pi, weight='cos', wvar=i, args=(angle_z, angle_r - angle_z))[0]
+                cint_vfunc = np.vectorize(cint_func, signature='(n),(n)->()')
+                mxh_sin[..., i] = sint_vfunc(angle_z_norm, angle_r_norm) / np.pi
+                mxh_cos[..., i] = cint_vfunc(angle_z_norm, angle_r_norm) / np.pi
+            mxh_cos[..., 0] = mxh_cos[..., 0] / 2.0
+            mxh_sin[:, 0, :] = 2.0 * mxh_sin[:, 1, :] - mxh_sin[:, 2, :]
+            mxh_cos[:, 0, :] = 2.0 * mxh_cos[:, 1, :] - mxh_cos[:, 2, :]
+            mxh_s_sin = np.expand_dims(data['r_minor_norm'].to_numpy(), axis=-1) * np.transpose(self._vectorized_numpy_derivative(
+                np.transpose(np.repeat(np.expand_dims(data['r_minor_norm'].to_numpy(), axis=-1), n_coeffs, axis=-1), axes=(0, 2, 1)),
+                np.transpose(mxh_sin, axes=(0, 2, 1))
+            ), axes=(0, 2, 1))
+            mxh_s_cos = np.expand_dims(data['r_minor_norm'].to_numpy(), axis=-1) * np.transpose(self._vectorized_numpy_derivative(
+                np.transpose(np.repeat(np.expand_dims(data['r_minor_norm'].to_numpy(), axis=-1), n_coeffs, axis=-1), axes=(0, 2, 1)),
+                np.transpose(mxh_cos, axes=(0, 2, 1))
+            ), axes=(0, 2, 1))
+            mxh_delta = np.sin(mxh_sin[..., 1])
+            mxh_s_delta = data['r_minor_norm'].to_numpy() * self._vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_delta)
+            mxh_zeta = -mxh_sin[..., 2]
+            mxh_s_zeta = data['r_minor_norm'].to_numpy() * self._vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_zeta)
+            newcoords['mxh_coefficient'] = np.arange(n_coeffs)
+            newvars['mxh_r0'] = (['time', 'radius'], mxh_r0)
+            newvars['mxh_dr0'] = (['time', 'radius'], np.where(np.isclose(mxh_dr0, 0.0), 0.0, mxh_dr0))
+            newvars['mxh_z0'] = (['time', 'radius'], mxh_z0)
+            newvars['mxh_dz0'] = (['time', 'radius'], np.where(np.isclose(mxh_dz0, 0.0), 0.0, mxh_dz0))
+            newvars['mxh_r'] = (['time', 'radius'], mxh_r)
+            newvars['mxh_kappa'] = (['time', 'radius'], mxh_kappa)
+            newvars['mxh_s_kappa'] = (['time', 'radius'], np.where(np.isclose(mxh_s_kappa, 0.0), 0.0, mxh_s_kappa))
+            newvars['mxh_delta'] = (['time', 'radius'], mxh_delta)
+            newvars['mxh_s_delta'] = (['time', 'radius'], np.where(np.isclose(mxh_s_delta, 0.0), 0.0, mxh_s_delta))
+            newvars['mxh_zeta'] = (['time', 'radius'], mxh_zeta)
+            newvars['mxh_s_zeta'] = (['time', 'radius'], np.where(np.isclose(mxh_s_zeta, 0.0), 0.0, mxh_s_zeta))
+            newvars['mxh_sin'] = (['time', 'radius', 'mxh_coefficient'], mxh_sin)
+            newvars['mxh_s_sin'] = (['time', 'radius', 'mxh_coefficient'], np.where(np.isclose(mxh_s_sin, 0.0), 0.0, mxh_s_sin))
+            newvars['mxh_cos'] = (['time', 'radius', 'mxh_coefficient'], mxh_cos)
+            newvars['mxh_s_cos'] = (['time', 'radius', 'mxh_coefficient'], np.where(np.isclose(mxh_s_cos, 0.0), 0.0, mxh_s_cos))
+            newvars['mxh_contour_r'] = (['time', 'radius', 'angle_geometric'], contour_r)
+            newvars['mxh_contour_z'] = (['time', 'radius', 'angle_geometric'], contour_z)
+
             signb = 1.0
-            n_rho = len(data['rho'])
-            if 'kappa' in data:
-                s_v = (data['roa'] / data['kappa']).to_numpy() * derivative(data['roa'].to_numpy(), data['kappa'].to_numpy())
-                newvars['s_kappa'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
-            if 'delta' in data:
-                s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data['delta'].to_numpy())
-                newvars['s_delta'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
-            if 'zeta' in data:
-                s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data['zeta'].to_numpy())
-                newvars['s_zeta'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
-            if 'rmaj' in data:
-                s_v = derivative(data['roa'].to_numpy(), data['rmaj'].to_numpy())
-                newvars['drmajdr'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
-            if 'zmag' in data:
-                s_v = derivative(data['roa'].to_numpy(), data['zmag'].to_numpy())
-                newvars['dzmagdr'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             n_theta = 1001
-            theta = np.expand_dims(np.expand_dims(np.linspace(-np.pi, np.pi, n_theta), axis=-1), axis=-1)
-            #! A
-            #! dA/dr
-            #! dA/dtheta
-            #! d^2A/dtheta^2
-            a = np.repeat(theta, n_rho, axis=-1)
-            a_r = np.zeros_like(a)
-            a_t = np.ones_like(a)
-            a_tt = np.zeros_like(a)
-            for i in range(7):
-                if f'shape_sin{i:d}' in data:
-                    s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data[f'shape_sin{i:d}'].to_numpy())
-                    newvars[f's_shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
-                    a += np.expand_dims(data[f'shape_sin{i:d}'].to_numpy(), axis=0) * np.sin(float(i) * theta)
-                    a_r += np.expand_dims(newvars[f's_shape_sin{i:d}'][-1], axis=0) * np.sin(float(i) * theta)
-                    a_t += np.expand_dims(data[f'shape_sin{i:d}'].to_numpy(), axis=0) * float(i) * np.cos(float(i) * theta)
-                    a_tt += np.expand_dims(data[f'shape_sin{i:d}'].to_numpy(), axis=0) * float(-i * i) * np.sin(float(i) * theta)
-                elif i == 0:
-                    newvars[f'shape_sin{i:d}'] = (['n', 'rho'], np.zeros_like(data['kappa'].to_numpy()))
-                elif i == 1 and 'delta' in data:
-                    s = np.arcsin(data['delta'].to_numpy())
-                    s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), np.where(np.isclose(s, 0.0), 0.0, s))
-                    newvars[f'shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s, 0.0), 0.0, s))
-                    newvars[f's_shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
-                    a += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * np.sin(float(i) * theta)
-                    a_r += np.expand_dims(newvars[f's_shape_sin{i:d}'][-1], axis=0) * np.sin(float(i) * theta)
-                    a_t += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * float(i) * np.cos(float(i) * theta)
-                    a_tt += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * float(-i * i) * np.sin(float(i) * theta)
-                elif i == 2 and 'zeta' in data:
-                    s = -data['zeta'].to_numpy()
-                    s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), np.where(np.isclose(s, 0.0), 0.0, s))
-                    newvars[f'shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s, 0.0), 0.0, s))
-                    newvars[f's_shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
-                    a += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * np.sin(float(i) * theta)
-                    a_r += np.expand_dims(newvars[f's_shape_sin{i:d}'][-1], axis=0) * np.sin(float(i) * theta)
-                    a_t += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * float(i) * np.cos(float(i) * theta)
-                    a_tt += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * float(-i * i) * np.sin(float(i) * theta)
-                if f'shape_cos{i:d}' in data:
-                    s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data[f'shape_cos{i:d}'].to_numpy())
-                    newvars[f's_shape_cos{i:d}'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
-                    a += np.expand_dims(data[f'shape_cos{i:d}'].to_numpy(), axis=0) * np.cos(float(i) * theta)
-                    a_r += np.expand_dims(newvars[f's_shape_cos{i:d}'][-1], axis=0) * np.cos(float(i) * theta)
-                    a_t += np.expand_dims(data[f'shape_cos{i:d}'].to_numpy(), axis=0) * float(-i) * np.sin(float(i) * theta)
-                    a_tt += np.expand_dims(data[f'shape_cos{i:d}'].to_numpy(), axis=0) * float(-i * i) * np.cos(float(i) * theta)
-            #! R(theta)
-            #! dR/dr
-            #! dR/dtheta
-            #! d^2R/dtheta^2
-            r = np.expand_dims(data['rmaj'].to_numpy(), axis=0) + np.expand_dims(data['rmin'].to_numpy(), axis=0) * np.cos(a)
-            r_r = np.expand_dims(newvars['drmajdr'][-1], axis=0) + np.cos(a) - np.expand_dims(data['rmin'].to_numpy(), axis=0) * np.sin(a) * a_r
-            r_t = np.expand_dims(-data['rmin'].to_numpy(), axis=0) * a_t * np.sin(a)
-            r_tt = np.expand_dims(-data['rmin'].to_numpy(), axis=0) * (a_t**2 * np.cos(a) + a_tt * np.sin(a))
-            #! Z(theta)
-            #! dZ/dr
-            #! dZ/dtheta
-            #! d^2Z/dtheta^2
-            z = np.expand_dims(data['zmag'].to_numpy(), axis=0) + np.expand_dims((data['kappa'] * data['rmin']).to_numpy(), axis=0) * np.sin(theta)
-            z_r = np.expand_dims(newvars['dzmagdr'][-1], axis=0) + np.expand_dims(data['kappa'].to_numpy() * (1.0 + newvars['s_kappa'][-1]), axis=0) * np.sin(theta)
-            z_t = np.expand_dims((data['kappa'] * data['rmin']).to_numpy(), axis=0) * np.cos(theta)
-            z_tt = np.expand_dims((-data['kappa'] * data['rmin']).to_numpy(), axis=0) * np.sin(theta)
-            g_tt = r_t ** 2 + z_t ** 2
-            l_t = np.sqrt(g_tt)
+            weight = np.expand_dims(np.expand_dims(np.expand_dims(np.arange(n_coeffs), axis=0), axis=0), axis=0)
+            theta = np.expand_dims(np.expand_dims(np.expand_dims(np.linspace(-np.pi, np.pi, n_theta), axis=-1), axis=-1), axis=-1)
+            a = np.sum(mxh_sin * np.sin(weight * theta) + mxh_cos * np.cos(weight * theta), axis=-1)
+            a_r = np.sum(mxh_s_sin * np.sin(weight * theta) + mxh_s_cos * np.cos(weight * theta), axis=-1)
+            a_t = np.sum(mxh_sin * weight * np.cos(weight * theta) - mxh_cos * weight * np.sin(weight * theta), axis=-1)
+            #a_tt = np.sum(-mxh_sin * weight ** 2 * np.sin(weight * theta) - mxh_cos * weight ** 2 * np.cos(weight * theta), axis=-1)
+            r = np.expand_dims(mxh_r0, axis=0) + np.expand_dims(mxh_r, axis=0) * np.cos(a)
+            r_r = np.expand_dims(mxh_dr0, axis=0) + np.cos(a) - np.expand_dims(mxh_r, axis=0) * np.sin(a) * a_r
+            r_t = np.expand_dims(-mxh_r, axis=0) * a_t * np.sin(a)
+            #r_tt = np.expand_dims(-mxh_r, axis=0) * (a_t ** 2 * np.cos(a) + a_tt * np.sin(a))
+            z = np.expand_dims(mxh_z0, axis=0) + np.expand_dims(mxh_kappa * mxh_r, axis=0) * np.sin(np.squeeze(theta, axis=-1))
+            z_r = np.expand_dims(mxh_dz0, axis=0) + np.expand_dims(mxh_kappa * (1.0 + mxh_s_kappa), axis=0) * np.sin(np.squeeze(theta, axis=-1))
+            z_t = np.expand_dims(mxh_kappa * mxh_r, axis=0) * np.cos(np.squeeze(theta, axis=-1))
+            #z_tt = np.expand_dims(-mxh_kappa * mxh_r, axis=0) * np.sin(np.squeeze(theta, axis=-1))
+            l_t = np.sqrt(r_t ** 2 + z_t ** 2)
             j_r = r * (r_r * z_t - r_t * z_r)
             inv_j_r = 1.0 / np.where(np.isclose(j_r, 0.0), 0.001, j_r)
             grad_r = np.where(np.isclose(j_r, 0.0), 1.0, r * l_t * inv_j_r)
@@ -356,187 +445,46 @@ class plasma_io(io):
             #r_l = np.where(np.isclose(l_t, 0.0), 0.0, r_t / l_t)
             #l_r = z_l * z_r + r_l * r_r
             #nsin = (r_r * r_t + z_r * z_t) / l_t
-            c = 2.0 * np.pi * np.sum(l_t[:-1] / (r[:-1] * grad_r[:-1]), axis=0)
-            f = 2.0 * np.pi * data['rmin'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
+            c = 2.0 * np.pi * np.sum(l_t[:-1, ...] / (r[:-1, ...] * grad_r[:-1, ...]), axis=0)
+            f = 2.0 * np.pi * data['r_minor'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
             f[..., 0] = 2.0 * f[..., 1] - f[..., 2]
-            newvars['volp_miller'] = (['n', 'rho'], 2.0 * np.pi * np.where(np.isfinite(c), c, 0.0) / float(n_theta - 1))
-            newvars['surf_miller'] = (['n', 'rho'], 2.0 * np.pi * np.sum(l_t[:-1] * r[:-1], axis=0) * 2.0 * np.pi / float(n_theta - 1))
             bt = np.expand_dims(f, axis=0) / r
-            bp = np.expand_dims((data['rmin'] / data['q']).to_numpy(), axis=0) * grad_r / r
+            bp = np.expand_dims((data['r_minor'] / data['safety_factor']).to_numpy(), axis=0) * grad_r / r
+            bt_inner = np.squeeze(np.take_along_axis(bt, np.expand_dims(np.nanargmin(r, axis=0), axis=0), axis=0), axis=0)
+            bp_inner = np.squeeze(np.take_along_axis(bp, np.expand_dims(np.nanargmin(r, axis=0), axis=0), axis=0), axis=0)
+            bt_outer = np.squeeze(np.take_along_axis(bt, np.expand_dims(np.nanargmax(r, axis=0), axis=0), axis=0), axis=0)
+            bp_outer = np.squeeze(np.take_along_axis(bp, np.expand_dims(np.nanargmax(r, axis=0), axis=0), axis=0), axis=0)
             b = signb * np.sqrt(bt ** 2 + bp ** 2)
-            r_v = np.expand_dims((data['rmin'] * data['rmaj']).to_numpy(), axis=0)
+            r_v = np.expand_dims((data['r_minor'] * data['r_geometric']).to_numpy(), axis=0)
             g_t = r * b * l_t / (np.where(np.isclose(r_v, 0.0), 1.0, r_v) * grad_r)
             g_t[..., 0] = 2.0 * g_t[..., 1] - g_t[..., 2]
-            dtheta = 2.0 * np.pi / float(n_theta - 1)
-            theta0 = np.pi
-            i1 = int(theta0 / dtheta) + 1
-            i2 = i1 + 1
-            theta1 = (i1 - 1) * dtheta
-            ztheta = (theta0 - theta1) / dtheta
-            if i2 == n_theta:
-                i2 -= 1
-            newvars['geo_bt'] = (['n', 'rho'], bt[i1] + (bt[i2] - bt[i1]) * ztheta)
-            denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1] / b[:-1], axis=0)
+            newvars['mxh_dvolume_dr'] = (['time', 'radius'], 2.0 * np.pi * np.where(np.isfinite(c), c, 0.0) / float(n_theta - 1))
+            newvars['mxh_surface_area'] = (['time', 'radius'], 2.0 * np.pi * np.sum(l_t[:-1, ...] * r[:-1, ...], axis=0) * 2.0 * np.pi / float(n_theta - 1))
+            #newvars['mxh_bt'] = (['n', 'rho'], bt[i1] + (bt[i2] - bt[i1]) * ztheta)
+            denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1, ...] / b[:-1, ...], axis=0)
             denom[..., 0] = 2.0 * denom[..., 1] - denom[..., 2]
-            newvars['gradr_miller'] = (['n', 'rho'], np.sum(grad_r[:-1] * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['bp2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['bt2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['r_surface'] = (['theta', 'n', 'rho'], r)
-            newvars['z_surface'] = (['theta', 'n', 'rho'], z)
-            newvars['surfxs'] = (['n', 'rho'], np.trapezoid(r, z, axis=0))
-            newvars['r_out'] = (['n', 'rho'], np.nanmax(r, axis=0))
-            newvars['r_in'] = (['n', 'rho'], np.nanmin(r, axis=0))
-            newvars['b_ref'] = (['n', 'rho'], np.abs(data['b_unit'].to_numpy() * newvars['geo_bt'][-1]))  # For synchrotron
-            bt = np.squeeze(np.take_along_axis(bt, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
-            bp = np.squeeze(np.take_along_axis(bp, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
-            newvars['bt_out'] = (['n', 'rho'], np.where(np.isfinite(bt), bt, 0.0))
-            newvars['bp_out'] = (['n', 'rho'], np.where(np.isfinite(bp), bp, 0.0))
-        self.update_input_data_vars(newvars)
+            b2 = np.stack([np.sum(bp[:-1, ...] ** 2 * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom, np.sum(bt[:-1, ...] ** 2 * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom], axis=-1)
+            newvars['mxh_dr_dpsi'] = (['time', 'radius'], np.sum(grad_r[:-1, ...] * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom)
+            newvars['mxh_field_squared'] = (['time', 'radius', 'direction'], b2)
+            newvars['mxh_cross_sectional_area'] = (['time', 'radius'], np.trapezoid(r, z, axis=0))
+            newvars['mxh_field_ref'] = (['time', 'radius'], np.abs(data['field_unit'].to_numpy() * bt_inner))  # For synchrotron
+            b_inner = np.stack([np.where(np.isfinite(bt_inner), bt_inner, 0.0), np.where(np.isfinite(bp_inner), bp_inner, 0.0)], axis=-1)
+            b_outer = np.stack([np.where(np.isfinite(bt_outer), bt_outer, 0.0), np.where(np.isfinite(bp_outer), bp_outer, 0.0)], axis=-1)
+            newvars['mxh_field_inner'] = (['time', 'radius', 'direction'], b_inner)
+            newvars['mxh_field_outer'] = (['time', 'radius', 'direction'], b_outer)
 
-
-    def _compute_average_mass(
-        self,
-    ) -> None:
-        data = self.input
-        newvars: MutableMapping[str, Any] = {}
-        if 'name' in data and 'mass' in data and 'ni' in data and 'volp_miller' in data:
-            main_species_mask = (data['name'].isin(['H', 'D', 'T']).to_numpy() & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
+            main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
-            n_i_vol = cumulative_simpson(
-                np.transpose((data['ni'].isel(name=main_species) * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(main_species), axis=1),
-                initial=0.0
+            n_i_vol = self._vectorized_numpy_integration(
+                np.transpose(data['density_i'].isel(ion=main_species).to_numpy() * np.expand_dims(newvars['mxh_dvolume_dr'][-1], axis=-1), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(main_species), axis=1)
             )
-            f_i_i_vol = n_i_vol[:, :, -1] / np.expand_dims(np.sum(n_i_vol[:, :, -1], axis=1), axis=1)
-            mass_factor = data['mass'].isel(name=main_species).to_numpy()
-            newvars['mass_i'] = (['n'], np.sum((f_i_i_vol * mass_factor), axis=1))
-        self.update_input_data_vars(newvars)
+            mxh_mass_ave = np.sum((data['mass_i'].isel(ion=main_species).to_numpy() * n_i_vol[..., -1] / np.expand_dims(np.sum(n_i_vol[..., -1], axis=1), axis=1)), axis=-1)
+            newvars['mxh_mass_main_average'] = (['time'], mxh_mass_ave)
 
-
-    def _compute_source_terms(
-        self,
-    ) -> None:
-
-        data = self.input
-        newvars: MutableMapping[str, Any] = {}
-
-        qe_terms = {
-            'qohme': 1.0,
-            'qbeame': 1.0,
-            'qrfe': 1.0,
-            'qfuse': 1.0,
-            'qei': -1.0,
-            'qsync': -1.0,
-            'qbrem': -1.0,
-            'qline': -1.0,
-            'qione': 1.0,
-        }
-        qe = np.zeros_like(data['te'].to_numpy())
-        for var in qe_terms:
-            if var in data:
-                qe += qe_terms[var] * data[var].to_numpy()
-        newvars['qe'] = (['n', 'rho'], qe)
-
-        qi_terms = {
-            'qbeami': 1.0,
-            'qrfi': 1.0,
-            'qfusi': 1.0,
-            'qei': 1.0,
-            'qioni': 1.0,
-        }
-        qi = np.zeros_like(data['te'].to_numpy())
-        for var in qi_terms:
-            if var in data:
-                qi += qi_terms[var] * data[var].to_numpy()
-        newvars['qi'] = (['n', 'rho'], qi)
-
-        ge_terms = {
-            'qpar_beam': 1.0, 
-            'qpar_wall': 1.0,
-        }
-        ge = np.zeros_like(data['te'].to_numpy())
-        for var in ge_terms:
-            if var in data:
-                ge += ge_terms[var] * data[var].to_numpy()
-        newvars['ge'] = (['n', 'rho'], ge)
-
-        qrad_terms = {
-            'qsync': 1.0,
-            'qbrem': 1.0,
-            'qline': 1.0,
-        }
-        qrad = np.zeros_like(data['te'].to_numpy())
-        for var in qrad_terms:
-            if var in data:
-                qrad += qrad_terms[var] * data[var].to_numpy()
-        newvars['qrad'] = (['n', 'rho'], qrad)
-
-        qe_aux_terms = {
-            'qohme': 1.0,
-            'qbeame': 1.0,
-            'qrfe': 1.0,
-        }
-        qe_aux = np.zeros_like(data['te'].to_numpy())
-        for var in qe_aux_terms:
-            if var in data:
-                qe_aux += qe_aux_terms[var] * data[var].to_numpy()
-        newvars['qe_aux'] = (['n', 'rho'], qe_aux)
-        if 'qione' in data:
-            qe_aux += data['qione'].to_numpy()
-        newvars['qe_aux_ion'] = (['n', 'rho'], qe_aux)
-
-        qi_aux_terms = {
-            'qbeami': 1.0,
-            'qrfi': 1.0,
-        }
-        qi_aux = np.zeros_like(data['te'].to_numpy())
-        for var in qi_aux_terms:
-            if var in data:
-                qi_aux += qi_aux_terms[var] * data[var].to_numpy()
-        newvars['qi_aux'] = (['n', 'rho'], qi_aux)
-        if 'qioni' in data:
-            qi_aux += data['qioni'].to_numpy()
-        newvars['qi_aux_ion'] = (['n', 'rho'], qi_aux)
-
-        qrf_terms = {
-            'qrfe': 1.0,
-            'qrfi': 1.0,
-        }
-        qrf = np.zeros_like(data['te'].to_numpy())
-        for var in qrf_terms:
-            if var in data:
-                qrf += qrf_terms[var] * data[var].to_numpy()
-        newvars['qrf'] = (['n', 'rho'], qrf)
-
-        qbeam_terms = {
-            'qbeame': 1.0,
-            'qbeami': 1.0,
-        }
-        qbeam = np.zeros_like(data['te'].to_numpy())
-        for var in qbeam_terms:
-            if var in data:
-                qbeam += qbeam_terms[var] * data[var].to_numpy()
-        newvars['qbeam'] = (['n', 'rho'], qbeam)
-
-        qion_terms = {
-            'qione': 1.0,
-            'qioni': 1.0,
-        }
-        qion = np.zeros_like(data['te'].to_numpy())
-        for var in qion_terms:
-            if var in data:
-                qion += qion_terms[var] * data[var].to_numpy()
-        newvars['qion'] = (['n', 'rho'], qion)
-
-        qalpha_terms = {
-            'qfuse': 1.0,
-            'qfusi': 1.0,
-        }
-        qalpha = np.zeros_like(data['te'].to_numpy())
-        for var in qalpha_terms:
-            if var in data:
-                qalpha += qalpha_terms[var] * data[var].to_numpy()
-        newvars['qalpha'] = (['n', 'rho'], qalpha)
+            newvars['field_squared'] = (['time', 'radius', 'direction'], b2 * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
+            newvars['field_inner'] = (['time', 'radius', 'direction'], b_inner * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
+            newvars['field_outer'] = (['time', 'radius', 'direction'], b_outer * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
 
         self.update_input_data_vars(newvars)
 
@@ -544,401 +492,422 @@ class plasma_io(io):
     def _compute_extended_local_inputs(
         self
     ) -> None:
-
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if x.shape[-1] > 2:
-                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
-                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
-                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
-                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
-                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
-                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif x.shape[-1] > 1:
-                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-            return deriv
-
-        def interpolate(v, x, y):
-            vm = np.array([v]) if isinstance(v, (float, int)) else copy.deepcopy(v)
-            xm = x.reshape(-1, x.shape[-1])
-            ym = y.reshape(-1, y.shape[-1])
-            if vm.shape[0] != xm.shape[0]:
-                vm = np.repeat(np.expand_dims(vm, axis=0), xm.shape[0], axis=0)
-            interp = np.zeros_like(vm)
-            for i in range(xm.shape[0]):
-                interp[i] = np.interp(vm[i], xm[i], ym[i])
-            interp = interp.reshape(*y.shape[:-1])
-            return interp
-
-        def find(v, x, y, last=False):
-            xm = x.reshape(-1, x.shape[-1])
-            ym = y.reshape(-1, y.shape[-1])
-            found = np.full((xm.shape[0], ), np.nan)
-            for i in range(xm.shape[0]):
-                yidx = np.where(((ym[i] - v)[1:] * (ym[i] - v)[:-1]) < 0.0)[0]
-                if len(yidx) > 0:
-                    yi = yidx[-1] if last else yidx[0]
-                    found[i] = (v - ym[i, yi]) * (xm[i, yi + 1] - xm[i, yi]) / (ym[i, yi + 1] - ym[i, yi])
-            found = found.reshape(*y.shape[:-1])
-            return found
-
-        data = self.input
+        newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
-
-        e_si = 1.60218e-19
-        u_si = 1.66054e-27
-        eps_si = 8.85419e-12
-        if 'type' in data:
-            thermal_species_mask = data['type'].isin(['[therm]']).to_numpy().flatten()
-            thermal_species = [i for i in range(len(thermal_species_mask)) if thermal_species_mask[i]]
-            #newvars['ni_th'] = data['ni'].isel(name=thermal_species)
-            newvars['ni_th_all'] = (['n', 'rho'], data['ni'].isel(name=thermal_species).sum('name').to_numpy())
-            newvars['ni_all'] = (['n', 'rho'], data['ni'].sum('name').to_numpy())
-            pressure_e = 1.0e16 * e_si * data['te'] * data['ne']  # MPa
-            pressure_i = 1.0e16 * e_si * data['ti'] * data['ni']  # MPa
-            pressure_i_th = pressure_i.isel(name=thermal_species)  # MPa
-            newvars['pressure_e'] = (['n', 'rho'], pressure_e.to_numpy())
-            newvars['pressure_i'] = (['n', 'rho', 'name'], pressure_i.to_numpy())
-            newvars['pressure_i_th'] = (['n', 'rho'], pressure_i_th.sum('name').to_numpy())
-            newvars['ptot_derived'] = (['n', 'rho'], (pressure_e + pressure_i.sum('name')).to_numpy())
-            newvars['pth_derived'] = (['n', 'rho'], (pressure_e + pressure_i_th.sum('name')).to_numpy())
-            newvars['pfast_derived'] = (['n', 'rho'], (pressure_i.sum('name') - pressure_i_th.sum('name')).to_numpy())
-        if 'qmom' not in data:
-            newvars['qmom'] = (['n', 'rho'], np.repeat(np.expand_dims(np.zeros_like(data['rho'].to_numpy()), axis=0), len(data['n']), axis=0))
-        if 'kappa' in data:
-            newvars['kappa95'] = (['n'], interpolate(0.95, data['psi_pol_norm'].to_numpy(), data['kappa'].to_numpy()))
-            newvars['kappa995'] = (['n'], interpolate(0.995, data['psi_pol_norm'].to_numpy(), data['kappa'].to_numpy()))
-            #newvars['kappa_a'] = (['n'], (data['surfXS'].isel(-1) / np.pi / data['a'] ** 2).to_numpy())
-        if 'shape_sin0' not in data:
-            newvars['shape_sin0'] = (['n', 'rho'], np.repeat(np.expand_dims(np.zeros_like(data['rho'].to_numpy()), axis=0), len(data['n']), axis=0))
-        if 'delta' in data:
-            newvars['shape_sin1'] = (['n', 'rho'], np.arcsin(data['delta'].to_numpy()))
-            newvars['delta95'] = (['n'], interpolate(0.95, data['psi_pol_norm'].to_numpy(), data['delta'].to_numpy()))
-            newvars['delta995'] = (['n'], interpolate(0.995, data['psi_pol_norm'].to_numpy(), data['delta'].to_numpy()))
-        if 'zeta' in data:
-            newvars['shape_sin2'] = (['n', 'rho'], -1.0 * data['zeta'].to_numpy())
-        if 'q' in data and 'psi_pol_norm' in data:
-            newvars['q0'] = (['n'], interpolate(0.0, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy()))
-            newvars['q95'] = (['n'], interpolate(0.95, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy()))
-            newvars['rho_saw'] = (['n'], find(1.0, data['rho_tor'].to_numpy(), data['q'].to_numpy(), last=True))
-        if 'rho_s_unit' in data and 'c_s' in data:
-            newvars['gammae_gb'] = (['n', 'rho'], (data['ne'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
-            newvars['gammai_gb'] = (['n', 'rho', 'name'], (data['ni'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
-            newvars['qe_gb'] = (['n', 'rho'], (1.0e16 * e_si * data['ne'] * data['te'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
-            newvars['qi_gb'] = (['n', 'rho', 'name'], (1.0e16 * e_si * data['ni'] * data['ti'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
-            if 'masse' in data and 'c_the' in data:
-                newvars['pie_gb'] = (['n', 'rho'], (1.0e19 * data['ne'] * u_si * data['masse'] * data['rmaj'] * data['c_the'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
-            if 'mass' in data and 'c_thi' in data:
-                newvars['pii_gb'] = (['n', 'rho', 'name'], (1.0e19 * data['ni'] * u_si * data['mass'] * data['rmaj'] * data['c_thi'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
-            newvars['ex_gb'] = (['n', 'rho'], (1.0e16 * e_si * data['ne'] * data['te'] * data['c_s'] * (data['rho_s_unit']) ** 2 / (data['a'] ** 3)).to_numpy())
-            newvars['qce_gb'] = (['n', 'rho'], (1.5 * 1.0e16 * e_si * data['ne'] * data['te'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
-            newvars['qci_gb'] = (['n', 'rho', 'name'], (1.5 * 1.0e16 * e_si * data['ni'] * data['ti'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
-        if 'surf_miller' in data and 'gradr_miller' in data:
-            surf = (data['surf_miller'] / data['gradr_miller']).to_numpy()
-            newvars['surf_gacode'] = (['n', 'rho'], np.where(np.isfinite(surf), surf, 0.0))
-        if 'q' in data:
-            norm = (data['rmin'] / data['q']).to_numpy()
-            newvars['s'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), data['q'].to_numpy()))
-            newvars['dqdr'] = (['n', 'rho'], derivative(data['rmin'].to_numpy(), data['q'].to_numpy()))
-        if 'bp2_miller' in data and 'b_unit' in data:
-            newvars['bp2'] = (['n', 'rho'], (data['bp2_miller'] * data['b_unit'] ** 2).to_numpy())
-        if 'bt2_miller' in data and 'b_unit' in data:
-            newvars['bt2'] = (['n', 'rho'], (data['bt2_miller'] * data['b_unit'] ** 2).to_numpy())
-        if 'te' in data:
-            norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
-            newvars['alte'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['te'].to_numpy())))
-            if 'masse' in data:
-                v_e_th = (2.0 * (1.0e3 * e_si * data['te']) / (u_si * data['masse'])) ** 0.5  # m/s
-                newvars['v_e_th'] = (['n', 'rho'], v_e_th.to_numpy())
-            if 'mass_i' in data:
-                v_s = (2.0 * (1.0e3 * e_si * data['te']) / (u_si * data['mass_i'])) ** 0.5  # m/s
-                newvars['v_s'] = (['n', 'rho'], v_s.to_numpy())
-        if 'ti' in data:
-            norm = np.expand_dims(np.expand_dims(data['a'].to_numpy(), axis=-1), axis=-1)
-            newvars['alti'] = (['n', 'rho', 'name'], np.transpose(norm * derivative(np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), -np.log(np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1)))), axes=(0, 2, 1)))
-            if 'te' in data:
-                newvars['tite'] = (['n', 'rho', 'name'], (data['ti'] / data['te']).to_numpy())
-            if 'mass_i' in data:
-                v_i_th = (2.0 * (1.0e3 * e_si * data['ti']) / (u_si * data['mass_i'])) ** 0.5  # m/s
-                newvars['v_i_th'] = (['n', 'rho', 'name'], v_i_th.to_numpy())
-        if 'ne' in data:
-            norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
-            newvars['alne'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['ne'].to_numpy())))
-        if 'ni' in data:
-            norm = np.expand_dims(np.expand_dims(data['a'].to_numpy(), axis=-1), axis=-1)
-            newvars['alni'] = (['n', 'rho', 'name'], np.transpose(norm * derivative(np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), -np.log(np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1)))), axes=(0, 2, 1)))
-            if 'ne' in data:
-                newvars['nine'] = (['n', 'rho', 'name'], (data['ni'] / data['ne']).to_numpy())
-                zeff = (data['ni'] * data['z'] ** 2 / data['ne']).sum('name')
-                newvars['qn_error'] = (['n'], abs(1.0 - (data['ni'] * data['z'] / data['ne']).sum('name')).sum('rho').to_numpy())
-                newvars['zeff_derived'] = (['n', 'rho'], zeff.to_numpy())
-        if 'ne' in data and 'te' in data and 'rho_s_unit' in data:
-            debye_e = (eps_si / e_si) ** 0.5 * (1.0e-16 * data['te'] / (data['ne'] * data['ze'] ** 2)) ** 0.5  # m
-            newvars['debye_e'] = (['n', 'rho'], debye_e.to_numpy())
-            newvars['debye_e_norm'] = (['n', 'rho'], (debye_e / data['rho_s_unit']).to_numpy())
-        if 'ni' in data and 'ti' in data and 'rho_s_unit' in data:
-            debye_i = (eps_si / e_si) ** 0.5 * (1.0e-16 * data['ti'] / (data['ni'] * data['z'] ** 2)) ** 0.5  # m
-            newvars['debye_i'] = (['n', 'rho', 'name'], debye_i.to_numpy())
-            newvars['debye_i_norm'] = (['n', 'rho', 'name'], (debye_i / data['rho_s_unit']).to_numpy())
-        if 'omega0' in data:
-            norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
-            newvars['alw0'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['omega0'].to_numpy())))
-            newvars['dw0dr'] = (['n', 'rho'], -1.0 * derivative(data['rmin'].to_numpy(), data['omega0'].to_numpy()))
-            if 'r_out' in data:
-                newvars['mach'] = (['n', 'rho'], (data['omega0'] * data['r_out']).to_numpy() / newvars['v_s'][-1])
-        elif 'w0' in data:
-            norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
-            newvars['alw0'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['w0'].to_numpy())))
-            newvars['dw0dr'] = (['n', 'rho'], -1.0 * derivative(data['rmin'].to_numpy(), data['w0'].to_numpy()))
-            if 'r_out' in data:
-                newvars['mach'] = (['n', 'rho'], (data['w0'] * data['r_out']).to_numpy() / newvars['v_s'][-1])
-
-        self.update_input_data_vars(newvars)
-
-
-    def _compute_secondary_quantities(
-        self
-    ) -> None:
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if x.shape[-1] > 2:
-                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
-                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
-                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
-                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
-                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
-                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif x.shape[-1] > 1:
-                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-            return deriv
-        data = self.input
-        newvars: MutableMapping[str, Any] = {}
-        e_si = 1.60218e-19
-        u_si = 1.66054e-27
-        eps_si = 8.85419e-12
-        if 'bp2' in data and 'bt2' in data:
-            b = (data['bp2'] + data['bt2']) ** 0.5
-            newvars['b'] = (['n', 'rho'], b.to_numpy())
-            main_species_mask = (data['name'].isin(['H', 'D', 'T']).to_numpy() & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
+        if self.has_input:
+            data = self.input
+            main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
-            vperp_tor = xr.zeros_like(b)
-            vperp_pol = xr.zeros_like(b)
-            vpar_tor = xr.zeros_like(b)
-            vpar_pol = xr.zeros_like(b)
-            if 'vtor' in data:
-                vperp_tor = data['vtor'].isel(name=main_species_mask).mean('name') * data['bp2'] ** 0.5 / b
-                vpar_tor = data['vtor'].isel(name=main_species_mask).mean('name') * data['bt2'] ** 0.5 / b
-            if 'vpol' in data:
-                vperp_pol = data['vpol'].isel(name=main_species_mask).mean('name') * data['bt2'] ** 0.5 / b
-                vpar_pol = data['vpol'].isel(name=main_species_mask).mean('name') * data['bp2'] ** 0.5 / b
-            newvars['vperp'] = (['n', 'rho'], (vperp_tor - vperp_pol).to_numpy())
-            newvars['vpar'] = (['n', 'rho'], (vpar_tor + vpar_pol).to_numpy())
-            if 'c_s' in data:
-                newvars['machperp'] = (['n', 'rho'], newvars['vperp'][-1] / data['c_s'].to_numpy())
-                newvars['machpar'] = (['n', 'rho'], newvars['vpar'][-1] / data['c_s'].to_numpy())
-                if 'a' in data:
-                    norm = (data['a'] / data['c_s']).to_numpy()
-                    newvars['alvperp'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vperp'][-1]))
-                    newvars['alvpar'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vpar'][-1]))
-            if 'rmin' in data and 'q' in data:
-                norm = (data['rmin'] / data['q']).to_numpy()
-                newvars['gamma_exb'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vperp'][-1] / np.where(np.isclose(norm, 0.0), 1.0e-4, norm)))
-                if 'c_s' in data and 'a' in data:
-                    newvars['gamma_exb_norm'] = (['n', 'rho'], newvars['gamma_exb'][-1] * (data['a'] / data['c_s']).to_numpy())
-        if 'pressure_e' in data and 'bp2' in data and 'bt2' in data:
-            beta_e_p = 1.0e6 * data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
-            beta_e_t = 1.0e6 * data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
-            newvars['beta_e'] = (['n', 'rho'], 1.0 / (beta_e_p ** (-1) + beta_e_t ** (-1)).to_numpy())
-        if 'pressure_i_th' in data and 'bp2' in data and 'bt2' in data:
-            beta_i_th_p = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
-            beta_i_th_t = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
-            newvars['beta_i_th'] = (['n', 'rho'], 1.0 / (beta_i_th_p ** (-1) + beta_i_th_t ** (-1)).to_numpy())
-        if 'debye_e' in data and 'debye_i' in data:
-            newvars['debye'] = (['n', 'rho'], ((data['debye_e'] ** (-2) + (data['debye_i'] ** (-2)).sum('name')) ** (-0.5)).to_numpy())
-            f_nu = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
-            inv_b90_ee = (4.0 * np.pi * eps_si / e_si) * 1.0e3 * data['te'] / abs(data['ze'] * data['ze'])
-            f_ee = 1.0e19 * data['ne'] * (e_si * 1.0e3 * data['te'] / (u_si * data['masse'])) ** 0.5 / (inv_b90_ee ** 2) * np.log(inv_b90_ee * data['debye_e'])
-            newvars['nu_ee'] = (['n', 'rho'], (f_ee * f_nu).to_numpy())
-            inv_b90_ei = (4.0 * np.pi * eps_si / e_si) * 1.0e3 * data['te'] / abs(data['ze'] * data['z'])
-            f_ei = 1.0e19 * data['ni'] * (e_si * 1.0e3 * data['te'] / (u_si * data['masse'])) ** 0.5 / (inv_b90_ei ** 2) * np.log(inv_b90_ei * data['debye_e'])
-            newvars['nu_ei'] = (['n', 'rho'], (f_ei * f_nu).sum('name').to_numpy())
-            inv_b90_ii = (4.0 * np.pi * eps_si / e_si) * 1.0e3 * data['ti'] / abs(data['z'] * data['z'])
-            f_ii = 1.0e19 * data['ni'] * (e_si * 1.0e3 * data['ti'] / (u_si * data['mass'])) ** 0.5 / (inv_b90_ii ** 2) * np.log(inv_b90_ii * data['debye_i'])
-            newvars['nu_ii'] = (['n', 'rho', 'name'], (f_ii * f_nu).to_numpy())
-            if 'c_s' in data and 'a' in data:
-                newvars['nu_ee_norm'] = (['n', 'rho'], (f_ee * f_nu * data['a'] / data['c_s']).to_numpy())
-                newvars['nu_ei_norm'] = (['n', 'rho'], (f_ei * f_nu * data['a'] / data['c_s']).sum('name').to_numpy())
-                newvars['nu_ii_norm'] = (['n', 'rho', 'name'], (f_ii * f_nu * data['a'] / data['c_s']).to_numpy())
+            thermal_species_mask = data['type_i'].isin(['thermal']).to_numpy().flatten()
+            thermal_species = [i for i in range(len(thermal_species_mask)) if thermal_species_mask[i]]
+
+            pressure_e = self.constants['e_si'] * data['temperature_e'] * data['density_e']
+            pressure_i = self.constants['e_si'] * data['temperature_i'] * data['density_i']
+            newvars['density_thermal_total_i'] = (['time', 'radius'], data['density_i'].isel(ion=thermal_species).sum('ion').to_numpy())
+            newvars['density_total_i'] = (['time', 'radius'], data['density_i'].sum('ion').to_numpy())
+            newvars['pressure_e'] = (['time', 'radius'], pressure_e.to_numpy())
+            newvars['pressure_i'] = (['time', 'radius', 'ion'], pressure_i.to_numpy())
+            newvars['pressure_thermal_total_i'] = (['time', 'radius'], pressure_i.isel(ion=thermal_species).sum('ion').to_numpy())
+            newvars['pressure_total_i'] = (['time', 'radius'], pressure_i.sum('ion').to_numpy())
+            newvars['pressure_thermal_total'] = (['time', 'radius'], (pressure_e + pressure_i.isel(ion=thermal_species).sum('ion')).to_numpy())
+            newvars['pressure_total'] = (['time', 'radius'], (pressure_e + pressure_i.sum('ion')).to_numpy())
+            newvars['pressure_fast_total_i'] = (['time', 'radius'], (pressure_i.sum('ion') - pressure_i.isel(ion=thermal_species).sum('ion')).to_numpy())
+            newvars['pressure_fast_total'] = (['time', 'radius'], (pressure_i.sum('ion') - pressure_i.isel(ion=thermal_species).sum('ion')).to_numpy())
+            newvars['gyrobohm_particle_flux_e'] = (['time', 'radius'], (data['density_e'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit'] / data['r_minor_lcfs']) ** 2).to_numpy())
+            newvars['gyrobohm_particle_flux_i'] = (['time', 'radius', 'ion'], (data['density_i'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit'] / data['r_minor_lcfs']) ** 2).to_numpy())
+            newvars['gyrobohm_heat_flux_e'] = (['time', 'radius'], (self.constants['e_si'] * data['density_e'] * data['temperature_e'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit'] / data['r_minor_lcfs']) ** 2).to_numpy())
+            newvars['gyrobohm_heat_flux_i'] = (['time', 'radius', 'ion'], (self.constants['e_si'] * data['density_i'] * data['temperature_i'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit'] / data['r_minor_lcfs']) ** 2).to_numpy())
+            newvars['gyrobohm_momentum_flux_e'] = (['time', 'radius'], (self.constants['u_si'] * data['density_e'] * data['r_geometric'] * data['mass_e'] * data['velocity_thermal_e'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit'] / data['r_minor_lcfs']) ** 2).to_numpy())
+            newvars['gyrobohm_momentum_flux_i'] = (['time', 'radius', 'ion'], (self.constants['u_si'] * data['density_i'] * data['r_geometric'] * data['mass_i'] * data['velocity_thermal_i'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit'] / data['r_minor_lcfs']) ** 2).to_numpy())
+            newvars['gyrobohm_exchange_flux'] = (['time', 'radius'], (self.constants['e_si'] * data['density_e'] * data['temperature_e'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit']) ** 2 / (data['r_minor_lcfs'] ** 3)).to_numpy())
+            newvars['gyrobohm_convective_heat_flux_e'] = (['time', 'radius'], (1.5 * self.constants['e_si'] * data['density_e'] * data['temperature_e'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit'] / data['r_minor_lcfs']) ** 2).to_numpy())
+            newvars['gyrobohm_convective_heat_flux_i'] = (['time', 'radius', 'ion'], (1.5 * self.constants['e_si'] * data['density_i'] * data['temperature_i'] * data['velocity_sound_ref'] * (data['gyroradius_ref_unit'] / data['r_minor_lcfs']) ** 2).to_numpy())
+
+            beta_e = pressure_e * 2.0 * self.constants['mu_si'] / data['field_squared']
+            beta_i = pressure_i * 2.0 * self.constants['mu_si'] / data['field_squared']
+            norm = np.expand_dims(data['length_ref'].to_numpy(), axis=-1)
+            grad_density_e_norm = norm * self._vectorized_numpy_derivative(
+                data['r_minor'].to_numpy(),
+                -np.log(data['density_e'].to_numpy())
+            )
+            grad_density_i_norm = np.transpose(np.expand_dims(norm, axis=1) * self._vectorized_numpy_derivative(
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1),
+                -np.log(np.transpose(data['density_i'].to_numpy(), axes=(0, 2, 1)))
+            ), axes=(0, 2, 1))
+            grad_temperature_e_norm = norm * self._vectorized_numpy_derivative(
+                data['r_minor'].to_numpy(),
+                -np.log(data['temperature_e'].to_numpy())
+            )
+            grad_temperature_i_norm = np.transpose(np.expand_dims(norm, axis=1) * self._vectorized_numpy_derivative(
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1),
+                -np.log(np.transpose(data['temperature_i'].to_numpy(), axes=(0, 2, 1)))
+            ), axes=(0, 2, 1))
+            newvars['pressure_e_norm'] = (['time', 'radius'], (1.0 / ((1.0 / beta_e).sum('direction'))).to_numpy())
+            newvars['pressure_i_norm'] = (['time', 'radius', 'ion'], (1.0 / ((1.0 / beta_i).sum('direction'))).to_numpy())
+            newvars['density_i_norm'] = (['time', 'radius', 'ion'], (data['density_i'] / data['density_e']).to_numpy())
+            newvars['temperature_i_norm'] = (['time', 'radius', 'ion'], (data['temperature_i'] / data['temperature_e']).to_numpy())
+            newvars['grad_density_e_norm'] = (['time', 'radius'], grad_density_e_norm)
+            newvars['grad_density_i_norm'] = (['time', 'radius', 'ion'], grad_density_i_norm)
+            newvars['grad_temperature_e_norm'] = (['time', 'radius'], grad_temperature_e_norm)
+            newvars['grad_temperature_i_norm'] = (['time', 'radius', 'ion'], grad_temperature_i_norm)
+            newvars['quasineutrality'] = (['time', 'radius'], (1.0 - (data['density_i'] * data['charge_i'] / data['density_e'])).sum('ion').to_numpy())
+            newvars['effective_charge'] = (['time', 'radius'], (data['density_i'] * (data['charge_i'] ** 2) / data['density_e']).sum('ion').to_numpy())
+
+            newvars['density_ratio_main'] = (['time', 'radius'], (data['density_i'].isel(ion=main_species).sum('ion') / data['density_e']).to_numpy())
+            newvars['temperature_ratio_main'] = (['time', 'radius'], (data['temperature_i'].isel(ion=main_species).mean('ion') / data['temperature_e']).to_numpy())
+
+            debye_e = ((self.constants['eps_si'] / self.constants['e_si']) ** 0.5) * (data['temperature_e'] / (data['density_e'] * (data['charge_e'] ** 2))) ** 0.5  # m
+            debye_i = ((self.constants['eps_si'] / self.constants['e_si']) ** 0.5) * (data['temperature_i'] / (data['density_i'] * (data['charge_i'] ** 2))) ** 0.5  # m
+            collisionality_prefactor = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
+            inverse_approach_factor_ee = (4.0 * np.pi * self.constants['eps_si'] / self.constants['e_si']) * data['temperature_e'] / abs(data['charge_e'] ** 2)
+            collisionality_ee = (data['density_e'] / (inverse_approach_factor_ee ** 2)) * (self.constants['e_si'] * data['temperature_e'] / (self.constants['u_si'] * data['mass_e'])) ** 0.5 * np.log(inverse_approach_factor_ee * debye_e)
+            inverse_approach_factor_ei = (4.0 * np.pi * self.constants['eps_si'] / self.constants['e_si']) * data['temperature_e'] / abs(data['charge_e'] * data['charge_i'])
+            collisionality_ei = (data['density_i'] / (inverse_approach_factor_ei ** 2)) * (self.constants['e_si'] * data['temperature_e'] / (self.constants['u_si'] * data['mass_e'])) ** 0.5 * np.log(inverse_approach_factor_ei * debye_e)
+            inverse_approach_factor_ii = (4.0 * np.pi * self.constants['eps_si'] / self.constants['e_si']) * data['temperature_i'] / abs(data['charge_i'] * data['charge_i'])
+            collisionality_ii = (data['density_i'] / (inverse_approach_factor_ii ** 2)) * (self.constants['e_si'] * data['temperature_i'] / (self.constants['u_si'] * data['mass_i'])) ** 0.5 * np.log(inverse_approach_factor_ii * debye_i)
+            newvars['debye_e'] = (['time', 'radius'], debye_e.to_numpy())
+            newvars['debye_e_norm'] = (['time', 'radius'], (debye_e / data['gyroradius_ref_unit']).to_numpy())
+            newvars['debye_i'] = (['time', 'radius', 'ion'], debye_i.to_numpy())
+            newvars['debye_i_norm'] = (['time', 'radius', 'ion'], (debye_i / data['gyroradius_ref_unit']).to_numpy())
+            newvars['debye'] = (['time', 'radius'], ((debye_e ** (-2) + (debye_i ** (-2)).sum('ion')) ** (-0.5)).to_numpy())
+            newvars['debye_norm'] = (['time', 'radius'], (((debye_e ** (-2) + (debye_i ** (-2)).sum('ion')) ** (-0.5)) / data['gyroradius_ref_unit']).to_numpy())
+            newvars['collisionality_ee'] = (['time', 'radius'], (collisionality_prefactor * collisionality_ee).to_numpy())
+            newvars['collisionality_ei'] = (['time', 'radius'], (collisionality_prefactor * collisionality_ei).sum('ion').to_numpy())
+            newvars['collisionality_ii'] = (['time', 'radius', 'ion'], (collisionality_prefactor * collisionality_ii).to_numpy())
+            newvars['collisionality_ee_norm'] = (['time', 'radius'], (collisionality_prefactor * collisionality_ee * data['length_ref'] / data['velocity_sound_ref']).to_numpy())
+            newvars['collisionality_ei_norm'] = (['time', 'radius'], (collisionality_prefactor * collisionality_ei * data['length_ref'] / data['velocity_sound_ref']).sum('ion').to_numpy())
+            newvars['collisionality_ii_norm'] = (['time', 'radius', 'ion'], (collisionality_prefactor * collisionality_ii * data['length_ref'] / data['velocity_sound_ref']).to_numpy())
+
+            field = data['field_squared'].sum('direction') ** 0.5
+            vperp_tor = data['velocity_i'].sel(direction='toroidal', drop=True) * (data['field_squared'].sel(direction='poloidal', drop=True) ** 0.5) / field
+            vperp_pol = data['velocity_i'].sel(direction='poloidal', drop=True) * (data['field_squared'].sel(direction='toroidal', drop=True) ** 0.5) / field
+            vpar_tor = data['velocity_i'].sel(direction='toroidal', drop=True) * (data['field_squared'].sel(direction='toroidal', drop=True) ** 0.5) / field
+            vpar_pol = data['velocity_i'].sel(direction='poloidal', drop=True) * (data['field_squared'].sel(direction='poloidal', drop=True) ** 0.5) / field
+            vperp = vperp_tor - vperp_pol
+            vpar = vpar_tor + vpar_pol
+            grad_vperp = np.transpose(np.expand_dims(norm, axis=1) * self._vectorized_numpy_derivative(
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1),
+                -np.transpose(vperp.to_numpy(), axes=(0, 2, 1))
+            ), axes=(0, 2, 1))
+            grad_vpar = np.transpose(np.expand_dims(norm, axis=1) * self._vectorized_numpy_derivative(
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1),
+                -np.transpose(vpar.to_numpy(), axes=(0, 2, 1))
+            ), axes=(0, 2, 1))
+            newcoords['field_direction'] = np.array(['parallel', 'perpendicular'])
+            field_velocity_i = np.concatenate([np.expand_dims(vperp.to_numpy(), axis=-1), np.expand_dims(vpar.to_numpy(), axis=-1)], axis=-1)
+            grad_field_velocity_i = np.concatenate([np.expand_dims(grad_vperp, axis=-1), np.expand_dims(grad_vpar, axis=-1)], axis=-1)
+            rotation_frequency_sonic = (vperp * field / (data['r_geometric'] * (data['field_squared'].sel(direction='poloidal', drop=True) ** 0.5))).isel(ion=main_species).max('ion').to_numpy()
+            exb_norm = (data['r_minor'] / data['safety_factor']).to_numpy()
+            exb_shearing_rate = exb_norm * self._vectorized_numpy_derivative(data['r_minor'].to_numpy(), -vperp.isel(ion=main_species).mean('ion') / np.where(np.isclose(exb_norm, 0.0), 1.0e-4, exb_norm))
+            newvars['field_velocity_i'] = (['time', 'radius', 'ion', 'field_direction'], field_velocity_i)
+            newvars['field_velocity_i_norm'] = (['time', 'radius', 'ion', 'field_direction'], field_velocity_i / np.expand_dims(np.expand_dims(data['velocity_sound_ref'].to_numpy(), axis=-1), axis=-1))
+            newvars['grad_field_velocity_i'] = (['time', 'radius', 'ion', 'field_direction'], grad_field_velocity_i)
+            newvars['grad_field_velocity_i_norm'] = (['time', 'radius', 'ion', 'field_direction'], grad_field_velocity_i * np.expand_dims(np.expand_dims((data['length_ref'] * data['velocity_sound_ref']).to_numpy(), axis=-1), axis=-1))
+            newvars['exb_shearing_rate'] = (['time', 'radius'], exb_shearing_rate)
+            newvars['exb_shearing_rate_norm'] = (['time', 'radius'], exb_shearing_rate * (data['length_ref'] / data['velocity_sound_ref']).to_numpy())
+            newvars['rotation_frequency_sonic'] = (['time', 'radius'], rotation_frequency_sonic)
+            newvars['rotation_frequency_sonic_norm'] = (['time', 'radius'], rotation_frequency_sonic * (data['length_ref'] / data['velocity_sound_ref']).to_numpy())
+            #newvars['alw0'] = (['n', 'rho'], norm * self._vectorized_numpy_derivative(data['r_minor'].to_numpy(), -np.log(data['omega0'].to_numpy())))
+            newvars['grad_rotation_frequency_sonic'] = (['time', 'radius'], self._vectorized_numpy_derivative(data['r_minor'].to_numpy(), rotation_frequency_sonic))
+
+            radiation_sources = ['synchrotron', 'bremsstrahlung', 'line_radiation']
+            auxiliary_sources = ['ohmic', 'neutral_beam', 'ion_cyclotron', 'electron_cyclotron']
+            auxiliary_plus_sources = ['ohmic', 'neutral_beam', 'ion_cyclotron', 'electron_cyclotron', 'ionization']
+            newvars['heat_source_total_e'] = (['time', 'radius'], data['heat_source_e'].sum('source').to_numpy())
+            newvars['heat_source_total_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sum('source').to_numpy())
+            newvars['particle_source_total_e'] = (['time', 'radius'], data['particle_source_e'].sum('source').to_numpy())
+            newvars['particle_source_total_i'] = (['time', 'radius', 'ion'], data['particle_source_i'].sum('source').to_numpy())
+            newvars['momentum_source_total_i'] = (['time', 'radius', 'ion', 'direction'], data['momentum_source_i'].sum('source').to_numpy())
+            newvars['radiation_heat_source'] = (['time', 'radius'], data['heat_source_e'].sel(source=radiation_sources).sum('source').to_numpy())
+            newvars['auxiliary_heat_source_e'] = (['time', 'radius'], data['heat_source_e'].sel(source=auxiliary_sources).sum('source').to_numpy())
+            newvars['auxiliary_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source=auxiliary_sources).sum('source').to_numpy())
+            newvars['auxiliary_plus_heat_source_e'] = (['time', 'radius'], data['heat_source_e'].sel(source=auxiliary_plus_sources).sum('source').to_numpy())
+            newvars['auxiliary_plus_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source=auxiliary_plus_sources).sum('source').to_numpy())
+            newvars['fusion_heat_source'] = (['time', 'radius'], (data['heat_source_e'].sel(source='fusion') + data['heat_source_i'].sel(source='fusion').sum('ion')).to_numpy())
+
+        self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
 
 
     def _compute_integrated_quantities(self):
 
-        def interpolate(v, x, y):
-            vm = np.array([v]) if isinstance(v, (float, int)) else copy.deepcopy(v)
-            xm = x.reshape(-1, x.shape[-1])
-            ym = y.reshape(-1, y.shape[-1])
-            if vm.shape[0] != xm.shape[0]:
-                vm = np.repeat(np.expand_dims(vm, axis=0), xm.shape[0], axis=0)
-            interp = np.zeros_like(vm)
-            for i in range(xm.shape[0]):
-                interp[i] = np.interp(vm[i], xm[i], ym[i])
-            interp = interp.reshape(*y.shape[:-1])
-            return interp
-
-        data = self.input
         newvars: MutableMapping[str, Any] = {}
 
-        if 'rmin' in data:
-            line = cumulative_simpson(np.ones_like(data['rmin'].to_numpy()), x=data['rmin'].to_numpy(), initial=0.0)
-            n_e_line = cumulative_simpson((data['ne']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            n_i_line = cumulative_simpson(
-                np.transpose((data['ni']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+        if self.has_input:
+            data = self.input
+
+            line = self._vectorized_numpy_integration(np.ones_like(data['r_minor'].to_numpy()), data['r_minor'].to_numpy())
+            vol = self._vectorized_numpy_integration(data['mxh_dvolume_dr'].to_numpy(), data['r_minor'].to_numpy())
+            newvars['line_average'] = (['time', 'radius'], line)
+            newvars['volume_average'] = (['time', 'radius'], vol)
+
+            density_e_line = self._vectorized_numpy_integration((data['density_e']).to_numpy(), data['r_minor'].to_numpy())
+            density_i_line = self._vectorized_numpy_integration(
+                np.transpose((data['density_i']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
-            newvars['n_e_line'] = (['n'], n_e_line[:, -1] / line[:, -1])
-            newvars['n_i_line'] = (['n', 'name'], n_i_line[:, :, -1] / np.expand_dims(line, axis=1)[:, :, -1])
-            newvars['f_i_line'] = (['n', 'name'], n_i_line[:, :, -1] / np.expand_dims(n_e_line, axis=1)[:, :, -1])
+            newvars['density_e_line_average'] = (['time'], density_e_line[..., -1] / line[..., -1])
+            newvars['density_i_line_average'] = (['time', 'ion'], density_i_line[..., -1] / np.expand_dims(line, axis=1)[..., -1])
+            newvars['density_ratio_i_line_average'] = (['time', 'ion'], density_i_line[..., -1] / np.expand_dims(density_e_line, axis=1)[..., -1])
+            newvars['concentration_i_line_average'] = (['time', 'ion'], density_i_line[..., -1] / np.expand_dims(np.sum(density_i_line, axis=1), axis=1)[..., -1])
 
-        if 'rmin' in data and 'volp_miller' in data:
+            heat_source_e_vol = np.transpose(self._vectorized_numpy_integration(
+                np.transpose((data['heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1)
+            ), axes=(0, 2, 1))
+            heat_source_i_vol = np.transpose(self._vectorized_numpy_integration(
+                np.transpose((data['heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
+                np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['ion']), axis=1)
+            ), axes=(0, 3, 1, 2))
+            particle_source_e_vol = np.transpose(self._vectorized_numpy_integration(
+                np.transpose((data['particle_source_e'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1)
+            ), axes=(0, 2, 1))
+            particle_source_e_conv_vol = 1.5 * self.constants['e_si'] * np.expand_dims(data['temperature_e'].to_numpy(), axis=-1) * particle_source_e_vol  # MW
+            particle_source_i_vol = np.transpose(self._vectorized_numpy_integration(
+                np.transpose((data['particle_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
+                np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['ion']), axis=1)
+            ), axes=(0, 3, 1, 2))
+            momentum_source_i_vol = np.transpose(self._vectorized_numpy_integration(
+                np.transpose((data['momentum_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 4, 1)),
+                np.repeat(np.expand_dims(np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['direction']), axis=1), axis=1), len(data['ion']), axis=1)
+            ), axes=(0, 4, 1, 2, 3))
+            newvars['heat_source_e_vol'] = (['time', 'radius', 'source'], heat_source_e_vol)
+            newvars['heat_source_i_vol'] = (['time', 'radius', 'ion', 'source'], heat_source_i_vol)
+            newvars['particle_source_e_vol'] = (['time', 'radius', 'source'], particle_source_e_vol)
+            newvars['particle_source_e_conv_vol'] = (['time', 'radius', 'source'], particle_source_e_conv_vol)
+            newvars['particle_source_i_vol'] = (['time', 'radius', 'ion', 'source'], particle_source_i_vol)
+            newvars['momentum_source_i_vol'] = (['time', 'radius', 'ion', 'direction', 'source'], momentum_source_i_vol)
+            newvars['heat_source_vol_total'] = (['time', 'radius'], np.sum(heat_source_e_vol + np.sum(heat_source_i_vol, axis=2), axis=-1))
+            newvars['particle_source_vol_total'] = (['time', 'radius'], np.sum(particle_source_e_vol, axis=-1))
+            newvars['momentum_source_vol_total'] = (['time', 'radius', 'direction'], np.sum(np.sum(momentum_source_i_vol, axis=2), axis=-1))
+            newvars['heat_source_total_in'] = (['time'], np.sum(heat_source_e_vol + np.sum(heat_source_i_vol, axis=2), axis=-1)[:, -1])
+            newvars['particle_source_total_in'] = (['time'], np.sum(particle_source_e_vol, axis=-1)[:, -1])
+            newvars['momentum_source_total_in'] = (['time'], np.sum(np.sum(momentum_source_i_vol, axis=2), axis=-1)[:, -1, 0])
 
-            pe = cumulative_simpson((data['qe'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            pi = cumulative_simpson((data['qi'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            se = cumulative_simpson((data['ge'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            pce = 1.5 * 1.0e-3 * 16.0218 * data['te'].to_numpy() * se  # MW
-            mt = cumulative_simpson((data['qmom'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            newvars['pe'] = (['n', 'rho'], pe)
-            newvars['pi'] = (['n', 'rho'], pi)
-            newvars['se'] = (['n', 'rho'], se)
-            newvars['pce'] = (['n', 'rho'], pce)
-            newvars['mt'] = (['n', 'rho'], mt)
-            newvars['ptotal'] = (['n', 'rho'], pe + pi)
-            newvars['s_in'] = (['n'], se[:, -1])
+            surface = np.repeat(np.expand_dims(data['mxh_surface_area'].to_numpy(), axis=-1), len(data['source']), axis=-1)
+            inverse_surface = 1.0 / np.where(np.isclose(surface, 0.0), 1.0, surface)
+            newvars['heat_source_e_flux'] = (['time', 'radius', 'source'], np.where(np.isclose(surface, 0.0), 0.0, heat_source_e_vol * inverse_surface))
+            newvars['heat_source_i_flux'] = (['time', 'radius', 'ion', 'source'], np.where(np.isclose(np.repeat(np.expand_dims(surface, axis=2), len(data['ion']), axis=2), 0.0), 0.0, heat_source_i_vol * np.expand_dims(inverse_surface, axis=2)))
+            newvars['particle_source_e_flux'] = (['time', 'radius', 'source'], np.where(np.isclose(surface, 0.0), 0.0, particle_source_e_vol * inverse_surface))
+            newvars['particle_source_e_conv_flux'] = (['time', 'radius', 'source'], np.where(np.isclose(surface, 0.0), 0.0, particle_source_e_conv_vol * inverse_surface))
+            newvars['momentum_source_i_flux'] = (['time', 'radius', 'ion', 'direction', 'source'], np.where(np.repeat(np.expand_dims(np.repeat(np.expand_dims(surface, axis=2), len(data['ion']), axis=2), axis=3), len(data['direction']), axis=3), 0.0, momentum_source_i_vol * np.expand_dims(np.expand_dims(inverse_surface, axis=2), axis=3)))
+            #newvars["qratio_surf"] = qi / np.where(qe == 0.0, 1e-10, qe)  # to avoid division by zero
 
-            if 'surf_miller' in data:
-                surf = data['surf_miller'].to_numpy()
-                inv_surf = 1.0 / np.where(np.isclose(surf, 0.0), 1.0, surf)
-                newvars['qe_surf'] = (['n', 'rho'], np.where(np.isclose(surf, 0.0), 0.0, pe * inv_surf))
-                newvars['qi_surf'] = (['n', 'rho'], np.where(np.isclose(surf, 0.0), 0.0, pi * inv_surf))
-                newvars['ge_surf'] = (['n', 'rho'], np.where(np.isclose(surf, 0.0), 0.0, se * inv_surf))
-                newvars['qce_surf'] = (['n', 'rho'], np.where(np.isclose(surf, 0.0), 0.0, pce * inv_surf))
-                newvars['tt_surf'] = (['n', 'rho'], np.where(np.isclose(surf, 0.0), 0.0, mt * inv_surf))
-                #newvars["qratio_surf"] = qi / np.where(qe == 0.0, 1e-10, qe)  # to avoid division by zero
-
-            pe_aux = cumulative_simpson((data['qe_aux_ion'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            pi_aux = cumulative_simpson((data['qi_aux_ion'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            palpha = cumulative_simpson((data['qalpha'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            prad = cumulative_simpson((data['qrad'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            newvars['pe_aux'] = (['n', 'rho'], cumulative_simpson((data['qe_aux'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['pi_aux'] = (['n', 'rho'], cumulative_simpson((data['qi_aux'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['pe_aux_ion'] = (['n', 'rho'], pe_aux)
-            newvars['pi_aux_ion'] = (['n', 'rho'], pi_aux)
-            newvars['pohm'] = (['n', 'rho'], cumulative_simpson((data['qohme'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['prf'] = (['n', 'rho'], cumulative_simpson((data['qrf'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['pbeam'] = (['n', 'rho'], cumulative_simpson((data['qbeam'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['pion'] = (['n', 'rho'], cumulative_simpson((data['qion'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['palpha'] = (['n', 'rho'], palpha)
-            newvars['prad'] = (['n', 'rho'], prad)
-            newvars['ptr'] = (['n', 'rho'], pe_aux + pi_aux + palpha + prad)
-
-            if 'qei' in data:
-                newvars['pei'] = (['n', 'rho'], cumulative_simpson((data['qei'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['p_rad'] = (['n'], prad[:, -1])
-            newvars['p_fus'] = (['n'], 5.0 * palpha[:, -1])
-            newvars['p_in'] = (['n'], (pe_aux + pi_aux)[:, -1])
-            newvars['q_gain'] = (['n'], newvars['p_fus'][-1] / newvars['p_in'][-1])
-            newvars['p_heat'] = (['n'], (pe_aux + pi_aux + palpha)[:, -1])
-            newvars['p_sol'] = (['n'], (pe_aux + pi_aux + palpha - prad)[:, -1])
-
-            vol = cumulative_simpson(data['volp_miller'].to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            n_e_vol = cumulative_simpson((data['ne'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            t_e_vol = cumulative_simpson((data['te'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            p_e_vol = cumulative_simpson((data['pressure_e'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            w_e_vol = cumulative_simpson((1.5 * data['pressure_e'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            n_i_vol = cumulative_simpson(
-                np.transpose((data['ni'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+            ohmic_heat_source_vol = self._vectorized_numpy_integration(
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ohmic', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
             )
-            t_i_vol = cumulative_simpson(
-                np.transpose((data['ti'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+            wave_heat_source_vol = self._vectorized_numpy_integration(
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source=['electron_cyclotron', 'ion_cyclotron']).sum('source') * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
             )
-            p_i_vol = cumulative_simpson(
-                np.transpose((data['pressure_i'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+            beam_heat_source_vol = self._vectorized_numpy_integration(
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='neutral_beam', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
             )
-            w_i_vol = cumulative_simpson(
-                np.transpose((1.5 * data['pressure_i'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+            ionization_heat_source_vol = self._vectorized_numpy_integration(
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ionization', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
             )
-            #n_i_th_vol = cumulative_simpson((data['ni'].isel(name=thermal_species).sum('name') * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            p_i_th_vol = cumulative_simpson((data['pressure_i_th'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            w_i_th_vol = cumulative_simpson((1.5 * data['pressure_i_th'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            newvars['vol'] = (['n'], vol[:, -1])
-            #newvars['n_e'] = (['n'], n_e_vol[:, -1])
-            #newvars['n_i'] = (['n', 'name'], n_i_vol[:, :, -1])
-            #newvars['n_i_th'] = (['n'], n_i_th_vol[:, -1])
-            #newvars['n_th'] = (['n'], (n_e_vol + n_i_th_vol)[:, -1])
-            newvars['w_e'] = (['n'], w_e_vol[:, -1])
-            newvars['w_i'] = (['n', 'name'], w_i_vol[:, :, -1])
-            newvars['w_i_th'] = (['n'], w_i_th_vol[:, -1])
-            newvars['w_th'] = (['n'], (w_e_vol + w_i_th_vol)[:, -1])
+            radiation_heat_source_vol = self._vectorized_numpy_integration(
+                (data['radiation_heat_source'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            auxiliary_heat_source_e_vol = self._vectorized_numpy_integration(
+                (data['auxiliary_heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            auxiliary_heat_source_i_vol = np.transpose(self._vectorized_numpy_integration(
+                np.transpose((data['auxiliary_heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
+            ), axes=(0, 2, 1))
+            auxiliary_plus_heat_source_e_vol = self._vectorized_numpy_integration(
+                (data['auxiliary_plus_heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            auxiliary_plus_heat_source_i_vol = np.transpose(self._vectorized_numpy_integration(
+                np.transpose((data['auxiliary_plus_heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
+            ), axes=(0, 2, 1))
+            fusion_heat_source_vol = self._vectorized_numpy_integration(
+                (data['fusion_heat_source'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            heat_exchange_ei_vol = self._vectorized_numpy_integration(
+                (data['heat_exchange_ei'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            newvars['ohmic_heat_source_vol'] = (['time', 'radius'], ohmic_heat_source_vol)
+            newvars['wave_heat_source_vol'] = (['time', 'radius'], wave_heat_source_vol)
+            newvars['beam_heat_source_vol'] = (['time', 'radius'], beam_heat_source_vol)
+            newvars['ionization_heat_source_vol'] = (['time', 'radius'], ionization_heat_source_vol)
+            newvars['radiation_heat_source_vol'] = (['time', 'radius'], radiation_heat_source_vol)
+            newvars['auxiliary_heat_source_e_vol'] = (['time', 'radius'], auxiliary_heat_source_e_vol)
+            newvars['auxiliary_heat_source_i_vol'] = (['time', 'radius', 'ion'], auxiliary_heat_source_i_vol)
+            newvars['auxiliary_plus_heat_source_e_vol'] = (['time', 'radius'], auxiliary_plus_heat_source_e_vol)
+            newvars['auxiliary_plus_heat_source_i_vol'] = (['time', 'radius', 'ion'], auxiliary_plus_heat_source_i_vol)
+            newvars['fusion_heat_source_vol'] = (['time', 'radius'], fusion_heat_source_vol)
+            newvars['heat_exchange_ei_vol'] = (['time', 'radius'], heat_exchange_ei_vol)
 
-            inv_p = 1.0 / np.where(np.isclose(pe_aux + pi_aux + palpha, 0.0), 1.0, pe_aux + pi_aux + palpha)[:, -1]
-            inv_s = 1.0 / np.where(np.isclose(se, 0.0), 1.0, se)[:, -1]
-            newvars['taue'] = (['n'], np.where(np.isclose((pe_aux + pi_aux + palpha)[:, -1], 0.0), np.inf, (w_e_vol + w_i_th_vol)[:, -1] * inv_p))
-            newvars['taup'] = (['n'], np.where(np.isclose(se[:, -1], 0.0), np.inf, n_e_vol[:, -1] * inv_s))
-            newvars['tau'] = newvars['taup'][-1] / newvars['taue'][-1]
+            heating_source_vol = ohmic_heat_source_vol + wave_heat_source_vol + beam_heat_source_vol + ionization_heat_source_vol + fusion_heat_source_vol
+            newvars['power_fusion'] = (['time'], 5.0 * fusion_heat_source_vol[..., -1])
+            newvars['power_radiation'] = (['time'], radiation_heat_source_vol[..., -1])
+            newvars['power_input'] = (['time'], (np.sum(heat_source_e_vol + np.sum(heat_source_i_vol, axis=2), axis=-1))[..., -1])
+            newvars['power_heating'] = (['time'], heating_source_vol[..., -1])
+            newvars['power_scrape_off_layer'] = (['time'], (heating_source_vol + radiation_heat_source_vol)[..., -1])
+            newvars['fusion_gain'] = (['time'], ((5.0 * fusion_heat_source_vol)[..., -1] / (ohmic_heat_source_vol + wave_heat_source_vol + beam_heat_source_vol + ionization_heat_source_vol)[..., -1]))
 
-            newvars['n_e_vol'] = (['n'], n_e_vol[:, -1] / vol[:, -1])
-            newvars['n_i_vol'] = (['n', 'name'], n_i_vol[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
-            newvars['t_e_vol'] = (['n'], t_e_vol[:, -1] / vol[:, -1])
-            newvars['t_i_vol'] = (['n', 'name'], t_i_vol[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
-            newvars['f_i_vol'] = (['n', 'name'], n_i_vol[:, :, -1] / np.expand_dims(n_e_vol, axis=1)[:, :, -1])
+            density_e_vol = self._vectorized_numpy_integration(
+                (data['density_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            temperature_e_vol = self._vectorized_numpy_integration(
+                (data['temperature_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            pressure_e_vol = self._vectorized_numpy_integration(
+                (data['pressure_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            energy_e_vol = self._vectorized_numpy_integration(
+                (1.5 * data['pressure_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            density_i_vol = self._vectorized_numpy_integration(
+                np.transpose((data['density_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
+            )
+            temperature_i_vol = self._vectorized_numpy_integration(
+                np.transpose((data['temperature_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
+            )
+            pressure_i_vol = self._vectorized_numpy_integration(
+                np.transpose((data['pressure_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
+            )
+            energy_i_vol = self._vectorized_numpy_integration(
+                np.transpose((1.5 * data['pressure_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
+            )
+            density_thermal_i_vol = self._vectorized_numpy_integration(
+                (data['density_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            pressure_thermal_i_vol = self._vectorized_numpy_integration(
+                (data['pressure_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            energy_thermal_i_vol = self._vectorized_numpy_integration(
+                (1.5 * data['pressure_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            newvars['density_e_volume_average'] = (['time'], density_e_vol[..., -1] / vol[..., -1])
+            newvars['density_i_volume_average'] = (['time', 'ion'], density_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
+            newvars['density_ratio_i_volume_average'] = (['time', 'ion'], density_i_vol[..., -1] / np.expand_dims(density_e_vol, axis=1)[..., -1])
+            newvars['concentration_i_volume_average'] = (['time', 'ion'], density_i_vol[..., -1] / np.expand_dims(np.sum(density_i_vol, axis=1), axis=1)[..., -1])
+            newvars['density_thermal_i_volume_average'] = (['time'], density_thermal_i_vol[..., -1] / vol[..., -1])
+            #newvars['density_ratio_thermal_i_volume_average'] = (['time'], density_thermal_i_vol[..., -1] / np.sum(density_i_vol, axis=1)[..., -1])
+            newvars['temperature_e_volume_average'] = (['time'], temperature_e_vol[..., -1] / vol[..., -1])
+            newvars['temperature_i_volume_average'] = (['time', 'ion'], temperature_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
+            #newvars['temperature_ratio_i_volume_average'] = (['time', 'ion'], temperature_i_vol[..., -1] / np.expand_dims(temperature_e_vol, axis=1)[..., -1])
+            newvars['pressure_e_volume_average'] = (['time'], pressure_e_vol[..., -1] / vol[..., -1])
+            newvars['pressure_i_volume_average'] = (['time', 'ion'], pressure_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
+            newvars['pressure_ratio_i_volume_average'] = (['time', 'ion'], pressure_i_vol[..., -1] / np.expand_dims(pressure_e_vol, axis=1)[..., -1])
+            newvars['pressure_thermal_volume_average'] = (['time'], (pressure_e_vol + pressure_thermal_i_vol)[..., -1] / vol[..., -1])
+            #newvars['pressure_ratio_thermal_volume_average'] = (['time'], (pressure_e_vol + pressure_thermal_i_vol)[..., -1] / (pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1])
+            newvars['pressure_total_volume_average'] = (['time'], (pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1])
+            newvars['energy_e_volume_average'] = (['time'], energy_e_vol[..., -1] / vol[..., -1])
+            newvars['energy_i_volume_average'] = (['time', 'ion'], energy_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
+            newvars['energy_ratio_i_volume_average'] = (['time', 'ion'], energy_i_vol[..., -1] / np.expand_dims(energy_e_vol, axis=1)[..., -1])
+            newvars['energy_thermal_volume_average'] = (['time'], (energy_e_vol + energy_thermal_i_vol)[..., -1] / vol[..., -1])
+            #newvars['energy_ratio_thermal_volume_average'] = (['time'], (energy_e_vol + energy_thermal_i_vol)[..., -1] / (energy_e_vol + np.sum(energy_i_vol, axis=1))[..., -1])
+            newvars['energy_total_volume_average'] = (['time'], (energy_e_vol + np.sum(energy_i_vol, axis=1))[..., -1] / vol[..., -1])
 
-            newvars['nu_ne'] = (['n'], interpolate(0.0, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['ne'].to_numpy()) / newvars['n_e_vol'][-1])
-            newvars['nu_ne_0.2'] = (['n'], interpolate(0.2, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['ne'].to_numpy())  / newvars['n_e_vol'][-1])
-            newvars['nu_te'] = (['n'], interpolate(0.0, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['te'].to_numpy()) / newvars['t_e_vol'][-1])
-            newvars['nu_te_0.2'] = (['n'], interpolate(0.2, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['te'].to_numpy()) / newvars['t_e_vol'][-1])
-            newvars['nu_ni'] = (['n', 'name'], interpolate(0.0, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1))) / newvars['n_i_vol'][-1])
-            newvars['nu_ni_0.2'] = (['n', 'name'], interpolate(0.2, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1))) / newvars['n_i_vol'][-1])
-            newvars['nu_ti'] = (['n', 'name'], interpolate(0.0, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1))) / newvars['t_i_vol'][-1])
-            newvars['nu_ti_0.2'] = (['n', 'name'], interpolate(0.2, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1))) / newvars['t_i_vol'][-1])
+            density_e_00 = self._vectorized_numpy_interpolation(
+                0.0,
+                np.repeat(np.expand_dims(data['radius'].to_numpy(), axis=0), len(data['time']), axis=0),
+                data['density_e'].to_numpy()
+            )
+            density_e_02 = self._vectorized_numpy_interpolation(
+                0.2,
+                np.repeat(np.expand_dims(data['radius'].to_numpy(), axis=0), len(data['time']), axis=0),
+                data['density_e'].to_numpy()
+            )
+            temperature_e_00 = self._vectorized_numpy_interpolation(
+                0.0,
+                np.repeat(np.expand_dims(data['radius'].to_numpy(), axis=0), len(data['time']), axis=0),
+                data['temperature_e'].to_numpy()
+            )
+            temperature_e_02 = self._vectorized_numpy_interpolation(
+                0.2,
+                np.repeat(np.expand_dims(data['radius'].to_numpy(), axis=0), len(data['time']), axis=0),
+                data['temperature_e'].to_numpy()
+            )
+            density_i_00 = self._vectorized_numpy_interpolation(
+                0.0,
+                np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['radius'].to_numpy(), axis=0), len(data['time']), axis=0), axis=1), len(data['ion']), axis=1),
+                np.transpose(data['density_i'].to_numpy(), axes=(0, 2, 1))
+            )
+            density_i_02 = self._vectorized_numpy_interpolation(
+                0.2,
+                np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['radius'].to_numpy(), axis=0), len(data['time']), axis=0), axis=1), len(data['ion']), axis=1),
+                np.transpose(data['density_i'].to_numpy(), axes=(0, 2, 1))
+            )
+            temperature_i_00 = self._vectorized_numpy_interpolation(
+                0.0,
+                np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['radius'].to_numpy(), axis=0), len(data['time']), axis=0), axis=1), len(data['ion']), axis=1),
+                np.transpose(data['temperature_i'].to_numpy(), axes=(0, 2, 1))
+            )
+            temperature_i_02 = self._vectorized_numpy_interpolation(
+                0.2,
+                np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['radius'].to_numpy(), axis=0), len(data['time']), axis=0), axis=1), len(data['ion']), axis=1),
+                np.transpose(data['temperature_i'].to_numpy(), axes=(0, 2, 1))
+            )
+            newvars['density_peaking_e'] = (['time'], density_e_00 / (density_e_vol[..., -1] / vol[..., -1]))
+            newvars['density_peaking_off_axis_e'] = (['time'], density_e_02 / (density_e_vol[..., -1] / vol[..., -1]))
+            newvars['temperature_peaking_e'] = (['time'], temperature_e_00 / (temperature_e_vol[..., -1] / vol[..., -1]))
+            newvars['temperature_peaking_off_axis_e'] = (['time'], temperature_e_02 / (temperature_e_vol[..., -1] / vol[..., -1]))
+            newvars['density_peaking_i'] = (['time', 'ion'], density_i_00 / (density_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1]))
+            newvars['density_peaking_off_axis_i'] = (['time', 'ion'], density_i_02 / (density_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1]))
+            newvars['temperature_peaking_i'] = (['time', 'ion'], temperature_i_00 / (temperature_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1]))
+            newvars['temperature_peaking_off_axis_i'] = (['time', 'ion'], temperature_i_02 / (temperature_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1]))
 
-            newvars['pressure_e_derived_vol'] = (['n'], p_e_vol[:, -1] / vol[:, -1])
-            newvars['pressure_tot_derived_vol'] = (['n'], (p_e_vol + np.sum(p_i_vol, axis=1))[:, -1] / vol[:, -1])
-            newvars['pressure_th_derived_vol'] = (['n'], (p_e_vol + np.sum(p_i_th_vol, axis=1))[:, -1] / vol[:, -1])
-            newvars['pressure_fast_derived_vol'] = (['n'], np.sum(p_i_vol - p_i_th_vol, axis=1)[:, -1] / vol[:, -1])
-            newvars['pressure_fast_fraction'] = (['n'], newvars['pressure_fast_derived_vol'][-1] / newvars['pressure_tot_derived_vol'][-1])
+            density_ratio_vol = self._vectorized_numpy_integration(
+                (data['density_ratio_main'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            temperature_ratio_vol = self._vectorized_numpy_integration(
+                (data['temperature_ratio_main'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            effective_charge_vol = self._vectorized_numpy_integration(
+                (data['effective_charge'] * data['mxh_dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            newvars['density_ratio_vol'] = (['time'], density_ratio_vol[..., -1] / vol[..., -1])
+            newvars['temperature_ratio_vol'] = (['time'], temperature_ratio_vol[..., -1] / vol[..., -1])
+            newvars['effective_charge_vol'] = (['time'], effective_charge_vol[..., -1] / vol[..., -1])
 
-            if 'nine' in data:
-                newvars['nine_vol'] = (['n', 'name'], cumulative_simpson(np.transpose((data['nine'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)), x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), initial=0.0)[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
-            if 'tite' in data:
-                newvars['tite_vol'] = (['n', 'name'], cumulative_simpson(np.transpose((data['tite'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)), x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), initial=0.0)[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
-            if 'zeff_derived' in data:
-                newvars['zeff_derived_vol'] = (['n'], cumulative_simpson((data['zeff_derived'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
-                newvars['nueff'] = (['n'], newvars['zeff_derived_vol'][-1] * (data['rcentr'] * 0.1 * data['ne'] * data['te'] ** (-2)).isel(rho=-1).to_numpy())
-            if 'mach' in data:
-                newvars['mach_vol'] = (['n'], cumulative_simpson((data['mach'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
+            #if 'mach' in data:
+            #    newvars['mach_vol'] = (['n'], self._vectorized_numpy_integration((data['mach'] * data['mxh_dvolume_dr']).to_numpy(), data['r_minor'].to_numpy())[:, -1] / vol[:, -1])
+            newvars['pressure_total_vol_norm_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] / (data['field_axis'] ** 2)).to_numpy())
+            newvars['beta_n_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] * 100.0 * data['r_minor_lcfs'] / (data['field_axis'] * data['current'])).to_numpy())  # pc
 
-            newvars['beta_zero'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / (data['b_zero'] ** 2).to_numpy())
-            newvars['beta_n_eng'] = (['n'], newvars['beta_zero'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy())  # pc
+            field_squared_vol = self._vectorized_numpy_integration(
+                np.transpose((data['field_squared'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['field_direction']), axis=1)
+            )
+            newvars['field_squared_vol'] = (['time', 'field_direction'], field_squared_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
+            newvars['pressure_total_vol_norm_field'] = (['time', 'field_direction'], np.expand_dims((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1], axis=-1) * 2.0 * self.constants['mu_si'] / field_squared_vol[..., -1])
+            newvars['pressure_total_vol_norm'] = (['time'], (pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] * 2.0 * self.constants['mu_si'] / np.sum(field_squared_vol, axis=1)[..., -1])
+            newvars['beta_n'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] * 2.0 * self.constants['mu_si'] / np.sum(field_squared_vol, axis=1)[..., -1]) * (100.0 * data['r_minor_lcfs'] * data['field_axis'] / data['current']).to_numpy())  # pc
 
-            newvars['bp2_vol'] = (['n'], cumulative_simpson((data['bp2'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
-            newvars['bt2_vol'] = (['n'], cumulative_simpson((data['bt2'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
-            newvars['beta_p'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bp2_vol'][-1])
-            newvars['beta_t'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bt2_vol'][-1])
-            newvars['beta'] = (['n'], 1.0 / (newvars['beta_p'][-1] ** (-1) + newvars['beta_t'][-1] ** (-1)))
-            newvars['beta_n'] = (['n'], newvars['beta'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy())  # pc
+            confinement_time_energy = np.where(np.isclose(heating_source_vol[..., -1], 0.0), np.inf, (energy_e_vol + energy_thermal_i_vol)[..., -1] / heating_source_vol[..., -1])
+            confinement_time_particle = np.where(np.isclose(np.sum(particle_source_e_vol, axis=-1)[..., -1], 0.0), np.inf, density_e_vol[..., -1] / np.sum(particle_source_e_vol, axis=-1)[..., -1])
+            newvars['confinement_time_energy'] = (['time'], confinement_time_energy)
+            newvars['confinement_time_particle'] = (['time'], confinement_time_particle)
+            newvars['confinement_time_ratio'] = (['time'], np.where(np.isfinite(confinement_time_energy), confinement_time_particle / confinement_time_energy, 0.0))
 
         self.update_input_data_vars(newvars)
 
@@ -951,109 +920,128 @@ class plasma_io(io):
         newvars: MutableMapping[str, Any] = {}
         if 'current' in data and 'bcentr' in data:
 
-            newvars['n_gw'] = (['n'], (data['current'] / (np.pi * data['rmin'] ** 2)).to_numpy()[:, -1])
-            newvars['f_gw'] = (['n'], 0.1 * data['n_e_vol'].to_numpy() / newvars['n_gw'][-1])
-            newvars['f_gw_local'] = (['n', 'rho'], 0.1 * data['ne'].to_numpy() / np.expand_dims(newvars['n_gw'][-1], axis=-1))
+            greenwald_density = (1.0e14 * data['current'] / (np.pi * data['r_minor_lcfs'] ** 2))
+            newvars['greenwald_density'] = (['time'], greenwald_density.to_numpy())
+            newvars['greenwald_fraction'] = (['time'], (data['density_e_vol'] / greenwald_density).to_numpy())
+            #newvars['greenwald_density_local'] = (['time', 'radius'], (data['density_e'] / greenwald_density).to_numpy())
 
-            newvars['tau98'] = (['n'], (
+            newvars['effective_collisionality_angioni'] = (['time', 'radius'], (data['effective_charge_vol'] * data['r_geometric'] * 0.1 * data['density_e'] * data['temperature_e'] ** (-2)).to_numpy())
+
+            newvars['confinement_time_scaling_h98'] = (['time'], (
                 0.0562
                 * data['current'] ** (0.93)
-                * data['rcentr'] ** (1.97)
-                * data['kappa'].isel(rho=-1) ** (0.78)
-                * data['eps'] ** (0.58)
-                * data['bcentr'] ** (0.15)
-                * data['n_e_line'] ** (0.41)
-                * data['mass_i'] ** (0.19)
-                * data['ptotal'].isel(rho=-1) ** (-0.69)
+                * data['r_geometric_lcfs'] ** (1.97)
+                * data['kappa'].isel(radius=-1) ** (0.78)
+                * data['epsilon_lcfs'] ** (0.58)
+                * data['field_axis'] ** (0.15)
+                * (1.0e-19 * data['density_e_line_average']) ** (0.41)
+                * data['mass_main_average'] ** (0.19)
+                * data['power_input'] ** (-0.69)
             ).to_numpy())
-            newvars['tau89'] = (['n'], (
+            newvars['confinement_time_scaling_h89'] = (['time'], (
                 0.048
                 * data['current'] ** (0.85)
-                * data['rcentr'] ** (1.50)
-                * data['kappa'].isel(rho=-1) ** (0.50)
-                * data['eps'] ** (0.30)
-                * data['bcentr'] ** (0.20)
-                * (data['n_e_line'] * 0.1) ** (0.10)
-                * data['mass_i'] ** (0.50)
-                * data['ptotal'].isel(rho=-1) ** (-0.50)
+                * data['r_geometric_lcfs'] ** (1.50)
+                * data['kappa'].isel(radius=-1) ** (0.50)
+                * data['epsilon_lcfs'] ** (0.30)
+                * data['field_axis'] ** (0.20)
+                * (1.0e-20 * data['density_e_line_average']) ** (0.10)
+                * data['mass_main_average'] ** (0.50)
+                * data['power_input'] ** (-0.50)
             ).to_numpy())
-            newvars['tau97l'] = (['n'], (
+            newvars['confinement_time_scaling_l97'] = (['time'], (
                 0.023
                 * data['current'] ** (0.96)
-                * data['rcentr'] ** (1.83)
-                * data['kappa'].isel(rho=-1) ** (0.64)
-                * data['eps'] ** (0.06)
-                * data['bcentr'] ** (0.03)
-                * data['n_e_line'] ** (0.40)
-                * data['mass_i'] ** (0.20)
-                * data['ptotal'].isel(rho=-1) ** (-0.73)
+                * data['r_geometric_lcfs'] ** (1.83)
+                * data['kappa'].isel(radius=-1) ** (0.64)
+                * data['epsilon_lcfs'] ** (0.06)
+                * data['field_axis'] ** (0.03)
+                * (1.0e-19 * data['density_e_line_average']) ** (0.40)
+                * data['mass_main_average'] ** (0.20)
+                * data['power_input'] ** (-0.73)
             ).to_numpy())
 
             lh_nmin = (
-                0.07
+                1.0e19 * 0.07
                 * data['current'] ** (0.34)
-                * data['bcentr'] ** (0.62)
-                * data['a'] ** (-0.95)
-                * data['eps'] ** (0.4)
+                * data['field_axis'] ** (0.62)
+                * data['r_minor_lcfs'] ** (-0.95)
+                * data['epsilon_lcfs'] ** (0.4)
             ).to_numpy()
-            nminfactor = np.where(data['n_e_vol'].to_numpy() > lh_nmin, (data['n_e_vol'].to_numpy() / lh_nmin) ** 2, 1.0)
-            newvars['p_lh_martin'] = (['n'], (
+            nminfactor = np.where(data['density_e_volume_average'].to_numpy() > lh_nmin, (data['density_e_volume_average'].to_numpy() / lh_nmin) ** 2, 1.0)
+            p_lh = (
                 2.15
-                * data['n_e_vol'] ** (0.782)
-                * data['bcentr'] ** (0.772)
-                * data['a'] ** (0.975)
-                * data['rcentr'] ** (0.999)
-                * (2.0 / data['mass_i']) ** (1.11)
-            ).to_numpy() * nminfactor)
-            newvars['lhratio'] = (['n'], data['p_sol'].to_numpy() / newvars['p_lh_martin'][-1])
+                * (1.0e-19 * data['density_e_volume_average']) ** (0.782)
+                * data['field_axis'] ** (0.772)
+                * data['r_minor_lcfs'] ** (0.975)
+                * data['r_geometric_lcfs'] ** (0.999)
+                * (2.0 / data['mass_main_average']) ** (1.11)
+            ).to_numpy() * nminfactor
+            newvars['power_lh_scaling_martin'] = (['time'], p_lh)
+            newvars['power_lh_ratio'] = (['time'], data['power_scrape_off_layer'].to_numpy() / p_lh)
 
-            uckan_shaping = 1.0 + data['kappa95'] ** 2 * (1.0 + 2.0 * data['delta95'] ** 2 - 1.2 * data['delta95'] ** 3)
-            iter_shaping = uckan_shaping * (1.17 - 0.65 * data['eps']) / (1 - data['eps'] ** 2) ** 2
+            epsilon_95 = self._vectorized_numpy_interpolation(
+                0.95,
+                data['magnetic_flux_norm'].sel(direction='poloidal'),
+                data['epsilon'].to_numpy()
+            )
+            kappa_95 = self._vectorized_numpy_interpolation(
+                0.95,
+                data['magnetic_flux_norm'].sel(direction='poloidal'),
+                data['mxh_kappa'].to_numpy()
+            )
+            delta_95 = self._vectorized_numpy_interpolation(
+                0.95,
+                data['magnetic_flux_norm'].sel(direction='poloidal'),
+                data['mxh_delta'].to_numpy()
+            )
+            uckan_shaping = 1.0 + kappa_95[..., -1] ** 2 * (1.0 + 2.0 * delta_95[..., -1] ** 2 - 1.2 * delta_95[..., -1] ** 3)
+            iter_shaping = uckan_shaping * (1.17 - 0.65 * epsilon_95) / (1 - epsilon_95 ** 2) ** 2
 
-            newvars['qstar_uckan'] = (['n'], (
+            newvars['qstar_uckan'] = (['time'], (
                 2.5
-                * data['rmaj'].isel(rho=-1)
-                * data['eps'] ** 2
-                * data['bcentr']
+                * data['r_geometric_lcfs']
+                * data['epsilon_lcfs'] ** 2
+                * data['field_axis']
                 / data['current']
                 * uckan_shaping
             ).to_numpy())
-            newvars['qstar_iter'] = (['n'], (
+            newvars['qstar_iter'] = (['time'], (
                 2.5
-                * data['rmaj'].isel(rho=-1)
-                * data['eps'] ** 2
-                * data['bcentr']
+                * data['r_geometric_lcfs']
+                * data['epsilon_lcfs'] ** 2
+                * data['field_axis']
                 / data['current']
                 * iter_shaping
             ).to_numpy())
 
-            newvars['lq_brunner'] = (['n'], (
+            newvars['width_scrape_off_layer_brunner'] = (['time'], (
                 0.91
-                * (data['pressure_tot_derived_vol'] / 0.101325) ** (-0.48)
+                * (data['pressure_total_volume_average'] / self.constants['atm_si']) ** (-0.48)
             ).to_numpy())
-            newvars['lq_eich14'] = (['n'], (
+            newvars['width_scrape_off_layer_eich14'] = (['time'], (
                 0.63
-                * data['bp_out'].isel(rho=-1) ** (-1.19)
+                * data['field_outer'].sel(direction='poloidal').isel(radius=-1) ** (-1.19)
             ).to_numpy())
-            newvars['lq_eich15'] = (['n'], (
+            newvars['width_scrape_off_layer_eich15'] = (['time'], (
                 1.35
-                * (data['p_sol'] * 1.0e6) ** (-0.02)
-                * data['bp_out'].isel(rho=-1) ** (-0.92)
-                * data['rcentr'] ** (0.04)
-                * data['eps'] ** (0.42)
+                * data['power_scrape_off_layer'] ** (-0.02)
+                * data['field_outer'].sel(direction='poloidal').isel(radius=-1) ** (-0.92)
+                * data['r_geometric_lcfs'] ** (0.04)
+                * data['epsilon_lcfs'] ** (0.42)
             ).to_numpy())
 
-            #bp = data['eps'] * data['bcentr'] / data['q95'] #TODO: VERY ROUGH APPROXIMATION!!!!
-
-            #newvars['ne_upstream'] = (['n'], 0.6 * data['n_e_vol'].to_numpy())
-            #te_guess = 1.0
-            #p_elfrac = 0.5
-            #k0e = 1.0e6 * (3.2 * 3.44e5 * 1.60218e-19**2) / 9.1094e-31
-            #Aqpar = 4.0 * np.pi * (1.0e-3 * data['eps'] * data['rcentr'] / data['q95']).to_numpy() * newvars['lq_brunner'][-1]
-            #lpsol = (p_elfrac * 1.0e6 * data['p_sol'] * np.pi * data['rcentr'] * data['q95']).to_numpy()
-            #lnC = 24 - np.log((newvars['ne_upstream'][-1] * 1.0e13) ** 0.5 / te_guess)  # low temperature approximation
-            #te_up = (3.5 * (lpsol / Aqpar) * lnC / k0e) ** (2.0 / 7.0)
-            #newvars['te_upstream'] = (['n'], te_up)
+            # newvars['density_e_upstream'] = (['time'], 0.6 * data['density_e_vol'].isel(rho=-1).to_numpy())
+            # debye_e_upstream = ((self.constants['eps_si'] / self.constants['e_si']) ** 0.5) * (data['temperature_e'] / (0.6 * data['density_e_vol'] * (data['charge_e'] ** 2))) ** 0.5  # m
+            # collisionality_prefactor = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
+            # inverse_approach_factor_ee = (4.0 * np.pi * self.constants['eps_si'] / self.constants['e_si']) * data['temperature_e'] / abs(data['charge_e'] ** 2)
+            # log_coulomb_ee = np.log((inverse_approach_factor_ee * debye_e_upstream).isel(rho=-1))
+            # te_guess = 1.0
+            # p_elfrac = 0.5
+            # k0e = 1.0e6 * (3.2 * 3.44e5 * (self.constants['e_si'] ** 2)) / self.constants['me_si']
+            # Aqpar = 4.0 * np.pi * (1.0e-3 * data['eps'] * data['rcentr'] / data['q95']).to_numpy() * newvars['lq_brunner'][-1]
+            # lpsol = (p_elfrac * 1.0e6 * data['p_sol'] * np.pi * data['rcentr'] * data['q95']).to_numpy()
+            # newvars['temperature_e_upstream'] = (['n'], (3.5 * (lpsol / Aqpar) * lnC / k0e) ** (2.0 / 7.0))
 
         self.update_input_data_vars(newvars)
 
@@ -1064,10 +1052,7 @@ class plasma_io(io):
         self._compute_derived_coordinates()
         self._compute_derived_reference_quantities()
         self._compute_derived_geometry()
-        self._compute_average_mass()
-        self._compute_source_terms()
         self._compute_extended_local_inputs()
-        self._compute_secondary_quantities()
         self._compute_integrated_quantities()
         self._compute_scalings()
 
@@ -1122,6 +1107,16 @@ class plasma_io(io):
                 coords['radius'] = data['rho'].to_numpy()
                 if 'name' in data:
                     coords['ion'] = data['name'].to_numpy()
+                    mass_i = np.zeros((len(coords['ion']), ))
+                    atomic_number_i = np.zeros((len(coords['ion']), ))
+                    for i, short_name in enumerate(coords['ion']):
+                        _, sa, sz = define_ion_species(short_name=short_name)
+                        mass_i[i] = sa
+                        atomic_number_i[i] = sz
+                    data_vars['mass_i'] = (['time', 'ion'], np.repeat(np.expand_dims(mass_i, axis=0), len(coords['time']), axis=0))
+                    data_vars['atomic_number_i'] = (['time', 'ion'], np.repeat(np.expand_dims(atomic_number_i, axis=0), len(coords['time']), axis=0))
+                    if 'type' in data:
+                        data_vars['type_i'] = (['time', 'ion'], np.where(data['type'].to_numpy() == '[therm]', 'thermal', 'fast'))
                 coords['direction'] = np.array(newobj.directions)
                 coords['source'] = np.array(newobj.sources)
                 for key, nkey in direct_time_map.items():
@@ -1140,7 +1135,7 @@ class plasma_io(io):
                 if 'torflux' in data:
                     flux[..., 0] = data['torflux'].to_numpy()
                 elif 'q' in data and 'polflux' in data:
-                    flux[..., 0] = cumulative_simpson(data['q'].to_numpy(), x=data['polflux'].to_numpy(), initial=0.0)
+                    flux[..., 0] = newobj._vectorized_numpy_integration(data['q'].to_numpy(), data['polflux'].to_numpy())
                 if 'polflux' in data:
                     flux[..., 1] = data['polflux'].to_numpy()
                 data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
@@ -1151,6 +1146,8 @@ class plasma_io(io):
                     if 'vpol' in data:
                         velocity[..., 1] = data['vpol'].to_numpy()
                     data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], velocity)
+                if 'heat_exchange_ei' not in data_vars:
+                    data_vars['heat_exchange_ei'] = (['time', 'radius'], np.zeros((len(coords['time']), len(coords['radius']))))
                 heat_source_e = np.repeat(np.expand_dims(np.zeros((len(coords['time']), len(coords['radius']))), axis=-1), len(coords['source']), axis=-1)
                 if 'qohme' in data:
                     heat_source_e[..., 0] = 1.0e6 * data['qohme'].to_numpy()
@@ -1251,7 +1248,7 @@ class plasma_io(io):
                     r_contour = np.expand_dims(r0, axis=-1) + np.expand_dims(r, axis=-1) * np.cos(theta_r)
                     z_contour = np.expand_dims(z0, axis=-1) + np.expand_dims(r * kappa, axis=-1) * np.sin(theta_z)
                     l_contour = np.sqrt((r_contour - np.expand_dims(r0, axis=-1)) ** 2 + (z_contour - np.expand_dims(z0, axis=-1)) ** 2)
-                    coords['angle'] = theta
+                    coords['angle_geometric'] = theta
                     data_vars['contour'] = (['time', 'radius', 'angle_geometric'], l_contour)
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
