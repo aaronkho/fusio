@@ -468,7 +468,7 @@ class imas_io(io):
                     dd_version_tag = 'ids_properties&verions_put&data_dictionary'
                     top_level_path = ipath / f'{ids}.h5'
                     if top_level_path.is_file():
-                        h5_data = h5py.File(top_level_path)
+                        h5_data = h5py.File(top_level_path, 'r')
                         if f'{ids}' in h5_data:
                             idsmap[f'{ids}'] = {k: v[()] for k, v in h5_data[f'{ids}'].items()}
                             if isinstance(idsmap[f'{ids}'].get(dd_version_tag, None), bytes) and 'data_dictionary_version' not in attrs:
