@@ -3,6 +3,7 @@ import warnings
 import logging
 import numpy as np
 import pandas as pd
+import xarray as xr
 from scipy.optimize import root_scalar
 
 logger = logging.getLogger('fusio')
@@ -14,6 +15,30 @@ np_ftypes = (np.float16, np.float32, np.float64)
 number_types = (float, int, np_itypes, np_utypes, np_ftypes)
 array_types = (list, tuple, np.ndarray)
 string_types = (str, np.str_)
+pandas_types = (pd.Series, pd.DataFrame)
+xarray_types = (xr.DataArray, xr.Dataset)
+class_types = (pandas_types, xarray_types)
+
+
+def ensure_numpy(val):
+    if isinstance(val, number_types):
+        return np.atleast_1d([val])
+    elif isinstance(val, array_types):
+        return np.atleast_1d(val)
+    elif isinstance(val, class_types):
+        return val.to_numpy()
+    else:
+        return val
+
+
+def ensure_type_match(val, other):
+    if isinstance(other, number_types) and val.size == 1:
+        return other.__class__(val.item(0))
+    elif isinstance(other, xarray_types):
+        return other.__class__(coords=other.coords, data=val)
+    else:
+        return other.__class__(val)
+
 
 e_si = 1.60218e-19       # C
 u_si = 1.66054e-27       # kg
@@ -277,10 +302,10 @@ def calc_3ion_ni_from_ni_and_quasineutrality(nia, nib, zia, zib, zic, ne, norm_i
     return nia, nib, nic
 
 def calc_ani_from_azeff_and_gradient_quasineutrality(azeff, zeff, zia, zib, zi_target, ninorma, ninorm_target, ane, ania, ze=1.0):
-    zze = (zib - zeff) * ze
+    zze = (zeff - zib) * ze
     zza = (zib - zia) * zia
-    zz_target = (zib - zi_target) * zi_target
-    ani_target = (azeff * zeff * ze + ane * zze - ania * ninorma * zza) / (ninorm_target * zz_target)
+    zz_target = (zi_target - zib) * zi_target
+    ani_target = (azeff * zeff * ze + ane * zze + ania * ninorma * zza) / (ninorm_target * zz_target)
     return ani_target
 
 # def calc_ani_from_gradient_quasineutrality(zia, zib, zi_target, ninorma, ninormb, ninorm_target, ane, ania, anib, ze=1.0):
@@ -396,13 +421,10 @@ def calc_2ion_pnorm_with_1ion_and_quasineutrality(ninorma, tinorma, tinormb, zia
     return pnorm
 
 def calc_3ion_pnorm_with_3ions(ninorma, ninormb, ninormc, tinorma, tinormb, tinormc, ne=None, te=None):
-    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
-    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
     ninormc_temp = calc_ninorm_from_ni(ninormc, ne) if ne is not None else copy.deepcopy(ninormc)
-    tinorma_temp = calc_tinorm_from_ti(tinorma, te) if te is not None else copy.deepcopy(tinorma)
-    tinormb_temp = calc_tinorm_from_ti(tinormb, te) if te is not None else copy.deepcopy(tinormb)
     tinormc_temp = calc_tinorm_from_ti(tinormc, te) if te is not None else copy.deepcopy(tinormc)
-    pnorm = 1.0 + ninorma_temp * tinorma_temp + ninormb_temp * tinormb_temp + ninormc_temp * tinormc_temp
+    pnorm_2ion = calc_2ion_pnorm_with_2ions(ninorma, ninormb, tinorma, tinormb, ne=ne, te=te)
+    pnorm = pnorm_2ion + ninormc_temp * tinormc_temp
     return pnorm
 
 def calc_3ion_pnorm_with_2ions_and_quasineutrality(ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic, ne=None, te=None):
@@ -456,29 +478,6 @@ def calc_3ion_p_with_1ion_zeff_and_quasineutrality(nia, tia, tib, tic, zeff, zia
     p = calc_3ion_p_with_3ions(nia_temp, nib, nic, tia_temp, tib_temp, tic_temp, ne, te, norm_inputs=False)
     return p
 
-def calc_zeff_from_2ion_ni_with_2ions(nia, nib, zia, zib, ne=None):
-    ninorma = calc_ninorm_from_ni(nia, ne) if ne is not None else copy.deepcopy(nia)
-    ninormb = calc_ninorm_from_ni(nib, ne) if ne is not None else copy.deepcopy(nib)
-    zeff = ninorma * (zia ** 2) + ninormb * (zib ** 2)
-    return zeff
-
-def calc_zeff_from_2ion_ni_with_1ion_and_quasineutrality(nia, zia, zib, ne=None):
-    ninorma, ninormb = calc_2ion_ninorm_from_ninorm_and_quasineutrality(nia, zia, zib, ne=ne)
-    zeff = calc_zeff_from_2ion_ni_with_2ions(ninorma, ninormb, zia, zib, ne=None)
-    return zeff
-
-def calc_zeff_from_3ion_ni_with_3ions(nia, nib, nic, zia, zib, zic, ne=None):
-    ninorma = calc_ninorm_from_ni(nia, ne) if ne is not None else copy.deepcopy(nia)
-    ninormb = calc_ninorm_from_ni(nib, ne) if ne is not None else copy.deepcopy(nib)
-    ninormc = calc_ninorm_from_ni(nic, ne) if ne is not None else copy.deepcopy(nic)
-    zeff = ninorma * (zia ** 2) + ninormb * (zib ** 2) + ninormc * (zic ** 2)
-    return zeff
-
-def calc_zeff_from_3ion_ni_with_2ions_and_quasineutrality(nia, nib, zia, zib, zic, ne=None):
-    ninorma, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_and_quasineutrality(nia, nib, zia, zib, zic, ne=ne)
-    zeff = calc_zeff_from_3ion_ni_with_3ions(ninorma, ninormb, ninormc, zia, zib, zic, ne=None)
-    return zeff
-
 def calc_grad_p_from_ap(ap, ne, te, lref):
     c = constants_si()
     grad_p = calc_grad_k_from_ak(ap, c['e'] * ne * te, lref)
@@ -489,234 +488,295 @@ def calc_ap_from_grad_p(grad_p, ne, te, lref):
     ap = calc_ak_from_grad_k(grad_p, c['e'] * ne * te, lref)
     return ap
 
-def calc_3ion_ap_with_3ions(ane, ania, anib, anic, ate, atia, atib, atic, ninorma, ninormb, ninormc, tinorma, tinormb, tinormc):
-    ap = ane + ate + ninorma * tinorma * (ania + atia) + ninormb * tinormb * (anib + atib) + ninormc * tinormc * (anic + atic)
-    logger.debug(f'<{calc_3ion_ap_with_3ions.__name__}>: ap\n{ap}\n')
+def calc_2ion_ap_with_2ions(ania, anib, atia, atib, ninorma, ninormb, tinorma, tinormb, ane, ate, ne=None, te=None, lref=None):
+    ane_temp = calc_ak_from_grad_k(ane, ne, lref) if ne is not None and lref is not None else copy.deepcopy(ane)
+    ate_temp = calc_ak_from_grad_k(ate, te, lref) if ne is not None and lref is not None else copy.deepcopy(ate)
+    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
+    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
+    tinorma_temp = calc_tinorm_from_ti(tinorma, te) if te is not None else copy.deepcopy(tinorma)
+    tinormb_temp = calc_tinorm_from_ti(tinormb, te) if te is not None else copy.deepcopy(tinormb)
+    ania_temp = calc_ak_from_grad_k(ania, calc_ni_from_ninorm(ninorma_temp, ne, nscale=1.0), lref) if ne is not None and lref is not None else copy.deepcopy(ania)
+    anib_temp = calc_ak_from_grad_k(anib, calc_ni_from_ninorm(ninormb_temp, ne, nscale=1.0), lref) if ne is not None and lref is not None else copy.deepcopy(anib)
+    atia_temp = calc_ak_from_grad_k(atia, calc_ti_from_tinorm(tinorma_temp, te, tscale=1.0), lref) if te is not None and lref is not None else copy.deepcopy(atia)
+    atib_temp = calc_ak_from_grad_k(atib, calc_ti_from_tinorm(tinormb_temp, te, tscale=1.0), lref) if te is not None and lref is not None else copy.deepcopy(atib)
+    ap = ane_temp + ate_temp + ninorma_temp * tinorma_temp * (ania_temp + atia_temp) + ninormb_temp * tinormb_temp * (anib_temp + atib_temp)
     return ap
 
-def calc_3ion_ap_with_2ions_and_gradient_quasineutrality(ane, ania, anib, ate, atia, atib, atic, ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic):
-    ninormc = calc_ninorm_from_quasineutrality(zia, zib, zic, ninorma, ninormb)
-    anic = calc_ani_from_gradient_quasineutrality(zia, zib, zic, ninorma, ninormb, ninormc, ane, ania, anib)
-    ap = calc_3ion_ap_with_3ions(ane, ania, anib, anic, ate, atia, atib, atic, ninorma, ninormb, ninormc, tinorma, tinormb, tinormc)
+def calc_2ion_ap_with_1ion_and_gradient_quasineutrality(ania, atia, atib, ninorma, tinorma, tinormb, zia, zib, ane, ate, ne=None, te=None, lref=None):
+    ninorma_temp, ninormb = calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorma, zia, zib, ne=ne)
+    ania_temp, anib = calc_2ion_ani_from_ani_and_gradient_quasineutrality(ania, zia, zib, ane, ninorma, ne=ne, lref=lref)
+    ninorma_temp = calc_ni_from_ninorm(ninorma_temp, ne, nscale=1.0) if ne is not None else copy.deepcopy(ninorma_temp)
+    ninormb_temp = calc_ni_from_ninorm(ninormb, ne, nscale=1.0) if ne is not None else copy.deepcopy(ninormb)
+    ania_temp = calc_grad_k_from_ak(ania_temp, ninorma_temp, lref) if lref is not None else copy.deepcopy(ania_temp)
+    anib_temp = calc_grad_k_from_ak(anib, ninormb_temp, lref) if lref is not None else copy.deepcopy(anib)
+    ap = calc_2ion_ap_with_2ions(ania_temp, anib_temp, atia, atib, ninorma_temp, ninormb_temp, tinorma, tinormb, ane, ate, ne=ne, te=te, lref=lref)
     return ap
 
-def calc_3ion_ap_with_1ion_azeff_and_gradient_quasineutrality(ane, ania, ate, atia, atib, atic, ninorma, tinorma, tinormb, tinormc, azeff, zeff, zia, zib, zic):
-    ninorma_temp, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorma, zeff, zia, zib, zic)
-    ania_temp, anib, anic = calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(ania, azeff, zeff, zia, zib, zic, ane, ninorma_temp)
-    ap = calc_3ion_ap_with_3ions(ane, ania_temp, anib, anic, ate, atia, atib, atic, ninorma_temp, ninormb, ninormc, tinorma, tinormb, tinormc)
+def calc_3ion_ap_with_3ions(ania, anib, anic, atia, atib, atic, ninorma, ninormb, ninormc, tinorma, tinormb, tinormc, ane, ate, ne=None, te=None, lref=None):
+    ninormc_temp = calc_ninorm_from_ni(ninormc, ne) if ne is not None else copy.deepcopy(ninormc)
+    tinormc_temp = calc_tinorm_from_ti(tinormc, te) if te is not None else copy.deepcopy(tinormc)
+    anic_temp = calc_ak_from_grad_k(anic, calc_ni_from_ninorm(ninormc_temp, ne, nscale=1.0), lref) if ne is not None and lref is not None else copy.deepcopy(anic)
+    atic_temp = calc_ak_from_grad_k(atic, calc_ti_from_tinorm(tinormc_temp, te, tscale=1.0), lref) if te is not None and lref is not None else copy.deepcopy(atic)
+    ap_2ion = calc_2ion_ap_with_2ions(ania, anib, atia, atib, ninorma, ninormb, tinorma, tinormb, ane, ate, ne=ne, te=te, lref=lref)
+    ap = ap_2ion + ninormc_temp * tinormc_temp * (anic_temp + atic_temp)
     return ap
 
-def calc_3ion_grad_p_with_3ions(grad_ne, grad_nia, grad_nib, grad_nic, grad_te, grad_tia, grad_tib, grad_tic, ne, nia, nib, nic, te, tia, tib, tic, lref=None):
-    grad_p = 0.0 * ne
-    if lref is not None:
-        ap = calc_3ion_ap_with_3ions(grad_ne, grad_nia, grad_nib, grad_nic, grad_te, grad_tia, grad_tib, grad_tic, nia, nib, nic, tia, tib, tic)
-        grad_p = calc_grad_p_from_ap(ap, ne, te, lref)
-    else:
-        c = constants_si()
-        grad_p = c['e'] * (ne * grad_te + grad_ne * te + nia * grad_tia + grad_nia * tia + nib * grad_tib + grad_nib * tib + nic * grad_tic + grad_nic * tic)
+def calc_3ion_ap_with_2ions_and_gradient_quasineutrality(ania, anib, atia, atib, atic, ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic, ane, ate, ne=None, te=None, lref=None):
+    ninorma_temp, ninormb_temp, ninormc = calc_3ion_ninorm_from_ninorm_and_quasineutrality(ninorma, ninormb, zia, zib, zic, ne=ne)
+    ania_temp, anib_temp, anic = calc_3ion_ani_from_ani_and_gradient_quasineutrality(ania, anib, zia, zib, zic, ane, ninorma, ninormb, ne=ne, lref=lref)
+    ninorma_temp = calc_ni_from_ninorm(ninorma_temp, ne, nscale=1.0) if ne is not None else copy.deepcopy(ninorma_temp)
+    ninormb_temp = calc_ni_from_ninorm(ninormb_temp, ne, nscale=1.0) if ne is not None else copy.deepcopy(ninormb_temp)
+    ninormc_temp = calc_ni_from_ninorm(ninormc, ne, nscale=1.0) if ne is not None else copy.deepcopy(ninormc)
+    ania_temp = calc_grad_k_from_ak(ania_temp, ninorma_temp, lref) if lref is not None else copy.deepcopy(ania_temp)
+    anib_temp = calc_grad_k_from_ak(anib_temp, ninormb_temp, lref) if lref is not None else copy.deepcopy(anib_temp)
+    anic_temp = calc_grad_k_from_ak(anic, ninormc_temp, lref) if lref is not None else copy.deepcopy(anic)
+    ap = calc_3ion_ap_with_3ions(ania_temp, anib_temp, anic_temp, atia, atib, atic, ninorma_temp, ninormb_temp, ninormc_temp, tinorma, tinormb, tinormc, ane, ate, ne=ne, te=te, lref=lref)
+    return ap
+
+def calc_3ion_ap_with_1ion_azeff_and_gradient_quasineutrality(ania, atia, atib, atic, ninorma, tinorma, tinormb, tinormc, azeff, zeff, zia, zib, zic, ane, ate, ne=None, te=None, lref=None):
+    ninorma_temp, ninormb, ninormc = calc_3ion_ninorm_from_ninorm_zeff_and_quasineutrality(ninorma, zeff, zia, zib, zic, ne=ne)
+    ania_temp, anib, anic = calc_3ion_ani_from_ani_azeff_and_gradient_quasineutrality(ania, azeff, zeff, zia, zib, zic, ane, ninorma, ne=ne, lref=lref)
+    ninorma_temp = calc_ni_from_ninorm(ninorma_temp, ne, nscale=1.0) if ne is not None else copy.deepcopy(ninorma_temp)
+    ninormb_temp = calc_ni_from_ninorm(ninormb, ne, nscale=1.0) if ne is not None else copy.deepcopy(ninormb)
+    ninormc_temp = calc_ni_from_ninorm(ninormc, ne, nscale=1.0) if ne is not None else copy.deepcopy(ninormc)
+    ania_temp = calc_grad_k_from_ak(ania_temp, ninorma_temp, lref) if lref is not None else copy.deepcopy(ania_temp)
+    anib_temp = calc_grad_k_from_ak(anib, ninormb_temp, lref) if lref is not None else copy.deepcopy(anib)
+    anic_temp = calc_grad_k_from_ak(anic, ninormc_temp, lref) if lref is not None else copy.deepcopy(anic)
+    ap = calc_3ion_ap_with_3ions(ania_temp, anib_temp, anic_temp, atia, atib, atic, ninorma_temp, ninormb_temp, ninormc_temp, tinorma, tinormb, tinormc, ane, ate, ne=ne, te=te, lref=lref)
+    return ap
+
+def calc_2ion_grad_p_with_2ions(grad_nia, grad_nib, grad_tia, grad_tib, nia, nib, tia, tib, grad_ne, grad_te, ne, te, lref, norm_inputs=False):
+    ne_temp = None if norm_inputs else copy.deepcopy(ne)
+    te_temp = None if norm_inputs else copy.deepcopy(te)
+    lref_temp = None if norm_inputs else copy.deepcopy(lref)
+    ap = calc_2ion_ap_with_2ions(grad_nia, grad_nib, grad_tia, grad_tib, nia, nib, tia, tib, grad_ne, grad_te, ne=ne_temp, te=te_temp, lref=lref_temp)
+    grad_p = calc_grad_p_from_ap(ap, ne, te, lref)
     return grad_p
 
-def calc_3ion_grad_p_with_2ions_and_gradient_quasineutrality(grad_ne, grad_nia, grad_nib, grad_te, grad_tia, grad_tib, grad_tic, ne, nia, nib, te, tia, tib, tic, lref=None):
-    nic = (
-        calc_ninorm_from_quasineutrality(zia, zib, zic, nia, nib)
-        if lref is None else
-        calc_ni_from_quasineutrality(zia, zib, zi_target, nia, nib, ne)
-    )
-    grad_nic = (
-        calc_ani_from_gradient_quasineutrality(zia, zib, zic, nia, nib, nic, grad_ne, grad_nia, grad_nib)
-        if lref is None else
-        calc_grad_ni_from_gradient_quasineutrality(zia, zib, zic, nia, nib, nic, grad_ne, grad_nia, grad_nib, lref)
-    )
-    grad_p = calc_3ion_grad_p_with_3ions(grad_ne, grad_nia, grad_nib, grad_nic, grad_te, grad_tia, grad_tib, grad_tic, ne, nia, nib, nic, te, tia, tib, tic, lref)
+def calc_2ion_grad_p_with_1ion_and_gradient_quasineutrality(grad_nia, grad_tia, grad_tib, nia, tia, tib, zia, zib, grad_ne, grad_te, ne, te, lref, norm_inputs=False):
+    ne_temp = None if norm_inputs else copy.deepcopy(ne)
+    te_temp = None if norm_inputs else copy.deepcopy(te)
+    lref_temp = None if norm_inputs else copy.deepcopy(lref)
+    ap = calc_2ion_ap_with_1ion_and_gradient_quasineutrality(grad_nia, grad_tia, grad_tib, nia, tia, tib, zia, zib, grad_ne, grad_te, ne=ne_temp, te=te_temp, lref=lref_temp)
+    grad_p = calc_grad_p_from_ap(ap, ne, te, lref)
     return grad_p
 
-def calc_3ion_grad_p_with_1ion_grad_zeff_and_gradient_quasineutrality(grad_ne, grad_nia, grad_te, grad_tia, grad_tib, grad_tic, ne, nia, te, tia, tib, tic, grad_zeff, zeff, zia, zib, zic, lref=None):
-    norm_inputs = True if lref is not None else False
-    nia_temp, nib, nic = calc_3ion_ni_from_ni_zeff_and_quasineutrality(nia, zeff, zia, zib, zic, ne, norm_inputs)
-    grad_nia_temp, grad_nib, grad_nic = calc_3ion_grad_ni_from_grad_ni_grad_zeff_and_gradient_quasineutrality(grad_nia, grad_zeff, zeff, zia, zib, zic, grad_ne, nia_temp, ne, lref)
-    grad_p = calc_3ion_grad_p_with_3ions(grad_ne, grad_nia, grad_nib, grad_nic, grad_te, grad_tia, grad_tib, grad_tic, ne, nia, nib, nic, te, tia, tib, tic, lref)
+def calc_3ion_grad_p_with_3ions(grad_nia, grad_nib, grad_nic, grad_tia, grad_tib, grad_tic, nia, nib, nic, tia, tib, tic, grad_ne, grad_te, ne, te, lref, norm_inputs=False):
+    ne_temp = None if norm_inputs else copy.deepcopy(ne)
+    te_temp = None if norm_inputs else copy.deepcopy(te)
+    lref_temp = None if norm_inputs else copy.deepcopy(lref)
+    ap = calc_3ion_ap_with_3ions(grad_nia, grad_nib, grad_nic, grad_tia, grad_tib, grad_tic, nia, nib, nic, tia, tib, tic, grad_ne, grad_te, ne=ne_temp, te=te_temp, lref=lref_temp)
+    grad_p = calc_grad_p_from_ap(ap, ne, te, lref)
     return grad_p
 
-def calc_azeff_from_3ion_grad_ni_with_3ions(grad_ne, grad_nia, grad_nib, grad_nic, ne, nia, nib, nic, zia, zib, zic, lref=None, ze=1.0):
-    norm_inputs = True if lref is not None else False
-    ane = copy.deepcopy(grad_ne) if norm_inputs else calc_ak_from_grad_k(grad_ne, ne, lref)
-    ania = copy.deepcopy(grad_nia) if norm_inputs else calc_ak_from_grad_k(grad_nia, nia, lref)
-    anib = copy.deepcopy(grad_nib) if norm_inputs else calc_ak_from_grad_k(grad_nib, nib, lref)
-    anic = copy.deepcopy(grad_nic) if norm_inputs else calc_ak_from_grad_k(grad_nic, nic, lref)
-    zeff = calc_zeff_from_3ion_ni_with_3ions(ne, nia, nib, nic, zia, zib, zic, norm_inputs)
-    ninorma = copy.deepcopy(nia) if norm_inputs else calc_ninorm_from_ni(nia, ne)
-    ninormb = copy.deepcopy(nib) if norm_inputs else calc_ninorm_from_ni(nib, ne)
-    ninormc = copy.deepcopy(nic) if norm_inputs else calc_ninorm_from_ni(nic, ne)
-    azeff = ane - (ninorma * ania * (zia ** 2) + ninormb * anib * (zib ** 2) + ninormc * anic * (zic ** 2)) / (ze * zeff) 
+def calc_3ion_grad_p_with_2ions_and_gradient_quasineutrality(grad_nia, grad_nib, grad_tia, grad_tib, grad_tic, nia, nib, tia, tib, tic, zia, zib, zic, grad_ne, grad_te, ne, te, lref, norm_inputs=False):
+    ne_temp = None if norm_inputs else copy.deepcopy(ne)
+    te_temp = None if norm_inputs else copy.deepcopy(te)
+    lref_temp = None if norm_inputs else copy.deepcopy(lref)
+    ap = calc_3ion_ap_with_2ions_and_gradient_quasineutrality(grad_nia, grad_nib, grad_tia, grad_tib, grad_tic, nia, nib, tia, tib, tic, zia, zib, zic, grad_ne, grad_te, ne=ne_temp, te=te_temp, lref=lref_temp)
+    grad_p = calc_grad_p_from_ap(ap, ne, te, lref)
+    return grad_p
+
+def calc_3ion_grad_p_with_1ion_grad_zeff_and_gradient_quasineutrality(grad_nia, grad_tia, grad_tib, grad_tic, nia, tia, tib, tic, grad_zeff, zeff, zia, zib, zic, grad_ne, grad_te, ne, te, lref, norm_inputs=False):
+    ne_temp = None if norm_inputs else copy.deepcopy(ne)
+    te_temp = None if norm_inputs else copy.deepcopy(te)
+    lref_temp = None if norm_inputs else copy.deepcopy(lref)
+    ap = calc_3ion_ap_with_1ion_azeff_and_gradient_quasineutrality(grad_nia, grad_tia, grad_tib, grad_tic, nia, tia, tib, tic, grad_zeff, zeff, zia, zib, zic, grad_ne, grad_te, ne=ne_temp, te=te_temp, lref=lref_temp)
+    grad_p = calc_grad_p_from_ap(ap, ne, te, lref)
+    return grad_p
+
+def calc_zeff_from_2ion_ninorm_with_2ions(ninorma, ninormb, zia, zib, ne=None, ze=1.0):
+    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
+    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
+    zeff = (ninorma_temp * (zia ** 2) + ninormb_temp * (zib ** 2)) / ze
+    return zeff
+
+def calc_zeff_from_2ion_ninorm_with_1ion_and_quasineutrality(ninorma, zia, zib, ne=None, ze=1.0):
+    ninorma_temp, ninormb = calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorma, zia, zib, ne=ne)
+    zeff = calc_zeff_from_2ion_ninorm_with_2ions(ninorma_temp, ninormb, zia, zib, ne=None, ze=ze)
+    return zeff
+
+def calc_zeff_from_3ion_ninorm_with_3ions(ninorma, ninormb, ninormc, zia, zib, zic, ne=None, ze=1.0):
+    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
+    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
+    ninormc_temp = calc_ninorm_from_ni(ninormc, ne) if ne is not None else copy.deepcopy(ninormc)
+    zeff = (ninorma_temp * (zia ** 2) + ninormb_temp * (zib ** 2) + ninormc_temp * (zic ** 2)) / ze
+    return zeff
+
+def calc_zeff_from_3ion_ninorm_with_2ions_and_quasineutrality(ninorma, ninormb, zia, zib, zic, ne=None, ze=1.0):
+    ninorma_temp, ninormb_temp, ninormc = calc_3ion_ninorm_from_ninorm_and_quasineutrality(ninorma, ninormb, zia, zib, zic, ne=ne)
+    zeff = calc_zeff_from_3ion_ninorm_with_3ions(ninorma_temp, ninormb_temp, ninormc, zia, zib, zic, ne=None, ze=ze)
+    return zeff
+
+def calc_azeff_from_2ion_ani_with_2ions(ania, anib, ninorma, ninormb, zia, zib, ane, ne=None, lref=None, ze=1.0):
+    ane_temp = calc_ak_from_grad_k(ane, ne, lref) if ne is not None and lref is not None else copy.deepcopy(ane)
+    ania_temp = calc_ak_from_grad_k(ania, ninorma, lref) if lref is not None else copy.deepcopy(ania)
+    anib_temp = calc_ak_from_grad_k(anib, ninormb, lref) if lref is not None else copy.deepcopy(anib)
+    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
+    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
+    zeff = calc_zeff_from_2ion_ninorm_with_2ions(ninorma_temp, ninormb_temp, zia, zib, ne=None)
+    azeff = ((ania_temp * ninorma_temp * (zia ** 2) + anib_temp * ninormb_temp * (zib ** 2)) / (zeff * ze)) - ane_temp
     return azeff
 
-def calc_azeff_from_3ion_grad_ni_with_2ions_and_gradient_quasineutrality(grad_ne, grad_nia, grad_nib, ne, nia, nib, zia, zib, zic, lref=None):
-    norm_inputs = True if lref is not None else False
-    nic = (
-        calc_ninorm_from_quasineutrality(zia, zib, zic, nia, nib)
-        if norm_inputs else
-        calc_ni_from_quasineutrality(zia, zib, zic, nia, nib, ne)
-    )
-    grad_nic = (
-        calc_ani_from_gradient_quasineutrality(zia, zib, zic, nia, nib, nic, grad_ne, grad_nia, grad_nib)
-        if norm_inputs else
-        calc_grad_ni_from_gradient_quasineutrality(zia, zib, zic, nia, nib, nic, grad_ne, grad_nia, grad_nib, ne, lref)
-    )
-    azeff = calc_azeff_from_3ion_grad_ni_with_3ions(grad_ne, grad_nia, grad_nib, grad_nic, ne, nia, nib, nic, zia, zib, zic, lref)
+def calc_azeff_from_2ion_ani_with_1ion_and_gradient_quasineutrality(ania, ninorma, zia, zib, ane, ne=None, lref=None, ze=1.0):
+    ane_temp = calc_ak_from_grad_k(ane, ne, lref) if ne is not None and lref is not None else copy.deepcopy(ane)
+    ninorma_temp, ninormb = calc_2ion_ninorm_from_ninorm_and_quasineutrality(ninorma, zia, zib, ne=ne)
+    ania_temp, anib = calc_2ion_ani_from_ani_and_gradient_quasineutrality(ania, zia, zib, ane, ninorma, ne=ne, lref=lref)
+    azeff = calc_azeff_from_2ion_ani_with_2ions(ania_temp, anib, ninorma_temp, ninormb, zia, zib, ane_temp, ne=None, lref=None, ze=ze)
     return azeff
 
-def calc_ne_from_beta_and_pnorm(beta, te, bref, pnorm):
+def calc_azeff_from_3ion_ani_with_3ions(ania, anib, anic, ninorma, ninormb, ninormc, zia, zib, zic, ane, ne=None, lref=None, ze=1.0):
+    ane_temp = calc_ak_from_grad_k(ane, ne, lref) if ne is not None and lref is not None else copy.deepcopy(ane)
+    ania_temp = calc_ak_from_grad_k(ania, ninorma, lref) if lref is not None else copy.deepcopy(ania)
+    anib_temp = calc_ak_from_grad_k(anib, ninormb, lref) if lref is not None else copy.deepcopy(anib)
+    anic_temp = calc_ak_from_grad_k(anic, ninormc, lref) if lref is not None else copy.deepcopy(anic)
+    ninorma_temp = calc_ninorm_from_ni(ninorma, ne) if ne is not None else copy.deepcopy(ninorma)
+    ninormb_temp = calc_ninorm_from_ni(ninormb, ne) if ne is not None else copy.deepcopy(ninormb)
+    ninormc_temp = calc_ninorm_from_ni(ninormc, ne) if ne is not None else copy.deepcopy(ninormc)
+    zeff = calc_zeff_from_3ion_ninorm_with_3ions(ninorma_temp, ninormb_temp, ninormc_temp, zia, zib, zic, ne=None)
+    azeff = ((ania_temp * ninorma_temp * (zia ** 2) + anib_temp * ninormb_temp * (zib ** 2) + anic_temp * ninormc_temp * (zic ** 2)) / (zeff * ze)) - ane_temp
+    return azeff
+
+def calc_azeff_from_3ion_ani_with_2ions_and_gradient_quasineutrality(ania, anib, ninorma, ninormb, zia, zib, zic, ane, ne=None, lref=None, ze=1.0):
+    ane_temp = calc_ak_from_grad_k(ane, ne, lref) if ne is not None and lref is not None else copy.deepcopy(ane)
+    ninorma_temp, ninormb_temp, ninormc = calc_3ion_ninorm_from_ninorm_and_quasineutrality(ninorma, ninormb, zia, zib, zic, ne=ne)
+    ania_temp, anib_temp, anic = calc_3ion_ani_from_ani_and_gradient_quasineutrality(ania, anib, zia, zib, zic, ane, ninorma, ninormb, ne=ne, lref=lref)
+    azeff = calc_azeff_from_3ion_ani_with_3ions(ania_temp, anib_temp, anic, ninorma_temp, ninormb_temp, ninormc, zia, zib, zic, ane_temp, ne=None, lref=None, ze=ze)
+    return azeff
+
+def calc_ne_from_beta_and_pnorm(beta, pnorm, btot, te):
     c = constants_si()
-    ne = beta * (bref ** 2) / (2.0 * c['mu'] * te * pnorm)
+    ne = beta * (btot ** 2) / (2.0 * c['mu'] * c['e'] * te * pnorm)
     return ne
 
-def calc_te_from_beta_and_pnorm(beta, ne, bref, pnorm):
+def calc_te_from_beta_and_pnorm(beta, pnorm, btot, ne):
     c = constants_si()
-    te = beta * (bref ** 2) / (2.0 * c['mu'] * ne * pnorm)
+    te = beta * (btot ** 2) / (2.0 * c['mu'] * c['e'] * ne * pnorm)
     return te
 
-def calc_bo_from_beta_and_pnorm(beta, ne, te, pnorm):
+def calc_btot_from_beta_and_pnorm(beta, pnorm, ne, te):
     c = constants_si()
-    bo = np.sqrt(2.0 * c['mu'] * ne * te * pnorm / beta)
-    return bo
+    btot = np.sqrt(2.0 * c['mu'] * c['e'] * ne * te * pnorm / beta)
+    return btot
 
-def calc_bo_from_beta_and_p(beta, p):
+def calc_btot_from_beta_and_p(beta, p):
     c = constants_si()
-    bo = np.sqrt(2.0 * c['mu'] * p / beta)
-    return bo
+    btot = np.sqrt(2.0 * c['mu'] * p / beta)
+    return btot
 
-def calc_beta_from_p(p, bref):
+def calc_beta_from_p(p, btot):
     c = constants_si()
-    beta = 2.0 * c['mu'] * p / (bref ** 2)
+    beta = 2.0 * c['mu'] * p / (btot ** 2)
     return beta
 
-def calc_beta_from_pnorm(pnorm, bref, ne, te):
+def calc_beta_from_pnorm(pnorm, btot, ne, te):
     c = constants_si()
-    betae = 2.0 * c['mu'] * c['e'] * ne * te / (bref ** 2)
+    betae = 2.0 * c['mu'] * c['e'] * ne * te / (btot ** 2)
     beta = betae * pnorm
     return beta
 
-def calc_ne_from_alpha_and_ap(alpha, q, te, bref, ap):
+def calc_ne_from_alpha_and_ap(alpha, ap, q, btot, te):
     c = constants_si()
-    ne = alpha * bref * bref / (2.0 * c['mu'] * (q ** 2) * c['e'] * te * ap)
+    ne = alpha * (btot ** 2) / (2.0 * c['mu'] * (q ** 2) * c['e'] * te * ap)
     return ne
 
-def calc_te_from_alpha_and_ap(alpha, q, ne, bref, ap):
+def calc_te_from_alpha_and_ap(alpha, ap, q, btot, ne):
     c = constants_si()
-    te = alpha * bref * bref / (2.0 * c['mu'] * (q ** 2) * c['e'] * ne * ap)
+    te = alpha * (btot ** 2) / (2.0 * c['mu'] * (q ** 2) * c['e'] * ne * ap)
     return te
 
-def calc_bo_from_alpha_and_ap(alpha, q, ne, te, ap):
+def calc_btot_from_alpha_and_ap(alpha, ap, q, ne, te):
     c = constants_si()
-    bo = np.sqrt(2.0 * c['mu'] * (q ** 2) * c['e'] * ne * te * ap / alpha)
-    return bo
+    btot = np.sqrt(2.0 * c['mu'] * (q ** 2) * c['e'] * ne * te * ap / alpha)
+    return btot
 
-def calc_bo_from_alpha_and_grad_p(alpha, q, lref, grad_p):
+def calc_btot_from_alpha_and_grad_p(alpha, grad_p, q, lref):
     c = constants_si()
-    bo = np.sqrt(2.0 * c['mu'] * (q ** 2) * lref * -grad_p / alpha)
-    return bo
+    btot = np.sqrt(2.0 * c['mu'] * (q ** 2) * -lref * grad_p / alpha)
+    return btot
 
-def calc_alpha_from_grad_p(grad_p, q, bref, lref):
+def calc_alpha_from_grad_p(grad_p, q, btot, lref):
     c = constants_si()
-    alpha = -2.0 * c['mu'] * (q ** 2) * lref * grad_p / (bref ** 2)
+    alpha = -2.0 * c['mu'] * (q ** 2) * lref * grad_p / (btot ** 2)
     return alpha
 
-def calc_alpha_from_ap(ap, q, bref, ne, te):
+def calc_alpha_from_ap(ap, q, btot, ne, te):
     c = constants_si()
-    betae = 2.0 * c['mu'] * c['e'] * ne * te / (bref * bref)
+    betae = 2.0 * c['mu'] * c['e'] * ne * te / (btot ** 2)
     alpha = q * q * betae * ap
     return alpha
 
-def calc_alpha_from_grad_zeff(grad_zeff, zeff, zia, zib, zic, grad_ne, grad_nia, grad_te, grad_tia, grad_tib, grad_tic, ne, nia, te, tia, tib, tic, q, bref, lref):
-    grad_p = calc_3ion_grad_p_with_1ion_grad_zeff_and_gradient_quasineutrality(grad_ne, grad_nia, grad_te, grad_tia, grad_tib, grad_tic, ne, nia, te, tia, tib, tic, grad_zeff, zeff, zia, zib, zic, lref)
-    alpha = calc_alpha_from_grad_p(grad_p, q, bref, lref)
+def calc_alpha_from_2ion_ap_with_2ions(ania, anib, atia, atib, ninorma, ninormb, tinorma, tinormb, q, ane, ate, btot, ne, te, lref=None):
+    ne_temp = copy.deepcopy(ne) if lref is not None else None
+    te_temp = copy.deepcopy(te) if lref is not None else None
+    ap = calc_2ion_ap_with_2ions(ania, anib, atia, atib, ninorma, ninormb, tinorma, tinormb, ane, ate, ne=ne_temp, te=te_temp, lref=lref)
+    alpha = calc_alpha_from_ap(ap, q, btot, ne, te)
     return alpha
 
-def calc_alpha_from_azeff(azeff, zeff, zia, zib, zic, ane, ania, ate, atia, atib, atic, ninorma, tinorma, tinormb, tinormc, q, bref, ne, te):
-    ap = calc_3ion_ap_with_1ion_azeff_and_gradient_quasineutrality(ane, ania, ate, atia, atib, atic, ninorma, tinorma, tinormb, tinormc, azeff, zeff, zia, zib, zic)
-    alpha = calc_alpha_from_ap(ap, q, bref, ne, te)
+def calc_alpha_from_2ion_ap_with_1ion_and_gradient_quasineutrality(ania, atia, atib, ninorma, tinorma, tinormb, zia, zib, q, ane, ate, btot, ne, te, lref=None):
+    ne_temp = copy.deepcopy(ne) if lref is not None else None
+    te_temp = copy.deepcopy(te) if lref is not None else None
+    ap = calc_2ion_ap_with_1ion_and_gradient_quasineutrality(ania, atia, atib, ninorma, tinorma, tinormb, zia, zib, ane, ate, ne=ne_temp, te=te_temp, lref=lref)
+    alpha = calc_alpha_from_ap(ap, q, btot, ne, te)
     return alpha
 
-def calc_coulomb_logarithm_nrl_from_te_and_ne(te, ne):
+def calc_alpha_from_2ion_grad_p_with_2ions(grad_nia, grad_nib, grad_tia, grad_tib, nia, nib, tia, tib, q, grad_ne, grad_te, btot, ne, te, lref, norm_inputs=False):
+    grad_p = calc_2ion_grad_p_with_2ions(grad_nia, grad_nib, grad_tia, grad_tib, nia, nib, tia, tib, grad_ne, grad_te, ne, te, lref, norm_inputs=norm_inputs)
+    alpha = calc_alpha_from_grad_p(grad_p, q, btot, lref)
+    return alpha
+
+def calc_alpha_from_2ion_grad_p_with_1ion_and_gradient_quasineutrality(grad_nia, grad_tia, grad_tib, nia, tia, tib, zia, zib, q, grad_ne, grad_te, btot, ne, te, lref, norm_inputs=False):
+    grad_p = calc_2ion_grad_p_with_1ion_and_gradient_quasineutrality(grad_nia, grad_tia, grad_tib, nia, tia, tib, zia, zib, grad_ne, grad_te, ne, te, lref, norm_inputs=norm_inputs)
+    alpha = calc_alpha_from_grad_p(grad_p, q, btot, lref)
+    return alpha
+
+def calc_alpha_from_3ion_ap_with_3ions(ania, anib, anic, atia, atib, atic, ninorma, ninormb, ninormc, tinorma, tinormb, tinormc, q, ane, ate, btot, ne, te, lref=None):
+    ne_temp = copy.deepcopy(ne) if lref is not None else None
+    te_temp = copy.deepcopy(te) if lref is not None else None
+    ap = calc_3ion_ap_with_3ions(ania, anib, anic, atia, atib, atic, ninorma, ninormb, ninormc, tinorma, tinormb, tinormc, ane, ate, ne=ne_temp, te=te_temp, lref=lref)
+    alpha = calc_alpha_from_ap(ap, q, btot, ne, te)
+    return alpha
+
+def calc_alpha_from_3ion_ap_with_2ions_and_gradient_quasineutrality(ania, anib, atia, atib, atic, ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic, q, ane, ate, btot, ne, te, lref=None):
+    ne_temp = copy.deepcopy(ne) if lref is not None else None
+    te_temp = copy.deepcopy(te) if lref is not None else None
+    ap = calc_3ion_ap_with_2ions_and_gradient_quasineutrality(ania, anib, atia, atib, atic, ninorma, ninormb, tinorma, tinormb, tinormc, zia, zib, zic, ane, ate, ne=ne_temp, te=te_temp, lref=lref)
+    alpha = calc_alpha_from_ap(ap, q, btot, ne, te)
+    return alpha
+
+def calc_alpha_from_3ion_ap_with_1ion_azeff_and_gradient_quasineutrality(ania, atia, atib, atic, ninorma, tinorma, tinormb, tinormc, azeff, zeff, zia, zib, zic, q, ane, ate, btot, ne, te, lref=None):
+    ne_temp = copy.deepcopy(ne) if lref is not None else None
+    te_temp = copy.deepcopy(te) if lref is not None else None
+    ap = calc_3ion_ap_with_1ion_azeff_and_gradient_quasineutrality(ania, atia, atib, atic, ninorma, tinorma, tinormb, tinormc, azeff, zeff, zia, zib, zic, ane, ate, ne=ne_temp, te=te_temp, lref=lref)
+    alpha = calc_alpha_from_ap(ap, q, btot, ne, te)
+    return alpha
+
+def calc_alpha_from_3ion_grad_p_with_3ions(grad_nia, grad_nib, grad_nic, grad_tia, grad_tib, grad_tic, nia, nib, nic, tia, tib, tic, q, grad_ne, grad_te, btot, ne, te, lref, norm_inputs=False):
+    grad_p = calc_3ion_grad_p_with_3ions(grad_nia, grad_nib, grad_nic, grad_tia, grad_tib, grad_tic, nia, nib, nic, tia, tib, tic, grad_ne, grad_te, ne, te, lref, norm_inputs=norm_inputs)
+    alpha = calc_alpha_from_grad_p(grad_p, q, btot, lref)
+    return alpha
+
+def calc_alpha_from_3ion_grad_p_with_2ions_and_gradient_quasineutrality(grad_nia, grad_nib, grad_tia, grad_tib, grad_tic, nia, nib, tia, tib, tic, zia, zib, zic, q, grad_ne, grad_te, btot, ne, te, lref, norm_inputs=False):
+    grad_p = calc_3ion_grad_p_with_2ions_and_gradient_quasineutrality(grad_nia, grad_nib, grad_tia, grad_tib, grad_tic, nia, nib, tia, tib, tic, zia, zib, zic, grad_ne, grad_te, ne, te, lref, norm_inputs=norm_inputs)
+    alpha = calc_alpha_from_grad_p(grad_p, q, btot, lref)
+    return alpha
+
+def calc_alpha_from_3ion_grad_p_with_1ion_grad_zeff_and_gradient_quasineutrality(grad_nia, grad_tia, grad_tib, grad_tic, nia, tia, tib, tic, grad_zeff, zeff, zia, zib, zic, q, grad_ne, grad_te, btot, ne, te, lref, norm_inputs=False):
+    grad_p = calc_3ion_grad_p_with_1ion_grad_zeff_and_gradient_quasineutrality(grad_nia, grad_tia, grad_tib, grad_tic, nia, tia, tib, tic, grad_zeff, zeff, zia, zib, zic, grad_ne, grad_te, ne, te, lref, norm_inputs=norm_inputs)
+    alpha = calc_alpha_from_grad_p(grad_p, q, btot, lref)
+    return alpha
+
+def calc_coulomb_logarithm_nrl_from_ne_and_te(ne, te):
     cl = 15.2 - 0.5 * np.log(ne * 1.0e-20) + np.log(te * 1.0e-3)
+    if cl.ndim == 0:
+        cl = float(cl)
     return cl
 
-def calc_ne_from_nustar_nrl(nustar, zeff, q, r, ro, te):
+def calc_nustar_nrl_from_ne_and_te(zeff, q, rmin, rmaj, ne, te):
     c = constants_si()
-    eom = c['e'] / c['me']
-    tb = q * ro * ((r / ro) ** (-1.5)) / ((eom * te) ** 0.5)
-    kk = (1.0e4 / 1.09) * zeff * ((te * 1.0e-3) ** (-1.5))
-    nu = nustar / (tb * kk)
-    data = {'te': te * 1.0e-3, 'knu': nu}
-    rootdata = pd.DataFrame(data)
-    logger.debug(rootdata)
-    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
-    func_ne20 = lambda row: root_scalar(
-        lambda ne: calc_coulomb_logarithm_nrl_from_te_and_ne(row['te'] * 1.0e3, ne * 1.0e20) * ne - row['knu'],
-        x0=0.01,
-        x1=1.0,
-        maxiter=100,
-    )
-    sol_ne20 = rootdata.apply(func_ne20, axis=1)
-    retry = sol_ne20.apply(lambda sol: not sol.converged)
-    if np.any(retry):
-        func_ne20_v2 = lambda row: root_scalar(
-            lambda ne: calc_coulomb_logarithm_nrl_from_te_and_ne(row['te'] * 1.0e3, ne * 1.0e20) * ne - row['knu'],
-            x0=1.0,
-            x1=0.1,
-            maxiter=100,
-        )
-        sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
-    warnings.resetwarnings()
-    ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
-    logger.debug(f'<{calc_ne_from_nustar_nrl.__name__}>: data')
-    logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
-    return ne
-
-def calc_te_from_nustar_nrl(nustar, zeff, q, r, ro, ne, verbose=0):
-    c = constants_si()
-    moe = c['me'] / c['e']
-    kk = (10.0 ** 0.5) * (1.0e2 / 1.09) * zeff * q * ro * ((r / ro) ** (-1.5)) * (moe ** 0.5) * (ne * 1.0e-20)
-    nu = nustar / kk
-    data = {'ne': ne * 1.0e-20, 'knu': nu}
-    rootdata = pd.DataFrame(data)
-    logger.debug(rootdata)
-    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
-    func_te3 = lambda row: root_scalar(
-        lambda te: calc_coulomb_logarithm_nrl_from_te_and_ne(te * 1.0e3, row['ne'] * 1.0e20) / (te ** 2) - row['knu'],
-        x0=1.0,
-        x1=0.1,
-        maxiter=100,
-    )
-    sol_te3 = rootdata.apply(func_te3, axis=1)
-    retry = sol_te3.apply(lambda sol: not sol.converged)
-    if np.any(retry):
-        func_te3_v2 = lambda row: root_scalar(
-            lambda te: calc_coulomb_logarithm_nrl_from_te_and_ne(te * 1.0e3, row['ne'] * 1.0e20) / (te ** 2) - row['knu'],
-            x0=0.01,
-            x1=0.1,
-            maxiter=100,
-        )
-        sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
-    warnings.resetwarnings()
-    te = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
-    logger.debug(f'<{calc_te_from_nustar_nrl.__name__}>: data')
-    logger.debug(pd.DataFrame(data={'nustar': nustar, 'ne': ne, 'te': te}))
-    return te
-
-def calc_zeff_from_nustar_nrl(nustar, q, r, ro, ne, te):
-    c = constants_si()
-    cl = calc_coulomb_logarithm_nrl_from_te_and_ne(te, ne)
+    cl = calc_coulomb_logarithm_nrl_from_ne_and_te(ne, te)
     nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
-    kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
-    zeff = nustar / (cl * nt * kk)
-    return zeff
-
-def calc_nustar_nrl(zeff, q, r, ro, ne, te):
-    c = constants_si()
-    cl = calc_coulomb_logarithm_nrl_from_te_and_ne(te, ne)
-    nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
-    kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
+    kk = (1.0e4 / 1.09) * q * rmaj * ((rmin / rmaj) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
     nustar = cl * zeff * nt * kk
     return nustar
 
@@ -728,58 +788,173 @@ def calc_nustar_from_lognustar(lognustar):
     nustar = np.power(10.0, lognustar)
     return nustar
 
-def calc_bo_from_rhostar(rhostar, ai, zi, a, te):
+def calc_ne_from_nustar_nrl(nustar, zeff, q, rmin, rmaj, te):
     c = constants_si()
-    bo = (((ai * c['mp'] / c['e']) ** 0.5) / zi) * (te ** 0.5) / (rhostar * a)
-    return bo
+    eom = c['e'] / c['me']
+    tb = q * rmaj * ((rmin / rmaj) ** (-1.5)) / ((eom * te) ** 0.5)
+    kk = (1.0e4 / 1.09) * zeff * ((te * 1.0e-3) ** (-1.5))
+    nu = nustar / (tb * kk)
+    te_arr = ensure_numpy(te)
+    nu_arr = ensure_numpy(nu)
+    data = {'te': te_arr.flatten() * 1.0e-3, 'knu': nu_arr.flatten()}
+    rootdata = pd.DataFrame(data)
+    logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
+    func_ne20 = lambda row: root_scalar(
+        lambda ne: calc_coulomb_logarithm_nrl_from_ne_and_te(ne * 1.0e20, row['te'] * 1.0e3) * ne - row['knu'],
+        x0=0.01,
+        x1=1.0,
+        maxiter=100,
+    )
+    sol_ne20 = rootdata.apply(func_ne20, axis=1)
+    retry = sol_ne20.apply(lambda sol: not sol.converged)
+    if np.any(retry):
+        func_ne20_v2 = lambda row: root_scalar(
+            lambda ne: calc_coulomb_logarithm_nrl_from_ne_and_te(ne * 1.0e20, row['te'] * 1.0e3) * ne - row['knu'],
+            x0=1.0,
+            x1=0.1,
+            maxiter=100,
+        )
+        sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
+    warnings.resetwarnings()
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne = ensure_type_match(ne_sol.reshape(te_arr.shape), te)
+    #logger.debug(f'<{calc_ne_from_nustar_nrl.__name__}>: data')
+    #logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
+    return ne
 
-def calc_te_from_rhostar(rhostar, ai, zi, a, bo):
+def calc_te_from_nustar_nrl(nustar, zeff, q, rmin, rmaj, ne):
     c = constants_si()
-    te = ((zi * rhostar * a * bo) ** 2) / (ai * c['mp'] / c['e'])
+    moe = c['me'] / c['e']
+    kk = (10.0 ** 0.5) * (1.0e2 / 1.09) * zeff * q * rmaj * ((rmin / rmaj) ** (-1.5)) * (moe ** 0.5) * (ne * 1.0e-20)
+    nu = nustar / kk
+    ne_arr = ensure_numpy(ne)
+    nu_arr = ensure_numpy(nu)
+    data = {'ne': ne_arr.flatten() * 1.0e-20, 'knu': nu_arr.flatten()}
+    rootdata = pd.DataFrame(data)
+    logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
+    func_te3 = lambda row: root_scalar(
+        lambda te: calc_coulomb_logarithm_nrl_from_ne_and_te(row['ne'] * 1.0e20, te * 1.0e3) / (te ** 2) - row['knu'],
+        x0=1.0,
+        x1=0.1,
+        maxiter=100,
+    )
+    sol_te3 = rootdata.apply(func_te3, axis=1)
+    retry = sol_te3.apply(lambda sol: not sol.converged)
+    if np.any(retry):
+        func_te3_v2 = lambda row: root_scalar(
+            lambda te: calc_coulomb_logarithm_nrl_from_ne_and_te(row['ne'] * 1.0e20, te * 1.0e3) / (te ** 2) - row['knu'],
+            x0=0.01,
+            x1=0.1,
+            maxiter=100,
+        )
+        sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
+    warnings.resetwarnings()
+    te_sol = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
+    te = ensure_type_match(te_sol.reshape(ne_arr.shape), ne)
+    #logger.debug(f'<{calc_te_from_nustar_nrl.__name__}>: data')
+    #logger.debug(pd.DataFrame(data={'nustar': nustar, 'ne': ne, 'te': te}))
     return te
 
-def calc_rhostar(ai, zi, a, te, bo):
+def calc_zeff_from_nustar_nrl(nustar, q, rmin, rmaj, ne, te):
     c = constants_si()
-    rhostar = ((ai * c['mp'] / c['ee']) ** 0.5 / zi) * (te ** 0.5) / (bo * a)
+    cl = calc_coulomb_logarithm_nrl_from_ne_and_te(ne, te)
+    nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
+    kk = (1.0e4 / 1.09) * q * rmaj * ((rmin / rmaj) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
+    zeff = nustar / (cl * nt * kk)
+    return zeff
+
+def calc_rhos_from_ts_and_btot(ts, btot, _as, _zs=1.0):
+    c = constants_si()
+    rhos = (ts ** 0.5) * (((_as * c['u'] / c['e']) ** 0.5) / _zs) / btot
+    return rhos
+
+def calc_btot_from_rhos(rhos, ts, _as, _zs=1.0):
+    c = constants_si()
+    btot = (ts ** 0.5) * (((_as * c['u'] / c['e']) ** 0.5) / _zs) / rhos
+    return btot
+
+def calc_ts_from_rhos(rhos, btot, _as, _zs=1.0):
+    c = constants_si()
+    te = ((rhos * btot * _zs) ** 2) / (_as * c['u'] / c['e'])
+    return te
+
+def calc_rhoref_from_te_and_btot(te, btot, ai):
+    c = constants_si()
+    rhoref = calc_rhos_from_ts_and_btot(te, btot, ai, _zs=1.0)
+    return rhoref
+
+def calc_btot_from_rhoref(rhoref, te, ai):
+    btot = calc_btot_from_rhos(rhoref, te, ai, _zs=1.0)
+    return btot
+
+def calc_te_from_rhoref(rhoref, btot, ai):
+    te = calc_ts_from_rhos(rhoref, btot, ai, _zs=1.0)
+    return te
+
+def calc_rhostar_from_rhoref(rhoref, lref):
+    rhostar = normalize(rhoref, lref)
     return rhostar
 
-def calc_ne_from_alpha_and_rhostar(alpha, rhostar, ai, zi, q, a, ap):
+def calc_rhoref_from_rhostar(rhostar, lref):
+    rhoref = unnormalize(rhostar, lref)
+    return rhoref
+
+def calc_rhostar_from_te_and_btot(te, btot, ai, lref):
+    rhoref = calc_rhoref_from_te_and_btot(te, btot, ai)
+    rhostar = calc_rhostar_from_rhoref(rhoref, lref)
+    return rhostar
+
+def calc_btot_from_rhostar(rhostar, te, ai, lref):
+    rhoref = calc_rhoref_from_rhostar(rhostar, lref)
+    btot = calc_btot_from_rhoref(rhoref, te, ai)
+    return btot
+
+def calc_te_from_rhostar(rhostar, btot, ai, lref):
+    rhos = calc_rhoref_from_rhostar(rhostar, lref)
+    te = calc_te_from_rhoref(rhos, btot, ai)
+    return te
+
+def calc_ne_from_alpha_and_rhostar(alpha, rhostar, ap, ai, zi, q, lref):
     c = constants_si()
-    mi = ai * c['mp']
+    mi = ai * c['u']
     qi = zi * c['e']
     prefactor = mi / (2.0 * c['mu'] * (qi ** 2) * (q ** 2))
-    ne = prefactor * alpha / ((rhostar ** 2) * (a ** 2) * ap)
+    ne = prefactor * alpha / ((rhostar ** 2) * (lref ** 2) * ap)
     return ne
 
-def calc_bo_from_alpha_and_rhostar(alpha, rhostar, ai, zi, q, a, ne, te, ap):
+def calc_btot_from_alpha_and_rhostar(alpha, rhostar, ap, ai, zi, q, ne, te, lref):
     c = constants_si()
-    mi = ai * c['mp']
+    mi = ai * c['u']
     qi = zi * c['e']
     prefactor = 2.0 * c['mu'] * (mi ** 0.5) / qi
-    bo = (prefactor * (q ** 2) * ne * ((c['e'] * te), 1.5) * ap / (alpha * rhostar * a)) ** (1.0 / 3.0)
-    return bo
+    btot = (prefactor * (q ** 2) * ne * ((c['e'] * te) ** 1.5) * ap / (alpha * rhostar * lref)) ** (1.0 / 3.0)
+    return btot
 
-def calc_ne_from_beta_and_rhostar(beta, rhostar, ai, zi, q, a, pnorm):
+def calc_ne_from_beta_and_rhostar(beta, rhostar, pnorm, ai, zi, lref):
     c = constants_si()
-    mi = ai * c['mp']
+    mi = ai * c['u']
     qi = zi * c['e']
     prefactor = mi / (2.0 * c['mu'] * (qi ** 2))
-    ne = prefactor * beta / ((rhostar ** 2) * (a ** 2) * pnorm)
+    ne = prefactor * beta / ((rhostar ** 2) * (lref ** 2) * pnorm)
     return ne
 
-def calc_bo_from_beta_and_rhostar(beta, rhostar, ai, zi, q, a, ne, te, pnorm):
+def calc_btot_from_beta_and_rhostar(beta, rhostar, pnorm, ai, zi, ne, te, lref):
     c = constants_si()
-    mi = ai * c['mp']
+    mi = ai * c['u']
     qi = zi * c['e']
     prefactor = 2.0 * c['mu'] * (mi ** 0.5) / qi
-    bo = (prefactor * ne * ((c['e'] * te) ** 1.5) * pnorm / (beta * rhostar * a)) ** (1.0 / 3.0)
-    return bo
+    bref = (prefactor * ne * ((c['e'] * te) ** 1.5) * pnorm / (beta * rhostar * lref)) ** (1.0 / 3.0)
+    return bref
 
-def calc_ne_from_nustar_nrl_alpha_and_ap(nustar, alpha, zeff, q, r, ro, bo, ap):
+def calc_ne_from_nustar_nrl_alpha_and_ap(nustar, alpha, ap, zeff, q, btot, rmin, rmaj):
     c = constants_si()
-    kalp = 1.0e23 * 2.0 * c['mu'] * c['e'] * (q ** 2) * ap / (alpha * (bo ** 2))
-    knu = (1.0e4 / 1.09) * ((1.0e-3 * c['me'] / c['e']) ** 0.5) * zeff * q * ro * ((r / ro) ** (-1.5))
-    data = {'logterm': -np.log(kalp), 'constant': nustar / (knu * kalp * kalp)}
+    kalp = 1.0e23 * 2.0 * c['mu'] * c['e'] * (q ** 2) * ap / (alpha * (btot ** 2))
+    knu = (1.0e4 / 1.09) * ((1.0e-3 * c['me'] / c['e']) ** 0.5) * zeff * q * rmaj * ((rmin / rmaj) ** (-1.5))
+    log_arr = ensure_numpy(-np.log(kalp))
+    cst_arr = ensure_numpy(nustar / (knu * (kalp ** 2)))
+    data = {'logterm': log_arr.flatten(), 'constant': cst_arr.flatten()}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
     warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
@@ -800,16 +975,19 @@ def calc_ne_from_nustar_nrl_alpha_and_ap(nustar, alpha, zeff, q, r, ro, bo, ap):
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
     warnings.resetwarnings()
-    ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
-    logger.debug(f'<{calc_ne_from_nustar_nrl_alpha_and_ap.__name__}>: data')
-    logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'ne': ne}))
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne = ensure_type_match(ne_sol.reshape(cst_arr.shape), nustar)
+    #logger.debug(f'<{calc_ne_from_nustar_nrl_alpha_and_ap.__name__}>: data')
+    #logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'ne': ne}))
     return ne
 
-def calc_te_from_nustar_nrl_alpha_and_ap(nustar, alpha, zeff, q, r, ro, bo, ap, verbose=0):
+def calc_te_from_nustar_nrl_alpha_and_ap(nustar, alpha, ap, zeff, q, btot, rmin, rmaj):
     c = constants_si()
-    kalp = 1.0e23 * 2.0 * c['mu'] * c['e'] * (q ** 2) * ap / (alpha * (bo ** 2))
-    knu = (1.0e4 / 1.09) * ((1.0e-3 * c['me'] / c['e']) ** 0.5) * zeff * q * ro * ((r / ro) ** (-1.5))
-    data = {'logterm': -np.log(kalp), 'constant': nustar * kalp / knu}
+    kalp = 1.0e23 * 2.0 * c['mu'] * c['e'] * (q ** 2) * ap / (alpha * (btot ** 2))
+    knu = (1.0e4 / 1.09) * ((1.0e-3 * c['me'] / c['e']) ** 0.5) * zeff * q * rmaj * ((rmin / rmaj) ** (-1.5))
+    log_arr = ensure_numpy(-np.log(kalp))
+    cst_arr = ensure_numpy(nustar * kalp / knu)
+    data = {'logterm': log_arr.flatten(), 'constant': cst_arr.flatten()}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
     warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
@@ -830,52 +1008,69 @@ def calc_te_from_nustar_nrl_alpha_and_ap(nustar, alpha, zeff, q, r, ro, bo, ap, 
         )
         sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
     warnings.resetwarnings()
-    te = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
-    logger.debug(f'<{calc_te_from_nustar_nrl_alpha_and_ap.__name__}>: data')
-    logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'te': te}))
+    te_sol = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
+    te = ensure_type_match(te_sol.reshape(cst_arr.shape), nustar)
+    #logger.debug(f'<{calc_te_from_nustar_nrl_alpha_and_ap.__name__}>: data')
+    #logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'te': te}))
     return te
 
-def calc_machpar_from_machtor_and_puretor(machtor, q, epsilon, x):
+def calc_vref_from_te_and_mref(te, aref):
+    c = constants_si()
+    vref = (te * c['e'] / (c['u'] * aref)) ** 0.5
+    return vref
+
+def calc_vths_from_ts(ts, _as):
+    c = constants_si()
+    vth = (2.0 * ts * c['e'] / (c['u'] * _as)) ** 0.5
+    return vth
+
+def calc_mach_from_u(u, cref):
+    mach = normalize(u, cref)
+    return mach
+
+def calc_u_from_mach(mach, cref):
+    u = unnormalize(mach, cref)
+    return u
+
+def calc_machpar_from_machtor_and_toroidal_assumption_circular(machtor, q, epsilon, x):
     btorbyb = ((q ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
     machpar = machtor * btorbyb
     return machpar
 
-def calc_aupar_from_autor_and_puretor(autor, machtor, s, q, epsilon, x):
+def calc_aupar_from_autor_and_toroidal_assumption_circular(autor, machtor, s, q, epsilon, x):
     btorbyb = ((q ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
     bpolbyb = (((epsilon * x) ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
     grad_btorbyb = btorbyb * (bpolbyb ** 2) * (s - 1.0) / (epsilon * x)
     aupar = autor * btorbyb - machtor * grad_btorbyb
     return aupar
 
+def calc_machper_from_machtor_and_toroidal_assumption_circular(machtor, q, epsilon, x):
+    bpolbyb = (((epsilon * x) ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
+    machper = machtor * bpolbyb
+    return machper
+
+def calc_auper_from_autor_and_toroidal_assumption_circular(autor, machtor, s, q, epsilon, x):
+    btorbyb = ((q ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
+    bpolbyb = (((epsilon * x) ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
+    grad_btorbyb = btorbyb * (bpolbyb ** 2) * (s - 1.0) / (epsilon * x)
+    auper = autor * btorbyb - machtor * grad_btorbyb
+    return auper
+
 def calc_gammae_from_aupar_without_grad_dpi(aupar, q, epsilon):
     gammae = -(epsilon / q) * aupar
     return gammae
 
 def calc_grad_dpi_from_gammae_machtor_and_autor(gammae, machtor, autor, q, r, ro):
+    # Also no CI test
     return None
 
-def calc_bunit_from_bo(bo, sfac):
-    bunit = normalize(bo, sfac)
+def calc_bunit_from_bref(bref, sfac):
+    bunit = normalize(bref, sfac)
     return bunit
 
-def calc_bo_from_bunit(bunit, sfac):
-    bo = unnormalize(bunit, sfac)
-    return bo
-
-def calc_rhos_from_ts_ms_and_b(ts, ms, b):
-    c = constants_si()
-    rhos = (ts * c['u'] * ms / c['e']) ** 0.5 / b
-    return rhos
-
-def calc_vsound_from_te_and_mref(te, mref):
-    c = constants_si()
-    vsound = (c['e'] * te / (c['u'] * mref)) ** 0.5
-    return vsound
-
-def calc_vtherms_from_ts_and_ms(ts, ms):
-    c = constants_si()
-    vths = (2.0 * c['e'] * ts / (c['u'] * ms)) ** 0.5
-    return vths
+def calc_bref_from_bunit(bunit, sfac):
+    bref = unnormalize(bunit, sfac)
+    return bref
 
 def calc_lds_from_ts_and_ns(ts, ns, zs):
     c = constants_si()
@@ -891,18 +1086,20 @@ def calc_ldenorm_from_te_ne_and_rhos(te, ne, rhos, ze=1.0):
     ldenorm = calc_ldsnorm_from_lds(lde, rhos)
     return ldenorm
 
-def calc_coulomb_logarithm_from_te_and_ne(te, ne, ze=1.0):
+def calc_coulomb_logarithm_from_ne_and_te(ne, te, ze=1.0):
     c = constants_si()
     lda = calc_lds_from_ts_and_ns(te, ne, ze)
     inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * te / (ze * ze)
     cl = np.log(inv_b90 * lda)
+    if cl.ndim == 0:
+        cl = float(cl)
     return cl
 
 def calc_nu_from_t_and_n(ta, na, nb, ma, za, zb):
     c = constants_si()
     factor = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
     inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * ta / (za * zb)
-    cl = calc_coulomb_logarithm_from_te_and_ne(ta, na, za) + np.log(za / zb)
+    cl = calc_coulomb_logarithm_from_ne_and_te(na, ta, ze=za) + np.log(za / zb)
     nu = factor * nb * (c['e'] * ta / (c['u'] * ma)) ** 0.5 / (inv_b90 ** 2) * cl
     return nu
 
@@ -910,7 +1107,7 @@ def calc_nuei_from_te_ne_and_zeff(te, ne, zeff, zi, ze=1.0):
     c = constants_si()
     factor = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
     inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * te / (ze * ((zeff * ze) ** 0.5))
-    cl = calc_coulomb_logarithm_from_te_and_ne(te, ne, ze) + np.log(ze / zi)
+    cl = calc_coulomb_logarithm_from_ne_and_te(te, ne, ze=ze) + np.log(ze / zi)
     nuei = factor * ne * (c['e'] * te / (c['me'])) ** 0.5 / (inv_b90 ** 2) * cl
     return nuei
 
@@ -996,7 +1193,7 @@ def calc_ne_from_nustar(nustar, zeff, q, r, ro, te):
     logger.debug(rootdata)
     warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_ne20 = lambda row: root_scalar(
-        lambda ne: calc_coulomb_logarithm_from_te_and_ne(row['te'] * 1.0e3, ne * 1.0e20) * ne - row['knu'],
+        lambda ne: calc_coulomb_logarithm_from_ne_and_te(ne * 1.0e20, row['te'] * 1.0e3) * ne - row['knu'],
         x0=0.01,
         x1=1.0,
         maxiter=100,
@@ -1005,7 +1202,7 @@ def calc_ne_from_nustar(nustar, zeff, q, r, ro, te):
     retry = sol_ne20.apply(lambda sol: not sol.converged)
     if np.any(retry):
         func_ne20_v2 = lambda row: root_scalar(
-            lambda ne: calc_coulomb_logarithm_from_te_and_ne(row['te'] * 1.0e3, ne * 1.0e20) * ne - row['knu'],
+            lambda ne: calc_coulomb_logarithm_from_ne_and_te(ne * 1.0e20, row['te'] * 1.0e3) * ne - row['knu'],
             x0=1.0,
             x1=0.1,
             maxiter=100,
@@ -1027,7 +1224,7 @@ def calc_te_from_nustar(nustar, zeff, q, r, ro, ne, verbose=0):
     logger.debug(rootdata)
     warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_te3 = lambda row: root_scalar(
-        lambda te: calc_coulomb_logarithm_from_te_and_ne(te * 1.0e3, row['ne'] * 1.0e20) / (te ** 2) - row['knu'],
+        lambda te: calc_coulomb_logarithm_from_ne_and_te(row['ne'] * 1.0e20, te * 1.0e3) / (te ** 2) - row['knu'],
         x0=1.0,
         x1=0.1,
         maxiter=100,
@@ -1036,7 +1233,7 @@ def calc_te_from_nustar(nustar, zeff, q, r, ro, ne, verbose=0):
     retry = sol_te3.apply(lambda sol: not sol.converged)
     if np.any(retry):
         func_te3_v2 = lambda row: root_scalar(
-            lambda te: calc_coulomb_logarithm_from_te_and_ne(te * 1.0e3, row['ne'] * 1.0e20) / (te ** 2) - row['knu'],
+            lambda te: calc_coulomb_logarithm_from_ne_and_te(row['ne'] * 1.0e20, te * 1.0e3) / (te ** 2) - row['knu'],
             x0=0.01,
             x1=0.1,
             maxiter=100,
@@ -1050,7 +1247,7 @@ def calc_te_from_nustar(nustar, zeff, q, r, ro, ne, verbose=0):
 
 def calc_zeff_from_nustar(nustar, q, r, ro, ne, te):
     c = constants_si()
-    cl = calc_coulomb_logarithm_from_te_and_ne(te, ne)
+    cl = calc_coulomb_logarithm_from_ne_and_te(ne, te, ze=1.0)
     nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
     kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
     zeff = nustar / (cl * nt * kk)
@@ -1058,7 +1255,7 @@ def calc_zeff_from_nustar(nustar, q, r, ro, ne, te):
 
 def calc_nustar(zeff, q, r, ro, ne, te):
     c = constants_si()
-    cl = calc_coulomb_logarithm_from_te_and_ne(te, ne)
+    cl = calc_coulomb_logarithm_from_ne_and_te(ne, te, ze=1.0)
     nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
     kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
     nustar = cl * zeff * nt * kk
