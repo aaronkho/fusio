@@ -17,6 +17,9 @@ from ..utils.math_tools import (
     vectorized_numpy_interpolation,
     vectorized_numpy_find,
 )
+from ..utils.eqdsk_tools import (
+    read_eqdsk,
+)
 
 logger = logging.getLogger('fusio')
 
@@ -166,8 +169,8 @@ class plasma_io(io):
         overwrite: bool = False
     ) -> None:
         if isinstance(path, (str, Path)) and isinstance(data, xr.Dataset):
-            if not path.exists() or overwrite:
-                opath = Path(path)
+            opath = Path(path)
+            if not opath.exists() or overwrite:
                 data.to_netcdf(opath, mode='w', format='NETCDF4')
                 logger.info(f'Saved {self.format} data into {opath.resolve()}')
             else:
@@ -196,23 +199,25 @@ class plasma_io(io):
     def interpolate(
         self,
         v: float | NDArray,
-        xvar: str,
-        yvar: str,
-        cvar: str,
+        xvar: str,  # x-coordinate to be interpolated on
+        yvar: str,  # y-coordinate to be interpolated
+        cvar: str,  # common coordinate in xarray representation
         extrapolate: bool = False,
         side: str = 'input',
     ) -> NDArray:
         data = self.input if side == 'input' else self.output
         if xvar in data and yvar in data and cvar in data[f'{xvar}'].dims and cvar in data[f'{yvar}'].dims:
             idim_y = data[f'{yvar}'].dims.index(cvar)
-            dimlist = [f'{v}' for v in data[f'{yvar}'].dims if f'{v}' != f'{cvar}'] + [f'{cvar}']
+            dimlist = tuple([f'{v}' for v in data[f'{yvar}'].dims if f'{v}' != f'{cvar}'] + [f'{cvar}'])
             newxdims = {f'{v}': data[f'{v}'].to_numpy() for v in dimlist if v not in data[f'{xvar}'].dims}
             x = data[f'{xvar}'].expand_dims(newxdims).transpose(dimlist).to_numpy()
             y = data[f'{yvar}'].transpose(dimlist).to_numpy()
-            outdims = [i for i in range(len(dimlist) - 1)].insert(idim_y, len(dimlist) - 1)
+            outdims = [i for i in range(len(dimlist) - 1)]
+            outdims.insert(idim_y, len(dimlist) - 1)
             return np.transpose(vectorized_numpy_interpolation(v, x, y, extrapolate=extrapolate), axes=outdims)
         else:
             logger.error(f'Invalid variable names given to {self.format} interpolate function! Aborting interpolation...')
+            return np.array([np.nan]) * v
 
 
     def _compute_derived_coordinates(
@@ -531,7 +536,7 @@ class plasma_io(io):
             grad_field_velocity_i = np.concatenate([np.expand_dims(grad_vperp, axis=-1), np.expand_dims(grad_vpar, axis=-1)], axis=-1)
             rotation_frequency_sonic = (vperp * field / (data['r_geometric'] * (data['field_squared'].sel(direction='poloidal', drop=True) ** 0.5))).isel(ion=main_species).max('ion').to_numpy()
             exb_norm = (data['r_minor'] / data['safety_factor']).to_numpy()
-            exb_shearing_rate = exb_norm * vectorized_numpy_derivative(data['r_minor'].to_numpy(), -vperp.isel(ion=main_species).mean('ion') / np.where(np.isclose(exb_norm, 0.0), 1.0e-4, exb_norm))
+            exb_shearing_rate = exb_norm * vectorized_numpy_derivative(data['r_minor'].to_numpy(), -vperp.isel(ion=main_species).mean('ion').to_numpy() / np.where(np.isclose(exb_norm, 0.0), 1.0e-4, exb_norm))
             newvars['field_velocity_i'] = (['time', 'radius', 'ion', 'field_direction'], field_velocity_i)
             newvars['field_velocity_i_norm'] = (['time', 'radius', 'ion', 'field_direction'], field_velocity_i / np.expand_dims(np.expand_dims(data['velocity_sound_ref'].to_numpy(), axis=-1), axis=-1))
             newvars['grad_field_velocity_i'] = (['time', 'radius', 'ion', 'field_direction'], grad_field_velocity_i)
@@ -915,17 +920,17 @@ class plasma_io(io):
 
             epsilon_95 = vectorized_numpy_interpolation(
                 0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal'),
+                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
                 data['epsilon'].to_numpy()
             )
             kappa_95 = vectorized_numpy_interpolation(
                 0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal'),
+                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
                 data['mxh_kappa'].to_numpy()
             )
             delta_95 = vectorized_numpy_interpolation(
                 0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal'),
+                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
                 data['mxh_delta'].to_numpy()
             )
             uckan_shaping = 1.0 + kappa_95[..., -1] ** 2 * (1.0 + 2.0 * delta_95[..., -1] ** 2 - 1.2 * delta_95[..., -1] ** 3)
@@ -1031,9 +1036,9 @@ class plasma_io(io):
                 'ni': 'density_i',
                 'ti': 'temperature_i',
             }
-            coords = {}
-            data_vars = {}
-            attrs = {}
+            coords: MutableMapping[str, Any] = {}
+            data_vars: MutableMapping[str, Any] = {}
+            attrs: MutableMapping[str, Any] = {}
             if 'n' in data and 'rho' in data:
                 coords['time'] = data['time'].to_numpy() if 'time' in data else np.arange(len(data['n']))
                 coords['radius'] = data['rho'].to_numpy()

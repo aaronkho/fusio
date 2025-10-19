@@ -2,9 +2,9 @@ import copy
 import warnings
 import logging
 import numpy as np
-import pandas as pd
+import pandas as pd  # type: ignore[import-untyped]
 import xarray as xr
-from scipy.optimize import root_scalar
+from scipy.optimize import root_scalar  # type: ignore[import-untyped]
 
 logger = logging.getLogger('fusio')
 
@@ -35,7 +35,7 @@ def ensure_type_match(val, other):
     if isinstance(other, number_types) and val.size == 1:
         return other.__class__(val.item(0))
     elif isinstance(other, xarray_types):
-        return other.__class__(coords=other.coords, data=val)
+        return other.__class__(val, coords=other.coords)
     else:
         return other.__class__(val)
 
