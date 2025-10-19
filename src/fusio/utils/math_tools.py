@@ -66,11 +66,11 @@ def vectorized_numpy_find(
 ) -> NDArray:
     xm = x.reshape(-1, x.shape[-1])
     ym = y.reshape(-1, y.shape[-1])
-    found = np.full(xm.shape, np.nan)
+    flat_found = np.full((xm.shape[0], ), np.nan)
     for i in range(xm.shape[0]):
         yidx = np.where(((ym[i] - v)[1:] * (ym[i] - v)[:-1]) < 0.0)[0]
         if len(yidx) > 0:
             yi = yidx[-1] if last else yidx[0]
-            found[i] = (v - ym[i, yi]) * (xm[i, yi + 1] - xm[i, yi]) / (ym[i, yi + 1] - ym[i, yi])
-    found = found.reshape(*y.shape[:-1])
+            flat_found[i] = (v - ym[i, yi]) * (xm[i, yi + 1] - xm[i, yi]) / (ym[i, yi + 1] - ym[i, yi])
+    found = flat_found.reshape(*y.shape[:-1])
     return found
