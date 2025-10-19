@@ -2133,23 +2133,23 @@ class TestPlasmaTools():
         zeff = dimensionless_2ion_plasma_state['effective_charge']
         q = dimensionless_2ion_plasma_state['safety_factor_circular']
         nustar = pt.calc_nustar_nrl_from_ne_and_te(zeff, q, rmin, rmaj, ne, te)
-        xr.testing.assert_allclose(nustar, dimensionless_2ion_plasma_state['collisionality_nrl_norm'])
+        xr.testing.assert_allclose(nustar, dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm'])
 
     def test_calc_lognustar_from_nustar(self, dimensionless_2ion_plasma_state):
-        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_norm']
+        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm']
         lognustar = pt.calc_lognustar_from_nustar(nustar)
         xr.testing.assert_allclose(lognustar, np.log10(nustar))
 
     def test_calc_nustar_from_lognustar(self, dimensionless_2ion_plasma_state):
-        lognustar = np.log10(dimensionless_2ion_plasma_state['collisionality_nrl_norm'])
+        lognustar = np.log10(dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm'])
         nustar = pt.calc_nustar_from_lognustar(lognustar)
-        xr.testing.assert_allclose(nustar, dimensionless_2ion_plasma_state['collisionality_nrl_norm'])
+        xr.testing.assert_allclose(nustar, dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm'])
 
     def test_calc_ne_from_nustar_nrl(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         rmin = physical_2ion_plasma_state['r_minor']
         rmaj = physical_2ion_plasma_state['r_geometric']
         te = physical_2ion_plasma_state['temperature_e']
-        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_norm']
+        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm']
         zeff = dimensionless_2ion_plasma_state['effective_charge']
         q = dimensionless_2ion_plasma_state['safety_factor_circular']
         ne = pt.calc_ne_from_nustar_nrl(nustar, zeff, q, rmin, rmaj, te)
@@ -2159,7 +2159,7 @@ class TestPlasmaTools():
         rmin = physical_2ion_plasma_state['r_minor']
         rmaj = physical_2ion_plasma_state['r_geometric']
         ne = physical_2ion_plasma_state['density_e']
-        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_norm']
+        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm']
         zeff = dimensionless_2ion_plasma_state['effective_charge']
         q = dimensionless_2ion_plasma_state['safety_factor_circular']
         te = pt.calc_te_from_nustar_nrl(nustar, zeff, q, rmin, rmaj, ne)
@@ -2170,7 +2170,7 @@ class TestPlasmaTools():
         rmaj = physical_2ion_plasma_state['r_geometric']
         ne = physical_2ion_plasma_state['density_e']
         te = physical_2ion_plasma_state['temperature_e']
-        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_norm']
+        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm']
         q = dimensionless_2ion_plasma_state['safety_factor_circular']
         zeff = pt.calc_zeff_from_nustar_nrl(nustar, q, rmin, rmaj, ne, te)
         xr.testing.assert_allclose(zeff, dimensionless_2ion_plasma_state['effective_charge'])
@@ -2298,7 +2298,7 @@ class TestPlasmaTools():
         rmin = physical_2ion_plasma_state['r_minor']
         rmaj = physical_2ion_plasma_state['r_geometric']
         btot = (physical_2ion_plasma_state['field_geometric'] ** 2).sum('direction') ** 0.5
-        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_norm']
+        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm']
         ape = dimensionless_2ion_plasma_state['grad_density_e_norm'] + dimensionless_2ion_plasma_state['grad_temperature_e_norm']
         anpi = (dimensionless_2ion_plasma_state['grad_density_i_norm'] * dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sum('ion')
         atpi = (dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['grad_temperature_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sum('ion')
@@ -2312,7 +2312,7 @@ class TestPlasmaTools():
         rmin = physical_2ion_plasma_state['r_minor']
         rmaj = physical_2ion_plasma_state['r_geometric']
         btot = (physical_2ion_plasma_state['field_geometric'] ** 2).sum('direction') ** 0.5
-        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_norm']
+        nustar = dimensionless_2ion_plasma_state['collisionality_nrl_bounce_norm']
         ape = dimensionless_2ion_plasma_state['grad_density_e_norm'] + dimensionless_2ion_plasma_state['grad_temperature_e_norm']
         anpi = (dimensionless_2ion_plasma_state['grad_density_i_norm'] * dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sum('ion')
         atpi = (dimensionless_2ion_plasma_state['density_i_norm'] * dimensionless_2ion_plasma_state['grad_temperature_i_norm'] * dimensionless_2ion_plasma_state['temperature_i_norm']).sum('ion')
@@ -2322,17 +2322,35 @@ class TestPlasmaTools():
         te = pt.calc_te_from_nustar_nrl_alpha_and_ap(nustar, alpha, ape + anpi + atpi, zeff, q, btot, rmin, rmaj)
         xr.testing.assert_allclose(te, physical_2ion_plasma_state['temperature_e'])
 
-    def test_calc_vref_from_te_and_mref(self, physical_2ion_plasma_state):
+    def test_calc_vref_from_te_and_aref(self, physical_2ion_plasma_state):
         te = physical_2ion_plasma_state['temperature_e']
         aref = physical_2ion_plasma_state['mass_i'].sel(ion='D', drop=True)
-        vref = pt.calc_vref_from_te_and_mref(te, aref)
+        vref = pt.calc_vref_from_te_and_aref(te, aref)
         xr.testing.assert_allclose(vref, physical_2ion_plasma_state['velocity_ref'])
+
+    def test_calc_te_from_vref(self, physical_2ion_plasma_state):
+        aref = physical_2ion_plasma_state['mass_i'].sel(ion='D', drop=True)
+        vref = physical_2ion_plasma_state['velocity_ref']
+        te = pt.calc_te_from_vref(vref, aref)
+        xr.testing.assert_allclose(te, physical_2ion_plasma_state['temperature_e'])
+
+    def test_calc_aref_from_vref(self, physical_2ion_plasma_state):
+        te = physical_2ion_plasma_state['temperature_e']
+        vref = physical_2ion_plasma_state['velocity_ref']
+        aref = pt.calc_aref_from_vref(vref, te)
+        xr.testing.assert_allclose(aref, physical_2ion_plasma_state['mass_i'].sel(ion='D', drop=True).expand_dims({'radius': physical_2ion_plasma_state['radius'].to_numpy().flatten()}, axis=-1))
 
     def test_calc_vths_from_ts(self, physical_2ion_plasma_state):
         te = physical_2ion_plasma_state['temperature_e']
         ae = physical_2ion_plasma_state['mass_e']
         vthe = pt.calc_vths_from_ts(te, _as=ae)
         xr.testing.assert_allclose(vthe, physical_2ion_plasma_state['velocity_thermal_e'])
+
+    def test_calc_ts_from_vths(self, physical_2ion_plasma_state):
+        ae = physical_2ion_plasma_state['mass_e']
+        vthe = physical_2ion_plasma_state['velocity_thermal_e']
+        te = pt.calc_ts_from_vths(vthe, _as=ae)
+        xr.testing.assert_allclose(te, physical_2ion_plasma_state['temperature_e'])
 
     def test_calc_mach_from_u(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         ui = physical_2ion_plasma_state['velocity_i']
@@ -2347,223 +2365,183 @@ class TestPlasmaTools():
         xr.testing.assert_allclose(ui, physical_2ion_plasma_state['velocity_i'])
 
     # def test_calc_machpar_from_machtor_and_toroidal_assumption(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
-    #     machpar = (machtor, q, epsilon, x)
-    #     btorbyb = ((q ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
-    #     machpar = machtor * btorbyb
-    #     return machpar
 
-    # def calc_aupar_from_autor_and_puretor(autor, machtor, s, q, epsilon, x):
-    #     btorbyb = ((q ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
-    #     bpolbyb = (((epsilon * x) ** 2) / ((q ** 2) + ((epsilon * x) ** 2))) ** 0.5
-    #     grad_btorbyb = btorbyb * (bpolbyb ** 2) * (s - 1.0) / (epsilon * x)
-    #     aupar = autor * btorbyb - machtor * grad_btorbyb
-    #     return aupar
+    # def test_calc_aupar_from_autor_and_puretor(autor, machtor, s, q, epsilon, x):
 
-    # def calc_gammae_from_aupar_without_grad_dpi(aupar, q, epsilon):
-    #     gammae = -(epsilon / q) * aupar
-    #     return gammae
+    # def test_calc_gammae_from_aupar_without_grad_dpi(aupar, q, epsilon):
 
-    # def calc_grad_dpi_from_gammae_machtor_and_autor(gammae, machtor, autor, q, r, ro):
-    #     return None
+    # def test_calc_grad_dpi_from_gammae_machtor_and_autor(gammae, machtor, autor, q, r, ro):
 
-    # def calc_bunit_from_bo(bo, sfac):
-    #     bunit = normalize(bo, sfac)
-    #     return bunit
+    def test_calc_bunit_from_bref(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        bref = (physical_2ion_plasma_state['field_geometric'] ** 2).sum('direction') ** 0.5
+        sfac = dimensionless_2ion_plasma_state['shape_factor']
+        bunit = pt.calc_bunit_from_bref(bref, sfac)
+        xr.testing.assert_allclose(bunit, physical_2ion_plasma_state['field_unit'])
 
-    # def calc_bo_from_bunit(bunit, sfac):
-    #     bo = unnormalize(bunit, sfac)
-    #     return bo
+    def test_calc_bref_from_bunit(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        bunit = physical_2ion_plasma_state['field_unit']
+        sfac = dimensionless_2ion_plasma_state['shape_factor']
+        bref = pt.calc_bref_from_bunit(bunit, sfac)
+        xr.testing.assert_allclose(bref, (physical_2ion_plasma_state['field_geometric'] ** 2).sum('direction') ** 0.5)
 
-    # def calc_rhos_from_ts_ms_and_b(ts, ms, b):
-    #     c = constants_si()
-    #     rhos = (ts * c['u'] * ms / c['e']) ** 0.5 / b
-    #     return rhos
+    def test_calc_lds_from_ts_and_ns(self, physical_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        lde = pt.calc_lds_from_ns_and_ts(ne, te, zs=1.0)
+        xr.testing.assert_allclose(lde, physical_2ion_plasma_state['debye_length_e'])
 
-    # def calc_vsound_from_te_and_mref(te, mref):
-    #     c = constants_si()
-    #     vsound = (c['e'] * te / (c['u'] * mref)) ** 0.5
-    #     return vsound
+    def test_calc_ldsnorm_from_lds(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        lde = physical_2ion_plasma_state['debye_length_e']
+        rhoref = physical_2ion_plasma_state['gyroradius_ref']
+        ldenorm = pt.calc_ldsnorm_from_lds(lde, rhoref)
+        xr.testing.assert_allclose(ldenorm, dimensionless_2ion_plasma_state['debye_length_e_norm'])
 
-    # def calc_vtherms_from_ts_and_ms(ts, ms):
-    #     c = constants_si()
-    #     vths = (2.0 * c['e'] * ts / (c['u'] * ms)) ** 0.5
-    #     return vths
+    def test_calc_ldenorm_from_ne_te_and_rhoref(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        te = physical_2ion_plasma_state['temperature_e']
+        ne = physical_2ion_plasma_state['density_e']
+        rhoref = physical_2ion_plasma_state['gyroradius_ref']
+        ldenorm = pt.calc_ldenorm_from_ne_te_and_rhoref(ne, te, rhoref, ze=1.0)
+        xr.testing.assert_allclose(ldenorm, dimensionless_2ion_plasma_state['debye_length_e_norm'])
 
-    # def calc_lds_from_ts_and_ns(ts, ns, zs):
-    #     c = constants_si()
-    #     lds = (c['eps'] * ts / (c['e'] * ns * (zs ** 2))) ** 0.5
-    #     return lds
+    def test_calc_invb90_from_t_and_z(self, physical_2ion_plasma_state):
+        te = physical_2ion_plasma_state['temperature_e']
+        invb90 = pt.calc_invb90_from_t_and_z(te, 1.0)
+        xr.testing.assert_allclose(invb90, physical_2ion_plasma_state['inverse_minimum_approach'])
 
-    # def calc_ldsnorm_from_lds(lds, rhos):
-    #     ldsnorm = normalize(lds, rhos)
-    #     return ldsnorm
+    def test_calc_coulomb_logarithm_from_n_and_t(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        cl = pt.calc_coulomb_logarithm_from_n_and_t(ne, te, 1.0)
+        xr.testing.assert_allclose(cl, dimensionless_2ion_plasma_state['coulomb_logarithm'])
 
-    # def calc_ldenorm_from_te_ne_and_rhos(te, ne, rhos, ze=1.0):
-    #     lde = calc_lds_from_ts_and_ns(te, ne, ze)
-    #     ldenorm = calc_ldsnorm_from_lds(lde, rhos)
-    #     return ldenorm
+    def test_calc_nu_from_n_and_t(self, physical_2ion_plasma_state):
+        c = pt.constants_si()
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        nu = pt.calc_nu_from_n_and_t(ne, ne, te, 1.0, 1.0, c['me'] / c['u'])
+        xr.testing.assert_allclose(nu, physical_2ion_plasma_state['collisionality_ee'])
 
-    # def calc_coulomb_logarithm_from_te_and_ne(te, ne, ze=1.0):
-    #     c = constants_si()
-    #     lda = calc_lds_from_ts_and_ns(te, ne, ze)
-    #     inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * te / (ze * ze)
-    #     cl = np.log(inv_b90 * lda)
-    #     return cl
+    def test_calc_nuei_from_ne_te_and_zeff(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        zeff = dimensionless_2ion_plasma_state['effective_charge']
+        nuei = pt.calc_nuei_from_ne_te_and_zeff(ne, te, zeff, 1.0, ze=1.0)
+        xr.testing.assert_allclose(nuei, physical_2ion_plasma_state['collisionality_ei'])
 
-    # def calc_nu_from_t_and_n(ta, na, nb, ma, za, zb):
-    #     c = constants_si()
-    #     factor = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
-    #     inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * ta / (za * zb)
-    #     cl = calc_coulomb_logarithm_from_te_and_ne(ta, na, za) + np.log(za / zb)
-    #     nu = factor * nb * (c['e'] * ta / (c['u'] * ma)) ** 0.5 / (inv_b90 ** 2) * cl
-    #     return nu
+    def test_calc_nunorm_from_nu(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        nu = physical_2ion_plasma_state['collisionality_ei']
+        gref = physical_2ion_plasma_state['velocity_ref'] / physical_2ion_plasma_state['r_minor_lcfs']
+        nunorm = pt.calc_nunorm_from_nu(nu, gref)
+        xr.testing.assert_allclose(nunorm, dimensionless_2ion_plasma_state['collisionality_ei_norm'])
 
-    # def calc_nuei_from_te_ne_and_zeff(te, ne, zeff, zi, ze=1.0):
-    #     c = constants_si()
-    #     factor = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
-    #     inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * te / (ze * ((zeff * ze) ** 0.5))
-    #     cl = calc_coulomb_logarithm_from_te_and_ne(te, ne, ze) + np.log(ze / zi)
-    #     nuei = factor * ne * (c['e'] * te / (c['me'])) ** 0.5 / (inv_b90 ** 2) * cl
-    #     return nuei
+    def test_calc_nueenorm_from_ne_and_te(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        gref = physical_2ion_plasma_state['velocity_ref'] / physical_2ion_plasma_state['r_minor_lcfs']
+        nueenorm = pt.calc_nueenorm_from_ne_and_te(ne, te, gref, ze=1.0)
+        xr.testing.assert_allclose(nueenorm, dimensionless_2ion_plasma_state['collisionality_ee_norm'])
 
-    # def calc_nunorm_from_nu(nu, gref):
-    #     nunorm = normalize(nu, gref)
-    #     return nunorm
+    def test_calc_nueinorm_from_ne_ni_and_te(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        ni = physical_2ion_plasma_state['density_i']
+        te = physical_2ion_plasma_state['temperature_e']
+        zi = physical_2ion_plasma_state['charge_i']
+        gref = physical_2ion_plasma_state['velocity_ref'] / physical_2ion_plasma_state['r_minor_lcfs']
+        nueinorm = pt.calc_nueinorm_from_ne_ni_and_te(ne, ni, te, zi, gref, ze=1.0, cle=True)
+        xr.testing.assert_allclose(nueinorm.sum('ion'), dimensionless_2ion_plasma_state['collisionality_ei_norm'])
 
-    # def calc_nueenorm_from_te_and_ne(te, ne, gref, ze=1.0):
-    #     c = constants_si()
-    #     me = c['me'] / c['u']
-    #     nuee = calc_nu_from_t_and_n(te, ne, ne, me, ze, ze)
-    #     nueenorm = calc_nunorm_from_nu(nuee, gref)
-    #     return nueenorm
+    def test_calc_nueinorm_from_ne_te_and_zeff(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        zi = physical_2ion_plasma_state['charge_i'].sel(ion='D', drop=True)
+        zeff = dimensionless_2ion_plasma_state['effective_charge']
+        gref = physical_2ion_plasma_state['velocity_ref'] / physical_2ion_plasma_state['r_minor_lcfs']
+        nueinorm = pt.calc_nueinorm_from_ne_te_and_zeff(ne, te, zeff, zi, gref, ze=1.0, cle=True)
+        xr.testing.assert_allclose(nueinorm, dimensionless_2ion_plasma_state['collisionality_ei_norm'])
 
-    # def calc_nueinorm_from_te_ne_and_ni(te, ne, ni, zi, gref, ze=1.0):
-    #     c = constants_si()
-    #     me = c['me'] / c['u']
-    #     nuei = calc_nu_from_t_and_n(te, ne, ni, me, ze, zi)
-    #     nueinorm = calc_nunorm_from_nu(nuei, gref)
-    #     return nueinorm
+    def test_calc_nuiinorm_from_ni_and_ti(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        ni = physical_2ion_plasma_state['density_i']
+        ti = physical_2ion_plasma_state['temperature_i']
+        zi = physical_2ion_plasma_state['charge_i']
+        mi = physical_2ion_plasma_state['mass_i']
+        gref = physical_2ion_plasma_state['velocity_ref'] / physical_2ion_plasma_state['r_minor_lcfs']
+        nuiinorm = pt.calc_nuiinorm_from_ni_and_ti(ni, ni, ti, zi, zi, mi, gref)
+        xr.testing.assert_allclose(nuiinorm, dimensionless_2ion_plasma_state['collisionality_ii_norm'])
 
-    # def calc_nueinorm_from_te_ne_and_zeff(te, ne, zeff, zi, gref, ze=1.0):
-    #     nuei = calc_nuei_from_te_ne_and_zeff(te, ne, zeff, zi, ze)
-    #     nueinorm = calc_nunorm_from_nu(nuei, gref)
-    #     return nueinorm
+    def test_calc_te_from_betae_and_ldenorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        c = pt.constants_si()
+        aref = physical_2ion_plasma_state['mass_i'].sel(ion='D', drop=True)
+        btot = (physical_2ion_plasma_state['field_geometric'] ** 2).sum('direction') ** 0.5
+        pe = c['e'] * physical_2ion_plasma_state['density_e'] * physical_2ion_plasma_state['temperature_e']
+        betae = pt.calc_beta_from_p(pe, btot)
+        ldenorm = dimensionless_2ion_plasma_state['debye_length_e_unit_norm']
+        sfac = dimensionless_2ion_plasma_state['shape_factor']
+        te = pt.calc_te_from_betae_and_ldenorm(betae, ldenorm, sfac, aref, ze=1.0)
+        xr.testing.assert_allclose(te, physical_2ion_plasma_state['temperature_e'])
 
-    # def calc_nuiinorm_from_te_ne_and_ni(tia, nia, nib, mia, zia, zib, gref):
-    #     nuii = calc_nu_from_t_and_n(tia, nia, nib, mia, zia, zib)
-    #     nuiinorm = calc_nunorm_from_nu(nuii, gref)
-    #     return nuiinorm
+    def test_calc_ne_from_nueenorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        lref = physical_2ion_plasma_state['r_minor_lcfs']
+        aref = physical_2ion_plasma_state['mass_i'].sel(ion='D', drop=True)
+        te = physical_2ion_plasma_state['temperature_e']
+        nueenorm = dimensionless_2ion_plasma_state['collisionality_ee_norm']
+        ne = pt.calc_ne_from_nueenorm(nueenorm, te, aref, lref, ze=1.0)
+        xr.testing.assert_allclose(ne, physical_2ion_plasma_state['density_e'])
 
-    # def calc_te_from_betae_and_ldenorm(betae, ldenorm, sfac, mref, ze=1.0):
-    #     c = constants_si()
-    #     bc = (ze ** 2) * c['u'] * mref / (2.0 * c['eps'] * c['e'] * c['mu'])
-    #     te = bc * betae * (ldenorm ** 2) * (sfac ** 2)
-    #     return te
+    def test_calc_bunit_from_ldenorm(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        aref = physical_2ion_plasma_state['mass_i'].sel(ion='D', drop=True)
+        ne = physical_2ion_plasma_state['density_e']
+        ldenorm = dimensionless_2ion_plasma_state['debye_length_e_unit_norm']
+        bunit = pt.calc_bunit_from_ldenorm(ldenorm, ne, aref, ze=1.0)
+        xr.testing.assert_allclose(bunit, physical_2ion_plasma_state['field_unit'])
 
-    # def calc_ne_from_nueenorm(nueenorm, te, mref, lref, ze=1.0):
-    #     c = constants_si()
-    #     f_nu = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
-    #     inv_b90_ee = 4.0 * np.pi * (c['eps'] / c['e']) * te / (ze ** 2)
-    #     nc = f_nu * lref * (c['u'] * mref / c['me']) ** 0.5
-    #     nl = inv_b90_ee * (c['eps'] / c['e']) ** 0.5 * (te / (ze ** 2)) ** 0.5
-    #     data = {'logterm': np.log(nl), 'constant': nueenorm * (inv_b90_ee ** 2) / nc}
-    #     rootdata = pd.DataFrame(data)
-    #     logger.debug(rootdata)
-    #     func_ne20 = lambda row: root_scalar(
-    #         lambda ne: (row['logterm'] - 0.5 * np.log(ne * 1.0e20)) * (ne * 1.0e20) - row['constant'],
-    #         x0=0.01,
-    #         x1=1.0,
-    #         maxiter=100,
-    #     )
-    #     sol_ne20 = rootdata.apply(func_ne20, axis=1)
-    #     retry = sol_ne20.apply(lambda sol: not sol.converged)
-    #     if np.any(retry):
-    #         func_ne20_v2 = lambda row: root_scalar(
-    #             lambda ne: (row['logterm'] - 0.5 * np.log(ne * 1.0e20)) * (ne * 1.0e20) - row['constant'],
-    #             x0=1.0,
-    #             x1=0.1,
-    #             maxiter=100,
-    #         )
-    #         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
-    #     ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
-    #     return ne
+    def test_calc_nustar_from_ne_and_te(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        rmin = physical_2ion_plasma_state['r_minor']
+        rmaj = physical_2ion_plasma_state['r_geometric']
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        zeff = dimensionless_2ion_plasma_state['effective_charge']
+        q = dimensionless_2ion_plasma_state['safety_factor_circular']
+        nustar = pt.calc_nustar_from_ne_and_te(zeff, q, rmin, rmaj, ne, te)
+        xr.testing.assert_allclose(nustar, dimensionless_2ion_plasma_state['collisionality_bounce_norm'])
 
-    # def calc_bunit_from_ldenorm(ldenorm, ne, mref, ze=1.0):
-    #     c = constants_si()
-    #     bunit = (ne * (ze ** 2) * c['u'] * mref / c['eps']) ** 0.5 * ldenorm
-    #     return bunit
+    def test_calc_ne_from_nustar(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        rmin = physical_2ion_plasma_state['r_minor']
+        rmaj = physical_2ion_plasma_state['r_geometric']
+        te = physical_2ion_plasma_state['temperature_e']
+        nustar = dimensionless_2ion_plasma_state['collisionality_bounce_norm']
+        zeff = dimensionless_2ion_plasma_state['effective_charge']
+        q = dimensionless_2ion_plasma_state['safety_factor_circular']
+        ne = pt.calc_ne_from_nustar(nustar, zeff, q, rmin, rmaj, te)
+        xr.testing.assert_allclose(ne, physical_2ion_plasma_state['density_e'])
 
-    # def calc_ne_from_nustar(nustar, zeff, q, r, ro, te):
-    #     c = constants_si()
-    #     eom = c['e'] / c['me']
-    #     tb = q * ro * ((r / ro) ** (-1.5)) / ((eom * te) ** 0.5)
-    #     kk = (1.0e4 / 1.09) * zeff * ((te * 1.0e-3) ** (-1.5))
-    #     nu = nustar / (tb * kk)
-    #     data = {'te': te * 1.0e-3, 'knu': nu}
-    #     rootdata = pd.DataFrame(data)
-    #     logger.debug(rootdata)
-    #     func_ne20 = lambda row: root_scalar(
-    #         lambda ne: calc_coulomb_logarithm_from_te_and_ne(row['te'] * 1.0e3, ne * 1.0e20) * ne - row['knu'],
-    #         x0=0.01,
-    #         x1=1.0,
-    #         maxiter=100,
-    #     )
-    #     sol_ne20 = rootdata.apply(func_ne20, axis=1)
-    #     retry = sol_ne20.apply(lambda sol: not sol.converged)
-    #     if np.any(retry):
-    #         func_ne20_v2 = lambda row: root_scalar(
-    #             lambda ne: calc_coulomb_logarithm_from_te_and_ne(row['te'] * 1.0e3, ne * 1.0e20) * ne - row['knu'],
-    #             x0=1.0,
-    #             x1=0.1,
-    #             maxiter=100,
-    #         )
-    #         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
-    #     ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
-    #     logger.debug(f'<{calc_ne_from_nustar.__name__}>: data')
-    #     logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
-    #     return ne
+    def test_calc_te_from_nustar(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        rmin = physical_2ion_plasma_state['r_minor']
+        rmaj = physical_2ion_plasma_state['r_geometric']
+        ne = physical_2ion_plasma_state['density_e']
+        nustar = dimensionless_2ion_plasma_state['collisionality_bounce_norm']
+        zeff = dimensionless_2ion_plasma_state['effective_charge']
+        q = dimensionless_2ion_plasma_state['safety_factor_circular']
+        te = pt.calc_te_from_nustar(nustar, zeff, q, rmin, rmaj, ne)
+        xr.testing.assert_allclose(te, physical_2ion_plasma_state['temperature_e'])
 
-    # def calc_te_from_nustar(nustar, zeff, q, r, ro, ne, verbose=0):
-    #     c = constants_si()
-    #     moe = c['me'] / c['e']
-    #     kk = (10.0 ** 0.5) * (1.0e2 / 1.09) * zeff * q * ro * ((r / ro) ** (-1.5)) * (moe ** 0.5) * (ne * 1.0e-20)
-    #     nu = nustar / kk
-    #     data = {'ne': ne * 1.0e-20, 'knu': nu}
-    #     rootdata = pd.DataFrame(data)
-    #     logger.debug(rootdata)
-    #     func_te3 = lambda row: root_scalar(
-    #         lambda te: calc_coulomb_logarithm_from_te_and_ne(te * 1.0e3, row['ne'] * 1.0e20) / (te ** 2) - row['knu'],
-    #         x0=1.0,
-    #         x1=0.1,
-    #         maxiter=100,
-    #     )
-    #     sol_te3 = rootdata.apply(func_te3, axis=1)
-    #     retry = sol_te3.apply(lambda sol: not sol.converged)
-    #     if np.any(retry):
-    #         func_te3_v2 = lambda row: root_scalar(
-    #             lambda te: calc_coulomb_logarithm_from_te_and_ne(te * 1.0e3, row['ne'] * 1.0e20) / (te ** 2) - row['knu'],
-    #             x0=0.01,
-    #             x1=0.1,
-    #             maxiter=100,
-    #         )
-    #         sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
-    #     te = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
-    #     logger.debug(f'<{calc_te_from_nustar.__name__}>: data')
-    #     logger.debug(pd.DataFrame(data={'nustar': nustar, 'ne': ne, 'te': te}))
-    #     return te
+    def test_calc_zeff_from_nustar(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        rmin = physical_2ion_plasma_state['r_minor']
+        rmaj = physical_2ion_plasma_state['r_geometric']
+        ne = physical_2ion_plasma_state['density_e']
+        te = physical_2ion_plasma_state['temperature_e']
+        nustar = dimensionless_2ion_plasma_state['collisionality_bounce_norm']
+        q = dimensionless_2ion_plasma_state['safety_factor_circular']
+        zeff = pt.calc_zeff_from_nustar(nustar, q, rmin, rmaj, ne, te)
+        xr.testing.assert_allclose(zeff, dimensionless_2ion_plasma_state['effective_charge'])
 
-    # def calc_zeff_from_nustar(nustar, q, r, ro, ne, te):
-    #     c = constants_si()
-    #     cl = calc_coulomb_logarithm_from_te_and_ne(te, ne)
-    #     nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
-    #     kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
-    #     zeff = nustar / (cl * nt * kk)
-    #     return zeff
+    # def test_calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa, cos, sin, s_cos, s_sin):
 
-    # def calc_nustar(zeff, q, r, ro, ne, te):
-    #     c = constants_si()
-    #     cl = calc_coulomb_logarithm_from_te_and_ne(te, ne)
-    #     nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
-    #     kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
-    #     nustar = cl * zeff * nt * kk
-    #     return nustar
+    # def test_calc_vol_from_contour(r, z, rgeo):
+
+    # def test_calc_b_from_flux_surface_values(r, grad_r, l_t, rmin, q):
+
+    # def test_calc_geo_from_flux_surface_values(r, grad_r, l_t, b, rmin, rgeo):
+
+    # def test_calc_grad_vol_from_flux_surface_values(r, l_t, grad_r):
+
+    # def test_calc_flux_surface_average_k_from_b_and_geo(k, b, g_t):
