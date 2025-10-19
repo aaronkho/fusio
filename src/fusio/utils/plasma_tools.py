@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 import xarray as xr
 from scipy.optimize import root_scalar  # type: ignore[import-untyped]
+from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 
 logger = logging.getLogger('fusio')
 
@@ -1332,7 +1333,7 @@ def calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_k
     return r, z, l_t, grad_r
 
 def calc_vol_from_contour(r, z, rgeo):
-    xs = np.trapezoid(r, z, axis=0)
+    xs = trapezoid(r, x=z, axis=0)
     vol = 2.0 * np.pi * rgeo * xs
     return vol, xs
 

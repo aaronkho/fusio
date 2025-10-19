@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 import datetime
-from scipy.integrate import cumulative_simpson  # type: ignore[import-untyped]
+from scipy.integrate import cumulative_simpson, trapezoid  # type: ignore[import-untyped]
 from .io import io
 from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (
@@ -543,7 +543,7 @@ class gacode_io(io):
             newvars['bt2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
-            newvars['surfxs'] = (['n', 'rho'], np.trapezoid(r, z, axis=0))
+            newvars['surfxs'] = (['n', 'rho'], trapezoid(r, x=z, axis=0))
             newvars['r_out'] = (['n', 'rho'], np.nanmax(r, axis=0))
             newvars['r_in'] = (['n', 'rho'], np.nanmin(r, axis=0))
             newvars['b_ref'] = (['n', 'rho'], np.abs(data['b_unit'].to_numpy() * newvars['geo_bt'][-1]))  # For synchrotron

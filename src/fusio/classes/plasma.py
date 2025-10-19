@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 import datetime
-from scipy.integrate import quad  # type: ignore[import-untyped]
+from scipy.integrate import quad, trapezoid  # type: ignore[import-untyped]
 from .io import io
 from ..utils.plasma_tools import define_ion_species
 from ..utils.math_tools import (
@@ -247,7 +247,7 @@ class plasma_io(io):
             newvars['rho_norm'] = (['time', 'radius', 'direction'], ((data['magnetic_flux'] / magnetic_flux_lcfs) ** 0.5).to_numpy())
             contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
             contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
-            xs_area = np.trapezoid(contour_r, contour_z, axis=-1)
+            xs_area = trapezoid(contour_r, x=contour_z, axis=-1)
             vol = 2.0 * np.pi * data['r_geometric'].to_numpy() * xs_area
             volp = vectorized_numpy_derivative(data['r_minor'].to_numpy(), vol)
             newvars['cross_sectional_area'] = (['time', 'radius'], xs_area)
@@ -404,7 +404,7 @@ class plasma_io(io):
             b2 = np.stack([np.sum(bp[:-1, ...] ** 2 * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom, np.sum(bt[:-1, ...] ** 2 * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom], axis=-1)
             newvars['mxh_dr_dpsi'] = (['time', 'radius'], np.sum(grad_r[:-1, ...] * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom)
             newvars['mxh_field_squared'] = (['time', 'radius', 'direction'], b2)
-            newvars['mxh_cross_sectional_area'] = (['time', 'radius'], np.trapezoid(r, z, axis=0))
+            newvars['mxh_cross_sectional_area'] = (['time', 'radius'], trapezoid(r, x=z, axis=0))
             newvars['mxh_field_ref'] = (['time', 'radius'], np.abs(data['field_unit'].to_numpy() * bt_inner))  # For synchrotron
             b_inner = np.stack([np.where(np.isfinite(bt_inner), bt_inner, 0.0), np.where(np.isfinite(bp_inner), bp_inner, 0.0)], axis=-1)
             b_outer = np.stack([np.where(np.isfinite(bt_outer), bt_outer, 0.0), np.where(np.isfinite(bp_outer), bp_outer, 0.0)], axis=-1)
