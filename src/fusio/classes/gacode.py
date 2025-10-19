@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 import datetime
-from scipy.integrate import cumulative_simpson  # type: ignore[import-untyped]
+from scipy.integrate import cumulative_simpson, trapezoid  # type: ignore[import-untyped]
 from .io import io
 from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (
@@ -539,11 +539,11 @@ class gacode_io(io):
             denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1] / b[:-1], axis=0)
             denom[..., 0] = 2.0 * denom[..., 1] - denom[..., 2]
             newvars['gradr_miller'] = (['n', 'rho'], np.sum(grad_r[:-1] * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['bp2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['bt2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['bp2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['bt2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
-            newvars['surfxs'] = (['n', 'rho'], np.trapezoid(r, z, axis=0))
+            newvars['surfxs'] = (['n', 'rho'], trapezoid(r, x=z, axis=0))
             newvars['r_out'] = (['n', 'rho'], np.nanmax(r, axis=0))
             newvars['r_in'] = (['n', 'rho'], np.nanmin(r, axis=0))
             newvars['b_ref'] = (['n', 'rho'], np.abs(data['b_unit'].to_numpy() * newvars['geo_bt'][-1]))  # For synchrotron
@@ -559,8 +559,8 @@ class gacode_io(io):
     ) -> None:
         data = self.input
         newvars: MutableMapping[str, Any] = {}
-        if 'name' in data and 'mass' in data and 'ni' in data and 'volp_miller' in data:
-            main_species_mask = (data['name'].isin(['H', 'D', 'T']).to_numpy() & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
+        if 'z' in data and 'mass' in data and 'ni' in data and 'volp_miller' in data:
+            main_species_mask = (np.isclose(data['z'].to_numpy(), 1.0) & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
             n_i_vol = cumulative_simpson(
                 np.transpose((data['ni'].isel(name=main_species) * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
@@ -735,13 +735,13 @@ class gacode_io(io):
         def find(v, x, y, last=False):
             xm = x.reshape(-1, x.shape[-1])
             ym = y.reshape(-1, y.shape[-1])
-            found = np.full((xm.shape[0], ), np.nan)
+            flat_found = np.full((xm.shape[0], ), np.nan)
             for i in range(xm.shape[0]):
                 yidx = np.where(((ym[i] - v)[1:] * (ym[i] - v)[:-1]) < 0.0)[0]
                 if len(yidx) > 0:
                     yi = yidx[-1] if last else yidx[0]
-                    found[i] = (v - ym[i, yi]) * (xm[i, yi + 1] - xm[i, yi]) / (ym[i, yi + 1] - ym[i, yi])
-            found = found.reshape(*y.shape[:-1])
+                    flat_found[i] = (v - ym[i, yi]) * (xm[i, yi + 1] - xm[i, yi]) / (ym[i, yi + 1] - ym[i, yi])
+            found = flat_found.reshape(*y.shape[:-1])
             return found
 
         data = self.input
@@ -883,7 +883,7 @@ class gacode_io(io):
         if 'bp2' in data and 'bt2' in data:
             b = (data['bp2'] + data['bt2']) ** 0.5
             newvars['b'] = (['n', 'rho'], b.to_numpy())
-            main_species_mask = (data['name'].isin(['H', 'D', 'T']).to_numpy() & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
+            main_species_mask = (np.isclose(data['z'].to_numpy(), 1.0) & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
             vperp_tor = xr.zeros_like(b)
             vperp_pol = xr.zeros_like(b)
@@ -918,7 +918,9 @@ class gacode_io(io):
             beta_i_th_t = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
             newvars['beta_i_th'] = (['n', 'rho'], 1.0 / (beta_i_th_p ** (-1) + beta_i_th_t ** (-1)).to_numpy())
         if 'debye_e' in data and 'debye_i' in data:
-            newvars['debye'] = (['n', 'rho'], ((data['debye_e'] ** (-2) + (data['debye_i'] ** (-2)).sum('name')) ** (-0.5)).to_numpy())
+            debye = (data['debye_e'] ** (-2) + (data['debye_i'] ** (-2)).sum('name')) ** (-0.5)
+            newvars['debye'] = (['n', 'rho'], debye.to_numpy())
+            newvars['debye_norm'] = (['n', 'rho'], (debye / data['rho_s_unit']).to_numpy())
             f_nu = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
             inv_b90_ee = (4.0 * np.pi * eps_si / e_si) * 1.0e3 * data['te'] / abs(data['ze'] * data['ze'])
             f_ee = 1.0e19 * data['ne'] * (e_si * 1.0e3 * data['te'] / (u_si * data['masse'])) ** 0.5 / (inv_b90_ee ** 2) * np.log(inv_b90_ee * data['debye_e'])
@@ -970,7 +972,7 @@ class gacode_io(io):
             pe = cumulative_simpson((data['qe'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
             pi = cumulative_simpson((data['qi'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
             se = cumulative_simpson((data['ge'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            pce = 1.5 * 1.0e-3 * 16.0218 * data['te'].to_numpy() * se  # MW
+            pce = 1.5 * 1.0e-3 * 1.60218e-19 * data['te'].to_numpy() * se  # MW
             mt = cumulative_simpson((data['qmom'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
             newvars['pe'] = (['n', 'rho'], pe)
             newvars['pi'] = (['n', 'rho'], pi)
@@ -1456,6 +1458,133 @@ class gacode_io(io):
         newobj = cls()
         if isinstance(obj, io):
             newobj.input = obj.input if side == 'input' else obj.output
+        return newobj
+
+
+    @classmethod
+    def from_plasma(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[int | float] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input if side == 'input' else obj.output
+            direct_time_map = {
+                'mass_e': 'masse',
+                'charge_e': 'ze',
+                'field_axis': 'bcentr',
+                'current': 'current',
+            }
+            direct_time_ion_map = {
+                'mass_i': 'mass',
+            }
+            direct_time_rho_map = {
+                'r_minor': 'rmin',
+                'r_geometric': 'rmaj',
+                'z_geometric': 'zmag',
+                'density_e': 'ne',
+                'temperature_e': 'te',
+                'heat_exchange_ei': 'qei',
+            }
+            direct_time_rho_ion_map = {
+                'density_i': 'ni',
+                'temperature_i': 'ti',
+            }
+            coords = {}
+            data_vars = {}
+            attrs = {}
+            if 'time' in data and 'radius' in data:
+                coords['n'] = np.arange(len(data['time'])).astype(int)
+                data_vars['time'] = (['n'], data['time'].to_numpy())
+                coords['rho'] = data['radius'].to_numpy()
+                if 'rho_norm' in data:
+                    coords['rho'] = data['rho_norm'].sel(direction='toroidal', drop=True).mean('time').to_numpy().flatten()
+                elif 'magnetic_flux' in data:
+                    coords['rho'] = ((data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)) ** 0.5).sel(direction='toroidal', drop=True).mean('time').to_numpy().flatten()
+                data_vars['nexp'] = (['n'], np.repeat(np.array([len(coords['rho'])]).astype(int), len(coords['n']), axis=0))
+                data_vars['shot'] = (['n'], np.repeat(np.array([0]).astype(int), len(coords['n']), axis=0))
+                if 'ion' in data:
+                    coords['name'] = data['ion'].to_numpy()
+                    data_vars['nion'] = (['n'], np.repeat(np.array([len(coords['name'])]).astype(int), len(coords['n']), axis=0))
+                    if 'type_i' in data:
+                        data_vars['type'] = (['n', 'name'], np.where(data['type_i'].to_numpy() == 'thermal', '[therm]', '[fast]'))
+                    if 'charge_i' in data:
+                        data_vars['z'] = (['n', 'name'], data['charge_i'].mean('radius').to_numpy())
+                for key, nkey in direct_time_map.items():
+                    if key in data:
+                        data_vars[nkey] = (['n'], data[key].to_numpy())
+                for key, nkey in direct_time_ion_map.items():
+                    if key in data and 'name' in data:
+                        data_vars[nkey] = (['n', 'name'], data[key].to_numpy())
+                for key, nkey in direct_time_rho_map.items():
+                    if key in data:
+                        data_vars[nkey] = (['n', 'rho'], data[key].to_numpy())
+                for key, nkey in direct_time_rho_ion_map.items():
+                    if key in data and 'name' in data:
+                        data_vars[nkey] = (['n', 'rho', 'name'], data[key].to_numpy())
+                if 'magnetic_flux' in data:
+                    data_vars['torfluxa'] = (['n'], data['magnetic_flux'].isel(radius=-1).sel(direction='toroidal', drop=True).to_numpy())
+                    data_vars['polflux'] = (['n', 'rho'], data['magnetic_flux'].sel(direction='poloidal', drop=True).to_numpy())
+                if 'rmaj' in data:
+                    data_vars['rcentr'] = (['n'], data['rmaj'].isel(radius=0).to_numpy())
+                if 'safety_factor' in data:
+                    data_vars['q'] = (['n', 'rho'], data['safety_factor'].to_numpy())
+                if 'effective_charge' in data:
+                    data_vars['z_eff'] = (['n', 'rho'], data['effective_charge'].to_numpy())
+                if 'pressure_total' in data:
+                    data_vars['ptot'] = (['n', 'rho'], data['pressure_total'].to_numpy())
+                if 'mxh_kappa' in data:
+                    data_vars['kappa'] = (['n', 'rho'], data['mxh_kappa'].to_numpy())
+                if 'mxh_delta' in data:
+                    data_vars['delta'] = (['n', 'rho'], data['mxh_delta'].to_numpy())
+                if 'mxh_zeta' in data:
+                    data_vars['zeta'] = (['n', 'rho'], data['mxh_zeta'].to_numpy())
+                if 'mxh_coefficient' in data and 'mxh_cos' in data:
+                    for c in data['mxh_coefficient']:
+                        if c >= 3:
+                            data_vars[f'shape_cos{c:d}'] = (['n', 'rho'], data['mxh_cos'].sel(mxh_coefficient=c).to_numpy())
+                if 'mxh_coefficient' in data and 'mxh_sin' in data:
+                    for c in data['mxh_coefficient']:
+                        if c >= 1:
+                            data_vars[f'shape_sin{c:d}'] = (['n', 'rho'], data['mxh_sin'].sel(mxh_coefficient=c).to_numpy())
+                if 'heat_source_e' in data:
+                    data_vars['qohme'] = (['n', 'rho'], data['heat_source_e'].sel(source='ohmic', drop=True).to_numpy())
+                    data_vars['qbeame'] = (['n', 'rho'], data['heat_source_e'].sel(source='neutral_beam', drop=True).to_numpy())
+                    data_vars['qrfe'] = (['n', 'rho'], data['heat_source_e'].sel(source=['ion_cyclotron', 'electron_cyclotron']).sum('source').to_numpy())
+                    data_vars['qsync'] = (['n', 'rho'], data['heat_source_e'].sel(source='synchrotron', drop=True).to_numpy())
+                    data_vars['qbrem'] = (['n', 'rho'], data['heat_source_e'].sel(source='bremsstrahlung', drop=True).to_numpy())
+                    data_vars['qline'] = (['n', 'rho'], data['heat_source_e'].sel(source='line_radiation', drop=True).to_numpy())
+                    data_vars['qione'] = (['n', 'rho'], data['heat_source_e'].sel(source='ionization', drop=True).to_numpy())
+                    data_vars['qfuse'] = (['n', 'rho'], data['heat_source_e'].sel(source='fusion', drop=True).to_numpy())
+                if 'heat_source_i' in data:
+                    data_vars['qohmi'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='ohmic', drop=True).to_numpy())
+                    data_vars['qbeami'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='neutral_beam', drop=True).to_numpy())
+                    data_vars['qrfi'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source=['ion_cyclotron', 'electron_cyclotron']).sum('source').to_numpy())
+                    data_vars['qioni'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='ionization', drop=True).to_numpy())
+                    data_vars['qfusi'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='fusion', drop=True).to_numpy())
+                    data_vars['qcxi'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='charge_exchange', drop=True).to_numpy())
+                if 'heat_exchange_ei' in data:
+                    data_vars['qei'] = (['n', 'rho'], data['heat_exchange_ei'].to_numpy())
+                if 'current_source' in data:
+                    data_vars['johm'] = (['n', 'rho'], data['current_source'].sel(source='ohmic', drop=True).to_numpy())
+                    data_vars['jbs'] = (['n', 'rho'], data['current_source'].sel(source='bootstrap', drop=True).to_numpy())
+                    data_vars['jnb'] = (['n', 'rho'], data['current_source'].sel(source='neutral_beam', drop=True).to_numpy())
+                    data_vars['jrf'] = (['n', 'rho'], data['current_source'].sel(source=['ion_cyclotron', 'electron_cyclotron']).sum('source').to_numpy())
+                if 'particle_source_e' in data:
+                    data_vars['qpar_beam'] = (['n', 'rho'], data['particle_source_e'].sel(source='neutral_beam', drop=True).to_numpy())
+                    data_vars['qpar_wall'] = (['n', 'rho'], data['particle_source_e'].sel(source=['ionization', 'charge_exchange']).sum('source').to_numpy())
+                if 'momentum_source_i' in data:
+                    data_vars['qmom'] = (['n', 'rho'], data['momentum_source_i'].sel(direction='toroidal', drop=True).sel(source=['neutral_beam', 'ionization', 'charge_exchange']).sum('source').isel(ion=0).to_numpy())
+                if 'velocity_i' in data:
+                    data_vars['vtor'] = (['n', 'rho', 'name'], data['velocity_i'].sel(direction='toroidal', drop=True).to_numpy())
+                    data_vars['vpol'] = (['n', 'rho', 'name'], data['velocity_i'].sel(direction='poloidal', drop=True).to_numpy())
+                if 'rotation_frequency_sonic' in data:
+                    data_vars['omega0'] = (['n', 'rho'], data['rotation_frequency_sonic'].sel(direction='toroidal', drop=True).to_numpy())
+                attrs['header'] = newobj.make_file_header()
+                newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
 
 
