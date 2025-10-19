@@ -1014,15 +1014,30 @@ def calc_te_from_nustar_nrl_alpha_and_ap(nustar, alpha, ap, zeff, q, btot, rmin,
     #logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'te': te}))
     return te
 
-def calc_vref_from_te_and_mref(te, aref):
+def calc_vref_from_te_and_aref(te, aref):
     c = constants_si()
     vref = (te * c['e'] / (c['u'] * aref)) ** 0.5
     return vref
 
+def calc_te_from_vref(vref, aref):
+    c = constants_si()
+    te = (vref ** 2) * c['u'] * aref / c['e']
+    return te
+
+def calc_aref_from_vref(vref, te):
+    c = constants_si()
+    aref = c['e'] * te / ((vref ** 2) * c['u'])
+    return aref
+
 def calc_vths_from_ts(ts, _as):
     c = constants_si()
-    vth = (2.0 * ts * c['e'] / (c['u'] * _as)) ** 0.5
-    return vth
+    vths = (2.0 * ts * c['e'] / (c['u'] * _as)) ** 0.5
+    return vths
+
+def calc_ts_from_vths(vths, _as):
+    c = constants_si()
+    ts = (vths ** 2) * c['u'] * _as / (2.0 * c['e'])
+    return ts
 
 def calc_mach_from_u(u, cref):
     mach = normalize(u, cref)
@@ -1072,86 +1087,93 @@ def calc_bref_from_bunit(bunit, sfac):
     bref = unnormalize(bunit, sfac)
     return bref
 
-def calc_lds_from_ts_and_ns(ts, ns, zs):
+def calc_lds_from_ns_and_ts(ns, ts, zs=1.0):
     c = constants_si()
     lds = (c['eps'] * ts / (c['e'] * ns * (zs ** 2))) ** 0.5
     return lds
 
-def calc_ldsnorm_from_lds(lds, rhos):
-    ldsnorm = normalize(lds, rhos)
+def calc_ldsnorm_from_lds(lds, rhoref):
+    ldsnorm = normalize(lds, rhoref)
     return ldsnorm
 
-def calc_ldenorm_from_te_ne_and_rhos(te, ne, rhos, ze=1.0):
-    lde = calc_lds_from_ts_and_ns(te, ne, ze)
-    ldenorm = calc_ldsnorm_from_lds(lde, rhos)
+def calc_ldenorm_from_ne_te_and_rhoref(ne, te, rhoref, ze=1.0):
+    lde = calc_lds_from_ns_and_ts(ne, te, zs=ze)
+    ldenorm = calc_ldsnorm_from_lds(lde, rhoref)
     return ldenorm
 
-def calc_coulomb_logarithm_from_ne_and_te(ne, te, ze=1.0):
+def calc_invb90_from_t_and_z(ta, za, zb=None):
     c = constants_si()
-    lda = calc_lds_from_ts_and_ns(te, ne, ze)
-    inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * te / (ze * ze)
-    cl = np.log(inv_b90 * lda)
+    zb_temp = copy.deepcopy(zb) if zb is not None else copy.deepcopy(za)
+    invb90 = (4.0 * np.pi * c['eps'] / c['e']) * ta / (za * zb_temp)
+    return invb90
+
+def calc_coulomb_logarithm_from_n_and_t(na, ta, za, zb=None):
+    lda = calc_lds_from_ns_and_ts(na, ta, zs=za)
+    invb90 = calc_invb90_from_t_and_z(ta, za, zb=zb)
+    cl = np.log(invb90 * lda)
     if cl.ndim == 0:
         cl = float(cl)
     return cl
 
-def calc_nu_from_t_and_n(ta, na, nb, ma, za, zb):
+def calc_nu_from_n_and_t(na, nb, ta, za, zb, ma, cla=False):
     c = constants_si()
     factor = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
-    inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * ta / (za * zb)
-    cl = calc_coulomb_logarithm_from_ne_and_te(na, ta, ze=za) + np.log(za / zb)
-    nu = factor * nb * (c['e'] * ta / (c['u'] * ma)) ** 0.5 / (inv_b90 ** 2) * cl
+    invb90 = calc_invb90_from_t_and_z(ta, za, zb=zb)
+    cl = calc_coulomb_logarithm_from_n_and_t(na, ta, za, zb=(zb if not cla else za))
+    nu = factor * nb * (c['e'] * ta / (c['u'] * ma)) ** 0.5 / (invb90 ** 2) * cl
     return nu
 
-def calc_nuei_from_te_ne_and_zeff(te, ne, zeff, zi, ze=1.0):
+def calc_nuei_from_ne_te_and_zeff(ne, te, zeff, zi, ze=1.0, cle=False):
     c = constants_si()
     factor = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
-    inv_b90 = (4.0 * np.pi * c['eps'] / c['e']) * te / (ze * ((zeff * ze) ** 0.5))
-    cl = calc_coulomb_logarithm_from_ne_and_te(te, ne, ze=ze) + np.log(ze / zi)
-    nuei = factor * ne * (c['e'] * te / (c['me'])) ** 0.5 / (inv_b90 ** 2) * cl
+    invb90 = calc_invb90_from_t_and_z(te, ze, zb=((zeff * ze) ** 0.5))
+    cl = calc_coulomb_logarithm_from_n_and_t(ne, te, ze, zb=(zi if not cle else ze))
+    nuei = factor * ne * (c['e'] * te / (c['me'])) ** 0.5 / (invb90 ** 2) * cl
     return nuei
 
 def calc_nunorm_from_nu(nu, gref):
     nunorm = normalize(nu, gref)
     return nunorm
 
-def calc_nueenorm_from_te_and_ne(te, ne, gref, ze=1.0):
+def calc_nueenorm_from_ne_and_te(ne, te, gref, ze=1.0):
     c = constants_si()
     me = c['me'] / c['u']
-    nuee = calc_nu_from_t_and_n(te, ne, ne, me, ze, ze)
+    nuee = calc_nu_from_n_and_t(ne, ne, te, ze, ze, me)
     nueenorm = calc_nunorm_from_nu(nuee, gref)
     return nueenorm
 
-def calc_nueinorm_from_te_ne_and_ni(te, ne, ni, zi, gref, ze=1.0):
+def calc_nueinorm_from_ne_ni_and_te(ne, ni, te, zi, gref, ze=1.0, cle=False):
     c = constants_si()
     me = c['me'] / c['u']
-    nuei = calc_nu_from_t_and_n(te, ne, ni, me, ze, zi)
+    nuei = calc_nu_from_n_and_t(ne, ni, te, ze, zi, me, cla=cle)
     nueinorm = calc_nunorm_from_nu(nuei, gref)
     return nueinorm
 
-def calc_nueinorm_from_te_ne_and_zeff(te, ne, zeff, zi, gref, ze=1.0):
-    nuei = calc_nuei_from_te_ne_and_zeff(te, ne, zeff, zi, ze)
+def calc_nueinorm_from_ne_te_and_zeff(ne, te, zeff, zi, gref, ze=1.0, cle=False):
+    nuei = calc_nuei_from_ne_te_and_zeff(ne, te, zeff, zi, ze, cle=cle)
     nueinorm = calc_nunorm_from_nu(nuei, gref)
     return nueinorm
 
-def calc_nuiinorm_from_te_ne_and_ni(tia, nia, nib, mia, zia, zib, gref):
-    nuii = calc_nu_from_t_and_n(tia, nia, nib, mia, zia, zib)
+def calc_nuiinorm_from_ni_and_ti(nia, nib, tia, zia, zib, mia, gref):
+    nuii = calc_nu_from_n_and_t(nia, nib, tia, zia, zib, mia)
     nuiinorm = calc_nunorm_from_nu(nuii, gref)
     return nuiinorm
 
-def calc_te_from_betae_and_ldenorm(betae, ldenorm, sfac, mref, ze=1.0):
+def calc_te_from_betae_and_ldenorm(betae, ldenorm, sfac, aref, ze=1.0):
     c = constants_si()
-    bc = (ze ** 2) * c['u'] * mref / (2.0 * c['eps'] * c['e'] * c['mu'])
+    bc = (ze ** 2) * c['u'] * aref / (2.0 * c['eps'] * c['e'] * c['mu'])
     te = bc * betae * (ldenorm ** 2) * (sfac ** 2)
     return te
 
-def calc_ne_from_nueenorm(nueenorm, te, mref, lref, ze=1.0):
+def calc_ne_from_nueenorm(nueenorm, te, aref, lref, ze=1.0):
     c = constants_si()
     f_nu = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
-    inv_b90_ee = 4.0 * np.pi * (c['eps'] / c['e']) * te / (ze ** 2)
-    nc = f_nu * lref * (c['u'] * mref / c['me']) ** 0.5
-    nl = inv_b90_ee * (c['eps'] / c['e']) ** 0.5 * (te / (ze ** 2)) ** 0.5
-    data = {'logterm': np.log(nl), 'constant': nueenorm * (inv_b90_ee ** 2) / nc}
+    invb90 = calc_invb90_from_t_and_z(te, ze, zb=ze)
+    nc = f_nu * lref * (c['u'] * aref / c['me']) ** 0.5
+    nl = invb90 * (c['eps'] / c['e']) ** 0.5 * (te / (ze ** 2)) ** 0.5
+    log_arr = ensure_numpy(np.log(nl))
+    cst_arr = ensure_numpy(nueenorm * (invb90 ** 2) / nc)
+    data = {'logterm': log_arr.flatten(), 'constant': cst_arr.flatten()}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
     warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
@@ -1172,28 +1194,39 @@ def calc_ne_from_nueenorm(nueenorm, te, mref, lref, ze=1.0):
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
     warnings.resetwarnings()
-    ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
-    logger.debug(f'<{calc_ne_from_nueenorm.__name__}>: data')
-    logger.debug(pd.DataFrame(data={'nueenorm': nueenorm, 'te': te, 'ne': ne}))
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne = ensure_type_match(ne_sol.reshape(cst_arr.shape), nueenorm)
+    #logger.debug(f'<{calc_ne_from_nueenorm.__name__}>: data')
+    #logger.debug(pd.DataFrame(data={'nueenorm': nueenorm, 'te': te, 'ne': ne}))
     return ne
 
-def calc_bunit_from_ldenorm(ldenorm, ne, mref, ze=1.0):
+def calc_bunit_from_ldenorm(ldenorm, ne, aref, ze=1.0):
     c = constants_si()
-    bunit = (ne * (ze ** 2) * c['u'] * mref / c['eps']) ** 0.5 * ldenorm
+    bunit = (ne * (ze ** 2) * c['u'] * aref / c['eps']) ** 0.5 * ldenorm
     return bunit
 
-def calc_ne_from_nustar(nustar, zeff, q, r, ro, te):
+def calc_nustar_from_ne_and_te(zeff, q, rmin, rmaj, ne, te):
+    c = constants_si()
+    cl = calc_coulomb_logarithm_from_n_and_t(ne, te, 1.0)
+    nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
+    kk = (1.0e4 / 1.09) * q * rmaj * ((rmin / rmaj) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
+    nustar = cl * zeff * nt * kk
+    return nustar
+
+def calc_ne_from_nustar(nustar, zeff, q, rmin, rmaj, te):
     c = constants_si()
     eom = c['e'] / c['me']
-    tb = q * ro * ((r / ro) ** (-1.5)) / ((eom * te) ** 0.5)
+    tb = q * rmaj * ((rmin / rmaj) ** (-1.5)) / ((eom * te) ** 0.5)
     kk = (1.0e4 / 1.09) * zeff * ((te * 1.0e-3) ** (-1.5))
     nu = nustar / (tb * kk)
-    data = {'te': te * 1.0e-3, 'knu': nu}
+    te_arr = ensure_numpy(te)
+    nu_arr = ensure_numpy(nu)
+    data = {'te': te_arr.flatten() * 1.0e-3, 'knu': nu_arr.flatten()}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
     warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_ne20 = lambda row: root_scalar(
-        lambda ne: calc_coulomb_logarithm_from_ne_and_te(ne * 1.0e20, row['te'] * 1.0e3) * ne - row['knu'],
+        lambda ne: calc_coulomb_logarithm_from_n_and_t(ne * 1.0e20, row['te'] * 1.0e3, 1.0) * ne - row['knu'],
         x0=0.01,
         x1=1.0,
         maxiter=100,
@@ -1202,29 +1235,32 @@ def calc_ne_from_nustar(nustar, zeff, q, r, ro, te):
     retry = sol_ne20.apply(lambda sol: not sol.converged)
     if np.any(retry):
         func_ne20_v2 = lambda row: root_scalar(
-            lambda ne: calc_coulomb_logarithm_from_ne_and_te(ne * 1.0e20, row['te'] * 1.0e3) * ne - row['knu'],
+            lambda ne: calc_coulomb_logarithm_from_n_and_t(ne * 1.0e20, row['te'] * 1.0e3, 1.0) * ne - row['knu'],
             x0=1.0,
             x1=0.1,
             maxiter=100,
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
     warnings.resetwarnings()
-    ne = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
-    logger.debug(f'<{calc_ne_from_nustar.__name__}>: data')
-    logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne = ensure_type_match(ne_sol.reshape(te_arr.shape), nustar)
+    #logger.debug(f'<{calc_ne_from_nustar.__name__}>: data')
+    #logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
     return ne
 
-def calc_te_from_nustar(nustar, zeff, q, r, ro, ne, verbose=0):
+def calc_te_from_nustar(nustar, zeff, q, rmin, rmaj, ne):
     c = constants_si()
     moe = c['me'] / c['e']
-    kk = (10.0 ** 0.5) * (1.0e2 / 1.09) * zeff * q * ro * ((r / ro) ** (-1.5)) * (moe ** 0.5) * (ne * 1.0e-20)
+    kk = (10.0 ** 0.5) * (1.0e2 / 1.09) * zeff * q * rmaj * ((rmin / rmaj) ** (-1.5)) * (moe ** 0.5) * (ne * 1.0e-20)
     nu = nustar / kk
-    data = {'ne': ne * 1.0e-20, 'knu': nu}
+    ne_arr = ensure_numpy(ne)
+    nu_arr = ensure_numpy(nu)
+    data = {'ne': ne_arr.flatten() * 1.0e-20, 'knu': nu_arr.flatten()}
     rootdata = pd.DataFrame(data)
     logger.debug(rootdata)
     warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
     func_te3 = lambda row: root_scalar(
-        lambda te: calc_coulomb_logarithm_from_ne_and_te(row['ne'] * 1.0e20, te * 1.0e3) / (te ** 2) - row['knu'],
+        lambda te: calc_coulomb_logarithm_from_n_and_t(row['ne'] * 1.0e20, te * 1.0e3, 1.0) / (te ** 2) - row['knu'],
         x0=1.0,
         x1=0.1,
         maxiter=100,
@@ -1233,33 +1269,26 @@ def calc_te_from_nustar(nustar, zeff, q, r, ro, ne, verbose=0):
     retry = sol_te3.apply(lambda sol: not sol.converged)
     if np.any(retry):
         func_te3_v2 = lambda row: root_scalar(
-            lambda te: calc_coulomb_logarithm_from_ne_and_te(row['ne'] * 1.0e20, te * 1.0e3) / (te ** 2) - row['knu'],
+            lambda te: calc_coulomb_logarithm_from_n_and_t(row['ne'] * 1.0e20, te * 1.0e3, 1.0) / (te ** 2) - row['knu'],
             x0=0.01,
             x1=0.1,
             maxiter=100,
         )
         sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
     warnings.resetwarnings()
-    te = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
-    logger.debug(f'<{calc_te_from_nustar.__name__}>: data')
-    logger.debug(pd.DataFrame(data={'nustar': nustar, 'ne': ne, 'te': te}))
+    te_sol = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
+    te = ensure_type_match(te_sol.reshape(ne_arr.shape), nustar)
+    #logger.debug(f'<{calc_te_from_nustar.__name__}>: data')
+    #logger.debug(pd.DataFrame(data={'nustar': nustar, 'ne': ne, 'te': te}))
     return te
 
-def calc_zeff_from_nustar(nustar, q, r, ro, ne, te):
+def calc_zeff_from_nustar(nustar, q, rmin, rmaj, ne, te):
     c = constants_si()
-    cl = calc_coulomb_logarithm_from_ne_and_te(ne, te, ze=1.0)
+    cl = calc_coulomb_logarithm_from_n_and_t(ne, te, 1.0)
     nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
-    kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
+    kk = (1.0e4 / 1.09) * q * rmaj * ((rmin / rmaj) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
     zeff = nustar / (cl * nt * kk)
     return zeff
-
-def calc_nustar(zeff, q, r, ro, ne, te):
-    c = constants_si()
-    cl = calc_coulomb_logarithm_from_ne_and_te(ne, te, ze=1.0)
-    nt = (ne * 1.0e-20) / ((te * 1.0e-3) ** 2)
-    kk = (1.0e4 / 1.09) * q * ro * ((r / ro) ** (-1.5)) * ((1.0e-3 * c['me'] / c['e']) ** 0.5)
-    nustar = cl * zeff * nt * kk
-    return nustar
 
 def calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa, cos, sin, s_cos, s_sin):
     n_theta = 1001
