@@ -2784,6 +2784,10 @@ class torax_io(io):
                         'profile_conditions.psi',
                     ]
                     dsmap['core_profiles'] = dsmap['core_profiles'].drop_vars(drop, errors='ignore')
+                full_attrs = {}
+                for key in dsmap:
+                    full_attrs.update(dsmap[key].attrs)
                 newobj.input = xr.merge([v for k, v in dsmap.items()], join='outer')
+                newobj.update_input_attrs(full_attrs)
 
         return newobj
