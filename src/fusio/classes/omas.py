@@ -124,9 +124,13 @@ class omas_io(io):
             elif segments[0] == 'equilibrium' and 'profiles_1d' in segments:
                 newdims.append('equilibrium.time_slice.profiles_1d.psi:i')
             elif segments[0] == 'equilibrium' and 'profiles_2d' in segments and 'grid' not in segments:
-                newdims.extend(['equilibrium.time_slice.profiles_2d.grid.dim2:i', 'equilibrium.time_slice.profiles_2d.grid.dim1:i'])
+                newdims.extend(['equilibrium.time_slice.profiles_2d.grid.dim1:i', 'equilibrium.time_slice.profiles_2d.grid.dim2:i'])
             elif segments[0] == 'equilibrium' and 'boundary' in segments and 'outline' in segments:
                 newdims.append('equilibrium.time_slice.boundary.outline.r:i')
+            elif segments[0] == 'pf_active' and ('data' in segments or 'data_error_upper' in segments or 'data_error_lower' in segments or 'time' in segments):
+                newdims.append('pf_active.time')
+            elif segments[0] == 'pf_passive' and ('current' in segments or 'time' in segments):
+                newdims.append('pf_passive.time')
             elif segments[0] == 'pulse_schedule' and 'reference' in segments:
                 dims = list(segments[:-1])
                 dims.append('time')
