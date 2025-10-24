@@ -516,6 +516,7 @@ class omas_io(io):
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
         assert isinstance(path, Path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         data = self.input if side == 'input' else self.output
         time_eq = 'equilibrium.time'
         if time_eq in data:
@@ -524,7 +525,7 @@ class omas_io(io):
                 if stem.endswith('_input'):
                     stem = stem[:-6]
                 time_tag = int(np.rint(time * 1000))
-                eqpath = path.parent / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
+                eqpath = path.parent.resolve() / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
                 self.generate_eqdsk_file(eqpath, time_index=ii, side=side, cocos=cocos, transpose=transpose)
 
 
