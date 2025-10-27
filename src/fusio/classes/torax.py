@@ -609,6 +609,46 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def enforce_monotonic_gradient_kinetic_profiles(
+        self,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvars: MutableMapping[str, Any] = {}
+        if 'profile_conditions.T_e' in data:
+            val = data['profile_conditions.T_e'].to_numpy()
+            for tidx, tval in enumerate(time):
+                mask = (val[tidx] < val[tidx, -1])
+                if np.any(mask):
+                    tlidx = np.where(mask)[0][0] - 1
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * te[tidx, -1]
+                    rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
+                    val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
+            newvars['profile_conditions.T_e'] = (['time', 'rho'], copy.deepcopy(val))
+        if 'profile_conditions.T_i' in data:
+            val = data['profile_conditions.T_i'].to_numpy()
+            for tidx, tval in enumerate(time):
+                mask = (val[tidx] < val[tidx, -1])
+                if np.any(mask):
+                    tlidx = np.where(mask)[0][0] - 1
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * te[tidx, -1]
+                    rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
+                    val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
+            newvars['profile_conditions.T_i'] = (['time', 'rho'], copy.deepcopy(val))
+        if 'profile_conditions.n_e' in data:
+            val = data['profile_conditions.n_e'].to_numpy()
+            for tidx, tval in enumerate(time):
+                mask = (val[tidx] < val[tidx, -1])
+                if np.any(mask):
+                    tlidx = np.where(mask)[0][0] - 1
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * te[tidx, -1]
+                    rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
+                    val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
+            newvars['profile_conditions.n_e'] = (['time', 'rho'], copy.deepcopy(val))
+        self.update_input_data_vars(newvars)
+
+
     def set_constant_flat_main_ion_composition(
         self,
         ions: MutableMapping[str, float],
@@ -650,6 +690,26 @@ class torax_io(io):
                 newvars: MutableMapping[str, Any] = {}
                 newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], (val / val.sum('main_ion')).to_numpy())
                 self.update_input_data_vars(newvars)
+
+
+    def add_impurity_species_by_electron_density_ratio(
+        self,
+        sname: str,
+        sfrac: float,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if sname in self.allowed_radiation_species and sname not in ['H', 'D', 'T'] and sname not in data.get('impurity', xr.DataArray()) and 'profile_conditions.n_e' in data:
+            if data.attrs.get('plasma_composition.impurity.impurity_mode', 'n_e_ratios') == 'fractions':
+                raise NotImplementedError('Setting impurity species not implemented with impurity fractions mode yet')
+            coords: MutableMapping[str, Any] = {'impurity': np.array([sname]), 'time': time, 'rho': rho}
+            data_vars: MutableMapping[str, Any] = {}
+            if 'plasma_composition.impurity.species' in data:
+                ne = np.ones_like(data['profile_conditions.n_e'].to_numpy())
+                data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.expand_dims(sfrac * ne, axis=0))
+            newdata = xr.Dataset(coords=coords, data_vars=data_vars)
+            self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer')
 
 
     def set_constant_flat_effective_charge(
@@ -890,6 +950,7 @@ class torax_io(io):
         geotype: str,
         geofiles: str | Mapping[str, str],
         geodir: str | None = None,
+        **kwargs: MutableMapping[str, Any],
     ) -> None:
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
@@ -906,15 +967,15 @@ class torax_io(io):
                 geotime: MutableMapping[str, Any] = {}
                 geotime['geometry_file'] = f'{geofile}'
                 if geotype == 'eqdsk':
-                    geotime['n_surfaces'] = 251
-                    geotime['last_surface_factor'] = 0.9999
+                    geotime['n_surfaces'] = kwargs.get('n_surfaces', 251)
+                    geotime['last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
                 geoconfig[time] = geotime
             newattrs['geometry.geometry_configs'] = geoconfig
         else:
             newattrs['geometry.geometry_file'] = f'{geofiles}'
             if geotype == 'eqdsk':
-                newattrs['geometry.n_surfaces'] = 251
-                newattrs['geometry.last_surface_factor'] = 0.9999
+                newattrs['geometry.n_surfaces'] = kwargs.get('n_surfaces', 251)
+                newattrs['geometry.last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
         self.update_input_attrs(newattrs)
 
 
@@ -1897,14 +1958,21 @@ class torax_io(io):
         mu: float,
         sigma: float,
         total: float,
+        tvec: NDArray | None = None,
     ) -> None:
         self.reset_generic_particle_source()
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        tvar = 'time'
+        if isinstance(tvec, np.ndarray):
+            time = copy.deepcopy(tvec).flatten()
+            tvar = 'time_generic_particle'
+            newcoords = {tvar: time}
+            self.update_input_coords(newcoords)
         newvars: MutableMapping[str, Any] = {}
-        newvars['sources.generic_particle.deposition_location'] = (['time'], np.zeros_like(time) + mu)
-        newvars['sources.generic_particle.particle_width'] = (['time'], np.zeros_like(time) + sigma)
-        newvars['sources.generic_particle.S_total'] = (['time'], np.zeros_like(time) + total)
+        newvars['sources.generic_particle.deposition_location'] = ([tvar], np.zeros_like(time) + mu)
+        newvars['sources.generic_particle.particle_width'] = ([tvar], np.zeros_like(time) + sigma)
+        newvars['sources.generic_particle.S_total'] = ([tvar], np.zeros_like(time) + total)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_particle.mode'] = 'MODEL_BASED'
@@ -2102,12 +2170,13 @@ class torax_io(io):
         self,
         restart_path: str | Path,
         restart_time: float,
+        stitch: bool = False,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
         newattrs['restart.filename'] = f'{restart_path}'
         newattrs['restart.time'] = float(restart_time)
         newattrs['restart.do_restart'] = True
-        newattrs['restart.stitch'] = False
+        newattrs['restart.stitch'] = stitch
         self.update_input_attrs(newattrs)
 
 
@@ -2180,31 +2249,31 @@ class torax_io(io):
                         rtag = str(dim)
                         break
             if ttag is not None and ttag in dims:
-                time = ds[ttag].to_numpy().flatten()
+                #time = ds[ttag].to_numpy().flatten()
                 if 'main_ion' in dims:
                     for species in ds['main_ion'].to_numpy().flatten():
                         da = ds[key].sel(main_ion=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0)
                         if da.size > 0:
-                            datadict[f'{key}.{species}'] = da
+                            datadict[f'{key}.{species}'] = da.rename({ttag: 'time'})
                 elif 'impurity' in dims:
                     for species in ds['impurity'].to_numpy().flatten():
                         da = ds[key].sel(impurity=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
-                            datadict[f'{key}.{species}'] = da
+                            datadict[f'{key}.{species}'] = da.rename({ttag: 'time'})
                         else:
                             datadict[f'{key}.{species}'] = None
                 elif rtag is not None and rtag in dims:
                     da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
                     if da.size > 0:
-                        datadict[f'{key}'] = da
+                        datadict[f'{key}'] = da.rename({ttag: 'time'})
                 else:
                     da = ds[key].dropna(ttag)
                     if da.size > 0:
-                        datadict[f'{key}'] = da
+                        datadict[f'{key}'] = da.rename({ttag: 'time'})
         core_models = datadict.pop('map_combined_core_models', {})
         pedestal_models = datadict.pop('map_combined_pedestal_models', {})
         if datadict.get('transport.model_name', '') == 'combined':
