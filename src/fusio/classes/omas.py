@@ -349,7 +349,7 @@ class omas_io(io):
     def output_cocos(
         self,
     ) -> int:
-        cocos = self.input.attrs.get('cocos', None)
+        cocos = self.output.attrs.get('cocos', None)
         if cocos is None:
             version = self.output.attrs.get('data_dictionary_version', '4.0.0')
             cocos = self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
