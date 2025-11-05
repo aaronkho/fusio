@@ -1285,7 +1285,7 @@ class gacode_io(io):
             header = lines[:istartProfs]
             while len(header) > 0 and not header[-1].strip():
                 header = header[:-1]
-            attrs['header'] = ''.join(header).strip()
+            attrs['header'] = [''.join(header).strip()]
 
             singleLine = False
             title = ''
@@ -1357,7 +1357,7 @@ class gacode_io(io):
                 if key in ['name', 'z', 'mass', 'type']:
                     data_vars[key] = ([ncoord, scoord], np.expand_dims(val, axis=0))
                 #elif key in ['header']:
-                #    attrs[key] = val
+                #    attrs[key] = [val]
                 else:
                     data_vars[key] = ([ncoord], val)
 
@@ -1376,7 +1376,10 @@ class gacode_io(io):
             wdata = data.sel(n=item, drop=True)
             opath = Path(path)
             processed_titles = []
-            header = wdata.attrs.get('header', '').split('\n')
+            header_block = wdata.attrs.get('header', [])
+            header = ''
+            if len(header_block) > item:
+                header = header_block[item].split('\n')
             lines = [f'{line:<70}\n' for line in header]
             lines += ['#\n']
             processed_titles.append('header')
@@ -1445,6 +1448,79 @@ class gacode_io(io):
         output: str | Path | None = None,
     ) -> Self:
         return cls(path=path, input=input, output=output)  # Places data into output side unless specified
+
+
+    @classmethod
+    def from_files(
+        cls,
+        paths: Sequence[str | Path] | None = None,
+        inputs: Sequence[str | Path] | None = None,
+        outputs: Sequence[str | Path] | None = None,
+        times: Sequence[float | int] | NDArray | None = None,
+    ) -> Self:
+        out = cls()
+        temp_paths = [p if p is not None else None for p in paths] if paths is not None else []
+        temp_inputs = [p if p is not None else None for p in inputs] if inputs is not None else []
+        temp_outputs = [p if p is not None else None for p in outputs] if outputs is not None else []
+        max_length = max(len(temp_paths), len(temp_inputs), len(temp_outputs))
+        while len(temp_paths) < max_length:
+            temp_paths.append(None)
+        while len(temp_inputs) < max_length:
+            temp_inputs.append(None)
+        while len(temp_outputs) < max_length:
+            temp_outputs.append(None)
+        temp_times = None
+        if isinstance(times, (list, tuple, np.ndarray)):
+            temp_times = [float(t) for t in times]
+            while len(temp_times) < max_length:
+                temp_times.append(float(times[-1]))
+        input_vector = []
+        output_vector = []
+        for path, input, output in zip(temp_paths, temp_inputs, temp_outputs):
+            obj = cls(path=path, input=input, output=output)
+            input_vector.append(obj.input if obj.has_input else xr.Dataset(coords={'n': [0]}))
+            output_vector.append(obj.output if obj.has_output else xr.Dataset(coords={'n': [0]}))
+        ds_input = xr.concat(input_vector, dim='n', combine_attrs='drop').assign({'n': np.arange(len(input_vector)).astype(int)})
+        attrs_input_vector = [i.attrs for i in input_vector]
+        attrs_keys_input = []
+        for attrs in attrs_input_vector:
+            for key in attrs:
+                if key not in attrs_keys_input:
+                    attrs_keys_input.append(key)
+        attrs_input = {}
+        for key in attrs_keys_input:
+            attrs_input[key] = [None] * len(attrs_input_vector)
+            for j, attrs in enumerate(attrs_input_vector):
+                val = attrs.get(key, None)
+                if isinstance(val, list):
+                    attrs_input[key][j] = val[0]
+        if attrs_input:
+            ds_input.attrs = attrs_input
+        ds_output = xr.concat(output_vector, dim='n', combine_attrs='drop').assign({'n': np.arange(len(output_vector)).astype(int)})
+        attrs_output_vector = [o.attrs for o in output_vector]
+        attrs_keys_output = []
+        for attrs in attrs_output_vector:
+            for key in attrs:
+                if key not in attrs_keys_output:
+                    attrs_keys_output.append(key)
+        attrs_output = {}
+        for key in attrs_keys_output:
+            attrs_output[key] = [None] * len(attrs_output_vector)
+            for j, attrs in enumerate(attrs_output_vector):
+                val = attrs.get(key, None)
+                if isinstance(val, list):
+                    attrs_output[key][j] = val[0]
+        if attrs_output:
+            ds_output.attrs = attrs_output
+        if ds_input.data_vars:
+            if temp_times is not None:
+                ds_input = ds_input.assign({'time': (['n'], temp_times)})
+            out.input = ds_input
+        if ds_output.data_vars:
+            if temp_times is not None:
+                ds_output = ds_output.assign({'time': (['n'], temp_times)})
+            out.output = ds_output
+        return out
 
 
     # Assumed that the self creation method transfers output to input
@@ -1583,7 +1659,7 @@ class gacode_io(io):
                     data_vars['vpol'] = (['n', 'rho', 'name'], data['velocity_i'].sel(direction='poloidal', drop=True).to_numpy())
                 if 'rotation_frequency_sonic' in data:
                     data_vars['omega0'] = (['n', 'rho'], data['rotation_frequency_sonic'].sel(direction='toroidal', drop=True).to_numpy())
-                attrs['header'] = newobj.make_file_header()
+                attrs['header'] = [newobj.make_file_header()] * len(coords['n'])
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
 
@@ -1819,7 +1895,7 @@ class gacode_io(io):
                 #'vpol'
                 #'omega0'
                 #'qmom'
-                attrs['header'] = newobj.make_file_header()
+                attrs['header'] = [newobj.make_file_header()]
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
 
@@ -2145,7 +2221,7 @@ class gacode_io(io):
                     dsvec.append(xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs))
 
             if len(dsvec) > 0:
-                newobj.input = xr.concat(dsvec, dim='n').assign_attrs({'header': newobj.make_file_header()})
+                newobj.input = xr.concat(dsvec, dim='n').assign_attrs({'header': [newobj.make_file_header()] * len(dsvec)})
 
         return newobj
 
@@ -2175,6 +2251,6 @@ class gacode_io(io):
                     data_vars['te'] = (['n', 'rho'], np.expand_dims(data['te'].to_numpy().flatten(), axis=0))
                 if 'ti' in data:
                     data_vars['ti'] = (['n', 'rho'], np.expand_dims(data['ti'].to_numpy().flatten(), axis=0))
-            attrs['header'] = newobj.make_file_header()
+                attrs['header'] = [newobj.make_file_header()] * len(coords['n'])
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
