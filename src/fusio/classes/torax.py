@@ -625,7 +625,7 @@ class torax_io(io):
                 mask = (val[tidx] < val[tidx, -1])
                 if np.any(mask):
                     tlidx = np.where(mask)[0][0] - 1
-                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * te[tidx, -1]
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * val[tidx, -1]
                     rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
                     val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
             newvars['profile_conditions.T_e'] = (['time', 'rho'], copy.deepcopy(val))
@@ -635,7 +635,7 @@ class torax_io(io):
                 mask = (val[tidx] < val[tidx, -1])
                 if np.any(mask):
                     tlidx = np.where(mask)[0][0] - 1
-                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * te[tidx, -1]
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * val[tidx, -1]
                     rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
                     val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
             newvars['profile_conditions.T_i'] = (['time', 'rho'], copy.deepcopy(val))
@@ -645,7 +645,7 @@ class torax_io(io):
                 mask = (val[tidx] < val[tidx, -1])
                 if np.any(mask):
                     tlidx = np.where(mask)[0][0] - 1
-                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * te[tidx, -1]
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * val[tidx, -1]
                     rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
                     val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
             newvars['profile_conditions.n_e'] = (['time', 'rho'], copy.deepcopy(val))
