@@ -1289,7 +1289,7 @@ class torax_io(io):
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
                 #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
-                newattrs[f'{prefix}.rho_max'] = float(data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('qualikiz')
@@ -1422,7 +1422,7 @@ class torax_io(io):
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
                 #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
-                newattrs[f'{prefix}.rho_max'] = float(data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('tglf')
