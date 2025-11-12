@@ -1459,9 +1459,9 @@ class gacode_io(io):
         times: Sequence[float | int] | NDArray | None = None,
     ) -> Self:
         out = cls()
-        temp_paths = [p if p is not None else None for p in paths] if paths is not None else []
-        temp_inputs = [p if p is not None else None for p in inputs] if inputs is not None else []
-        temp_outputs = [p if p is not None else None for p in outputs] if outputs is not None else []
+        temp_paths: list[str | Path | None] = [p if p is not None else None for p in paths] if paths is not None else []
+        temp_inputs: list[str | Path | None] = [p if p is not None else None for p in inputs] if inputs is not None else []
+        temp_outputs: list[str | Path | None] = [p if p is not None else None for p in outputs] if outputs is not None else []
         max_length = max(len(temp_paths), len(temp_inputs), len(temp_outputs))
         while len(temp_paths) < max_length:
             temp_paths.append(None)
@@ -1469,7 +1469,7 @@ class gacode_io(io):
             temp_inputs.append(None)
         while len(temp_outputs) < max_length:
             temp_outputs.append(None)
-        temp_times = None
+        temp_times: list[float] | None = None
         if isinstance(times, (list, tuple, np.ndarray)):
             temp_times = [float(t) for t in times]
             while len(temp_times) < max_length:
@@ -1573,6 +1573,14 @@ class gacode_io(io):
             data_vars = {}
             attrs = {}
             if 'time' in data and 'radius' in data:
+                time = data['time'].to_numpy()
+                time_window = [float(time[-1])]
+                if window is not None and len(window) >= 2:
+                    window_mask = (time >= window[0]) & (time <= window[-1])
+                    if np.any(window_mask):
+                        time_window = [float(t) for t in time[window_mask]]
+                data = data.sel(time=time_window, method='nearest').remove_duplicates('time')  # Fine because data is a copy
+                zeros = np.repeat(np.expand_dims(np.zeros_like(data.coords['rho_norm'].to_numpy().flatten()), axis=0), len(data['time']), axis=0)
                 coords['n'] = np.arange(len(data['time'])).astype(int)
                 data_vars['time'] = (['n'], data['time'].to_numpy())
                 coords['rho'] = data['radius'].to_numpy()
@@ -1676,20 +1684,25 @@ class gacode_io(io):
         if isinstance(obj, io):
             data = obj.input if side == 'input' else obj.output
             if 'rho_norm' in data.coords:
-                data = data.isel(time=-1)
-                zeros = np.zeros_like(data.coords['rho_norm'].to_numpy().flatten())
+                time = data['time'].to_numpy()
+                time_window = [float(time[-1])]
+                if window is not None and len(window) >= 2:
+                    window_mask = (time >= window[0]) & (time <= window[-1])
+                    if np.any(window_mask):
+                        time_window = [float(t) for t in time[window_mask]]
+                data = data.sel(time=time_window, method='nearest').remove_duplicates('time')  # Fine because data is a copy
+                zeros = np.repeat(np.expand_dims(np.zeros_like(data.coords['rho_norm'].to_numpy().flatten()), axis=0), len(data['time']), axis=0)
                 coords = {}
                 data_vars = {}
                 attrs: MutableMapping[str, Any] = {}
-                name: list[str] = []
-                coords['n'] = np.array([0], dtype=int)
+                coords['n'] = np.arange(len(data['time'])).astype(int)
                 if 'rho_norm' in data.coords:
                     coords['rho'] = data.coords['rho_norm'].to_numpy().flatten()
-                    data_vars['nexp'] = (['n'], np.array([len(coords['rho'])], dtype=int))
+                    data_vars['nexp'] = (['n'], np.array([len(coords['rho'])]).astype(int))
                 if 'psi' in data:
-                    data_vars['polflux'] = (['n', 'rho'], np.expand_dims(data['psi'].to_numpy().flatten(), axis=0))
+                    data_vars['polflux'] = (['n', 'rho'], data['psi'].to_numpy())
                 if 'r_mid' in data:
-                    data_vars['rmin'] = (['n', 'rho'], np.expand_dims(data['r_mid'].to_numpy().flatten(), axis=0))
+                    data_vars['rmin'] = (['n', 'rho'], data['r_mid'].to_numpy())
                 data_vars['shot'] = (['n'], np.atleast_1d([0]))
                 data_vars['masse'] = (['n'], np.atleast_1d([5.4488748e-04]))
                 data_vars['ze'] = (['n'], np.atleast_1d([-1.0]))
@@ -1704,190 +1717,190 @@ class gacode_io(io):
                 if 'Ip' in data:
                     data_vars['current'] = (['n'], 1.0e-6 * data['Ip'].to_numpy().flatten())
                 if 'q' in data and 'rho_norm' in data and 'rho_face_norm' in data:
-                    q = np.interp(data['rho_norm'].to_numpy().flatten(), data['rho_face_norm'].to_numpy().flatten(), data['q'].to_numpy().flatten())
-                    data_vars['q'] = (['n', 'rho'], np.expand_dims(q, axis=0))
+                    q = data['q'].interp({'rho_face_norm': data['rho_norm'].to_numpy().flatten()}, kwargs={'fill_value': 'extrapolate'})
+                    #q = np.interp(data['rho_norm'].to_numpy().flatten(), data['rho_face_norm'].to_numpy().flatten(), data['q'].to_numpy().flatten())
+                    data_vars['q'] = (['n', 'rho'], q.to_numpy())
                 if 'R_in' in data and 'R_out' in data:
-                    rmaj = (data['R_in'] + data['R_out']).to_numpy().flatten() / 2.0
-                    data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(rmaj, axis=0))
-                    data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.zeros_like(zeros), axis=0))
+                    rmaj = (data['R_in'] + data['R_out']) / 2.0
+                    data_vars['rmaj'] = (['n', 'rho'], rmaj.to_numpy())
+                if 'z_magnetic_axis' in data:
+                    data_vars['zmag'] = (['n', 'rho'], np.repeat(np.expand_dims(data['z_magnetic_axis'].to_numpy(), axis=1), len(coords['rho']), axis=1))
                 if 'elongation' in data:
-                    data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data['elongation'].to_numpy().flatten(), axis=0))
+                    data_vars['kappa'] = (['n', 'rho'], data['elongation'].to_numpy())
                 if 'delta' in data:
-                    delta = data['delta'].to_numpy().flatten()
-                    delta = np.concatenate([np.array([delta[0]]), delta[:-1] + 0.5 * np.diff(delta), np.array([delta[-1]])], axis=0)
-                    data_vars['delta'] = (['n', 'rho'], np.expand_dims(delta, axis=0))
-                data['zeta'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_cos0'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_cos1'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_cos2'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_cos3'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_cos4'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_cos5'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_cos6'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_sin3'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_sin4'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_sin5'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
-                data['shape_sin6'] = (['n', 'rho'], np.expand_dims(zeros, axis=0))
+                    delta = data['delta'].interp({'rho_face_norm': data['rho_norm'].to_numpy().flatten()}, kwargs={'fill_value': 'extrapolate'})
+                    data_vars['delta'] = (['n', 'rho'], delta.to_numpy())
+                data['zeta'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_cos0'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_cos1'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_cos2'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_cos3'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_cos4'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_cos5'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_cos6'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_sin3'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_sin4'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_sin5'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data['shape_sin6'] = (['n', 'rho'], copy.deepcopy(zeros))
                 if 'n_i' in data and 'n_e' in data:
                     names = []
                     masses = []
                     charges = []
-                    ne = np.expand_dims(1.0e-19 * data['n_e'].to_numpy().flatten(), axis=-1)
-                    ni = np.expand_dims(1.0e-19 * data['n_i'].to_numpy().flatten(), axis=-1)
+                    ne = 1.0e-19 * data['n_e'].to_numpy()
+                    ni = 1.0e-19 * np.expand_dims(data['n_i'].to_numpy(), axis=-1)  # Assume single main ion species by default
                     if 'config' in data.attrs:
                         iondict = data.attrs['config'].get('plasma_composition', {}).get('main_ion', {})
                         main_splits = []
                         for key in iondict:
                             names.append(f'{key}')
                             main_splits.append(iondict[key].get('value', ['float', [0.0]])[1][-1])
-                            iname, ia, iz = define_ion_species(short_name=f'{key}')
-                            masses.append(ia)
-                            charges.append(iz)
+                            _, ia, iz = define_ion_species(short_name=f'{key}')
+                            masses.append(np.expand_dims(zeros + ia, axis=-1))
+                            charges.append(np.expand_dims(zeros + iz, axis=-1))
                         if len(main_splits) > 0:
                             ni = np.concatenate([val * ni for val in main_splits], axis=-1)
-                    zeff = np.expand_dims(np.sum(ni, axis=-1), axis=-1) / ne
+                    zeff = np.sum(ni, axis=-1) / ne
                     simps = []
                     aimps = []
                     zimps = []
                     nimps = []
                     if 'impurity_symbol' in data and 'Z_impurity_species' in data and 'n_impurity_species' in data:
                         for key in data['impurity_symbol'].to_numpy().flatten().tolist():
-                            impname, impa, impz = define_ion_species(short_name=f'{key}')
+                            _, impa, impz = define_ion_species(short_name=f'{key}')
                             simps.append(f'{key}')
-                            aimps.append(impa)
-                            zimps.append(np.expand_dims(data['Z_impurity_species'].sel(impurity_symbol=f'{key}').interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy().flatten(), axis=-1))
-                            nimps.append(np.expand_dims(data['n_impurity_species'].sel(impurity_symbol=f'{key}').interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy().flatten(), axis=-1))
+                            aimps.append(np.expand_dims(zeros + impa, axis=-1))
+                            zimps.append(np.expand_dims(data['Z_impurity_species'].sel(impurity_symbol=f'{key}', drop=True).interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy(), axis=-1))
+                            nimps.append(np.expand_dims(data['n_impurity_species'].sel(impurity_symbol=f'{key}', drop=True).interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy(), axis=-1))
                     elif 'config' in data.attrs and 'n_impurity' in data:
-                        nimps.append(np.expand_dims(1.0e-19 * data['n_impurity'].to_numpy().flatten(), axis=-1))
+                        nimp = 1.0e-19 * np.expand_dims(data['n_impurity'].to_numpy(), axis=-1)
                         impdict = data.attrs['config'].get('plasma_composition', {}).get('impurity', {})
                         imp_splits = []
                         for key in impdict:
                             simps.append(f'{key}')
                             imp_splits.append(impdict[key].get('value', ['float', [0.0]])[1][-1])
-                            impname, impa, impz = define_ion_species(short_name=f'{key}')
-                            aimps.append(impa)
-                            zimps.append(np.zeros_like(ne) + impz)
+                            _, impa, impz = define_ion_species(short_name=f'{key}')
+                            aimps.append(np.expand_dims(zeros + impa, axis=-1))
+                            zimps.append(np.expand_dims(zeros + impz, axis=-1))
                         if len(imp_splits) > 0:
-                            nimps = [val * nimps[0] for val in imp_splits]
+                            nimps = [val * nimp for val in imp_splits]
                     if len(nimps) > 0:
                         nimp = np.concatenate(nimps, axis=-1)
                         nimp[0, :] = nimp[1, :]
                         ni = np.concatenate([ni, nimp], axis=-1)
-                    types = ['[therm]' for i in names]
+                    types = [np.expand_dims(['[therm]' for i in range(len(data['time']))], axis=-1) for i in names]
                     ii = len(names)
                     for zz in range(len(simps)):
-                        zimps[zz][0] = zimps[zz][1]
+                        zimps[zz][:, 0] = zimps[zz][:, 1]
                         names.append(simps[zz])
-                        types.append('[therm]')
-                        masses.append(aimps[zz])
-                        charges.append(float(np.mean(zimps[zz])))
-                        zeff += np.expand_dims(ni[:, zz+ii], axis=-1) * (zimps[zz] ** 2.0) / ne
+                        types.append(np.expand_dims(['[therm]' for i in range(len(data['time']))], axis=-1))
+                        masses.append(np.mean(aimps[zz], axis=1))
+                        charges.append(np.mean(zimps[zz], axis=1))
+                        zeff += ni[..., zz+ii] * (zimps[zz] ** 2.0) / ne
                     coords['name'] = np.array(names)
-                    data_vars['ni'] = (['n', 'rho', 'name'], np.expand_dims(ni, axis=0))
-                    data_vars['nion'] = (['n'], np.array([len(names)], dtype=int))
-                    data_vars['type'] = (['n', 'name'], np.expand_dims(types, axis=0))
-                    data_vars['mass'] = (['n', 'name'], np.expand_dims(masses, axis=0))
-                    data_vars['z'] = (['n', 'name'], np.expand_dims(charges, axis=0))
-                    data_vars['z_eff'] = (['n', 'rho'], np.expand_dims(zeff.flatten(), axis=0))
+                    data_vars['ni'] = (['n', 'rho', 'name'], ni)
+                    data_vars['nion'] = (['n'], np.array([len(names) for i in range(len(data['time']))]).astype(int))
+                    data_vars['type'] = (['n', 'name'], np.concatenate(types, axis=-1))
+                    data_vars['mass'] = (['n', 'name'], np.concatenate(masses, axis=-1))
+                    data_vars['z'] = (['n', 'name'], np.concatenate(charges, axis=-1))
+                    data_vars['z_eff'] = (['n', 'rho'], zeff)
                 if 'T_i' in data:
-                    ti = np.expand_dims(data['T_i'].to_numpy().flatten(), axis=-1)
+                    ti = np.expand_dims(data['T_i'].to_numpy(), axis=-1)  # Already in keV
                     if 'name' in coords and len(coords['name']) > 1:
                         ti = np.repeat(ti, len(coords['name']), axis=-1)
-                    data_vars['ti'] = (['n', 'rho', 'name'], np.expand_dims(ti, axis=0))
+                    data_vars['ti'] = (['n', 'rho', 'name'], ti)
                 if 'n_e' in data:
-                    data_vars['ne'] = (['n', 'rho'], np.expand_dims(1.0e-19 * data['n_e'].to_numpy().flatten(), axis=0))
+                    data_vars['ne'] = (['n', 'rho'], 1.0e-19 * data['n_e'].to_numpy())
                 if 'T_e' in data:
-                    data_vars['te'] = (['n', 'rho'], np.expand_dims(data['T_e'].to_numpy().flatten(), axis=0))
+                    data_vars['te'] = (['n', 'rho'], data['T_e'].to_numpy())  # Already in keV
                 if 'p_ohmic_e' in data:
-                    dvec = data['p_ohmic_e'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qohme'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
-                if 'p_generic_heat_e' in data:
-                    dvec = data['p_generic_heat_e'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qrfe'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
-                    #data_vars['qbeame'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
-                if 'p_generic_heat_i' in data:
-                    dvec = data['p_generic_heat_i'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qrfi'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
-                    #data_vars['qbeami'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['p_ohmic_e'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qohme'] = (['n', 'rho'], dvec)
+                if 'p_generic_heat_e' in data:  # Place into RF heating by default
+                    dvec = 1.0e-6 * data['p_generic_heat_e'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qrfe'] = (['n', 'rho'], dvec)
+                    #data_vars['qbeame'] = (['n', 'rho'], dvec)
+                if 'p_generic_heat_i' in data:  # Place into RF heating by default
+                    dvec = 1.0e-6 * data['p_generic_heat_i'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qrfi'] = (['n', 'rho'], dvec)
+                    #data_vars['qbeami'] = (['n', 'rho'], dvec)
                 if 'p_icrh_e' in data:
-                    dvec = data['p_icrh_e'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qrfe'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['p_icrh_e'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qrfe'] = (['n', 'rho'], dvec)
                 if 'p_icrh_i' in data:
-                    dvec = data['p_icrh_i'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qrfi'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['p_icrh_i'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qrfi'] = (['n', 'rho'], dvec)
                 if 'p_ecrh_e' in data:
-                    dvec = data['p_ecrh_e'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qrfe'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['p_ecrh_e'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qrfe'] = (['n', 'rho'], dvec)
                 if 'p_ecrh_i' in data:
-                    dvec = data['p_ecrh_i'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qrfi'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['p_ecrh_i'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qrfi'] = (['n', 'rho'], dvec)
                 if 'p_cyclotron_radiation_e' in data:
-                    dvec = data['p_cyclotron_radiation_e'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qsync'] = (['n', 'rho'], np.expand_dims(-1.0e-6 * dvec, axis=0))
+                    dvec = -1.0e-6 * data['p_cyclotron_radiation_e'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qsync'] = (['n', 'rho'], dvec)
                 if 'p_bremsstrahlung_e' in data:
-                    dvec = data['p_bremsstrahlung_e'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(-1.0e-6 * dvec, axis=0))
+                    dvec = -1.0e-6 * data['p_bremsstrahlung_e'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qbrem'] = (['n', 'rho'], dvec)
                 if 'p_impurity_radiation_e' in data:
-                    dvec = data['p_impurity_radiation_e'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qline'] = (['n', 'rho'], np.expand_dims(-1.0e-6 * dvec, axis=0))
+                    dvec = -1.0e-6 * data['p_impurity_radiation_e'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qline'] = (['n', 'rho'], dvec)
                 if 'p_alpha_e' in data:
-                    dvec = data['p_alpha_e'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qfuse'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['p_alpha_e'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qfuse'] = (['n', 'rho'], dvec)
                 if 'p_alpha_i' in data:
-                    dvec = data['p_alpha_i'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qfusi'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['p_alpha_i'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qfusi'] = (['n', 'rho'], dvec)
                 if 'ei_exchange' in data:
-                    dvec = data['ei_exchange'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qei'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['ei_exchange'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qei'] = (['n', 'rho'], dvec)
                 if 'j_ohmic' in data:
-                    dvec = data['j_ohmic'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['johm'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['j_ohmic'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['johm'] = (['n', 'rho'], dvec)
                 if 'j_bootstrap' in data:
-                    #dvec = np.concatenate([np.array([np.nan]), data['j_bootstrap'].to_numpy().flatten(), np.array([np.nan])], axis=0)
-                    data_vars['jbs'] = (['n', 'rho'], np.expand_dims(1.0e-6 * data['j_bootstrap'].to_numpy().flatten(), axis=0))
-                    #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    data_vars['jbs'] = (['n', 'rho'], 1.0e-6 * data['j_bootstrap'].to_numpy())
+                    #data_vars['jbstor'] = (['n', 'rho'], 1.0e-6 * data['j_bootstrap'].to_numpy())
                 if 'j_ecrh' in data:
-                    dvec = data['j_ecrh'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
-                if 'j_external' in data:
-                    dvec = data['j_external'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
-                    #data_vars['jnb'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
-                if 'j_generic_current' in data:
-                    dvec = data['j_generic_current'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['jrf'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
-                #    data_vars['jnb'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                    dvec = 1.0e-6 * data['j_ecrh'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['jrf'] = (['n', 'rho'], dvec)
+                if 'j_external' in data:  # Place into RF current drive by default
+                    dvec = 1.0e-6 * data['j_external'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['jrf'] = (['n', 'rho'], dvec)
+                    #data_vars['jnb'] = (['n', 'rho'], dvec)
+                if 'j_generic_current' in data:  # Place into RF current drive by default
+                    dvec = 1.0e-6 * data['j_generic_current'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['jrf'] = (['n', 'rho'], dvec)
+                #    data_vars['jnb'] = (['n', 'rho'], dvec)
                 if 'pressure_thermal_total' in data and 'rho_norm' in data and 'rho_face_norm' in data:
-                    data_vars['ptot'] = (['n', 'rho'], np.expand_dims(data['pressure_thermal_total'].to_numpy().flatten(), axis=0))
+                    data_vars['ptot'] = (['n', 'rho'], data['pressure_thermal_total'].to_numpy())
                 if 's_gas_puff' in data:
-                    dvec = data['s_gas_puff'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(dvec, axis=0))
+                    dvec = data['s_gas_puff'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qpar_wall'] = (['n', 'rho'], dvec)
                 if 's_pellet' in data:
-                    dvec = data['s_pellet'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(dvec, axis=0))
+                    dvec = data['s_pellet'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qpar_wall'] = (['n', 'rho'], dvec)
                 if 's_generic_particle' in data:
-                    dvec = data['s_generic_particle'].to_numpy().flatten()
-                    dvec = np.concatenate([np.array([dvec[0]]), dvec, np.array([dvec[-1]])], axis=0)
-                    data_vars['qpar_beam'] = (['n', 'rho'], np.expand_dims(dvec, axis=0))
+                    dvec = data['s_generic_particle'].to_numpy()
+                    dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
+                    data_vars['qpar_beam'] = (['n', 'rho'], dvec)
                 #'qione'
                 #'qioni'
                 #'qcxi'
@@ -1895,7 +1908,7 @@ class gacode_io(io):
                 #'vpol'
                 #'omega0'
                 #'qmom'
-                attrs['header'] = [newobj.make_file_header()]
+                attrs['header'] = [newobj.make_file_header()] * len(data['time'])
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
 
@@ -1943,8 +1956,14 @@ class gacode_io(io):
 
             if time_cp in data.coords:
 
+                time_orig = data.get(time_cp, xr.DataArray()).to_numpy().flatten()
                 time_indices = [-1]
-                time = np.array([data.get(time_cp, xr.DataArray()).to_numpy().flatten()[time_indices]]).flatten()  #TODO: Use window argument
+                if window is not None and len(window) >= 2:
+                    indices = np.arange(len(time_orig)).astype(int)
+                    window_mask = (time_orig >= window[0]) & (time_orig <= window[-1])
+                    if np.any(window_mask):
+                        time_indices = indices[window_mask].tolist()
+                time = data[time_cp].isel({time_cp: time_indices})
                 for i, time_index in enumerate(time_indices):
 
                     coords = {}
@@ -2234,6 +2253,7 @@ class gacode_io(io):
         window: Sequence[int | float] | None = None,
         **kwargs: Any,
     ) -> Self:
+        # TODO: Implement the remainder of this function, plus windowing
         newobj = cls()
         if isinstance(obj, io):
             data = obj.input if side == 'input' else obj.output
