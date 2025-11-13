@@ -1569,9 +1569,9 @@ class gacode_io(io):
                 'density_i': 'ni',
                 'temperature_i': 'ti',
             }
-            coords = {}
-            data_vars = {}
-            attrs = {}
+            coords: MutableMapping[str, Any] = {}
+            data_vars: MutableMapping[str, Any] = {}
+            attrs: MutableMapping[str, Any] = {}
             if 'time' in data and 'radius' in data:
                 time = data['time'].to_numpy()
                 time_window = [float(time[-1])]
@@ -1692,8 +1692,8 @@ class gacode_io(io):
                         time_window = [float(t) for t in time[window_mask]]
                 data = data.sel(time=time_window, method='nearest').drop_duplicates('time')  # Fine because data is a copy
                 zeros = np.repeat(np.expand_dims(np.zeros_like(data.coords['rho_norm'].to_numpy().flatten()), axis=0), len(data['time']), axis=0)
-                coords = {}
-                data_vars = {}
+                coords: MutableMapping[str, Any] = {}
+                data_vars: MutableMapping[str, Any] = {}
                 attrs: MutableMapping[str, Any] = {}
                 coords['n'] = np.arange(len(data['time'])).astype(int)
                 data_vars['time'] = (['n'], data['time'].to_numpy())
@@ -1967,8 +1967,8 @@ class gacode_io(io):
                 time = data[time_cp].isel({time_cp: time_indices})
                 for i, time_index in enumerate(time_indices):
 
-                    coords = {}
-                    data_vars = {}
+                    coords: MutableMapping[str, Any] = {}
+                    data_vars: MutableMapping[str, Any] = {}
                     attrs: MutableMapping[str, Any] = {}
 
                     if rho_cp_i in data.dims and rho_cp in data:
@@ -2258,8 +2258,8 @@ class gacode_io(io):
         newobj = cls()
         if isinstance(obj, io):
             data = obj.input if side == 'input' else obj.output
-            coords = {}
-            data_vars = {}
+            coords: MutableMapping[str, Any] = {}
+            data_vars: MutableMapping[str, Any] = {}
             attrs: MutableMapping[str, Any] = {}
             if 'xrho' in data.coords:
                 data = data.isel(time=-1)
