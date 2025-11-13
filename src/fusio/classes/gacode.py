@@ -1331,7 +1331,7 @@ class gacode_io(io):
             # last
             if not singleLine:
                 while len(var[-1]) < 1:
-                    var = var[:-1]  # Sometimes there's an extra space, remove
+                    var = var[:-1]  # Sometimes there's an extra space, remove it
                 profiles[title] = np.array(var)
                 if profiles[title].shape[1] == 1:
                     profiles[title] = profiles[title][:, 0]
@@ -1579,7 +1579,7 @@ class gacode_io(io):
                     window_mask = (time >= window[0]) & (time <= window[-1])
                     if np.any(window_mask):
                         time_window = [float(t) for t in time[window_mask]]
-                data = data.sel(time=time_window, method='nearest').remove_duplicates('time')  # Fine because data is a copy
+                data = data.sel(time=time_window, method='nearest').drop_duplicates('time')  # Fine because data is a copy
                 zeros = np.repeat(np.expand_dims(np.zeros_like(data.coords['rho_norm'].to_numpy().flatten()), axis=0), len(data['time']), axis=0)
                 coords['n'] = np.arange(len(data['time'])).astype(int)
                 data_vars['time'] = (['n'], data['time'].to_numpy())
@@ -1690,22 +1690,23 @@ class gacode_io(io):
                     window_mask = (time >= window[0]) & (time <= window[-1])
                     if np.any(window_mask):
                         time_window = [float(t) for t in time[window_mask]]
-                data = data.sel(time=time_window, method='nearest').remove_duplicates('time')  # Fine because data is a copy
+                data = data.sel(time=time_window, method='nearest').drop_duplicates('time')  # Fine because data is a copy
                 zeros = np.repeat(np.expand_dims(np.zeros_like(data.coords['rho_norm'].to_numpy().flatten()), axis=0), len(data['time']), axis=0)
                 coords = {}
                 data_vars = {}
                 attrs: MutableMapping[str, Any] = {}
                 coords['n'] = np.arange(len(data['time'])).astype(int)
+                data_vars['time'] = (['n'], data['time'].to_numpy())
                 if 'rho_norm' in data.coords:
                     coords['rho'] = data.coords['rho_norm'].to_numpy().flatten()
-                    data_vars['nexp'] = (['n'], np.array([len(coords['rho'])]).astype(int))
+                    data_vars['nexp'] = (['n'], np.array([len(coords['rho'])] * len(coords['n'])).astype(int))
                 if 'psi' in data:
                     data_vars['polflux'] = (['n', 'rho'], data['psi'].to_numpy())
                 if 'r_mid' in data:
                     data_vars['rmin'] = (['n', 'rho'], data['r_mid'].to_numpy())
-                data_vars['shot'] = (['n'], np.atleast_1d([0]))
-                data_vars['masse'] = (['n'], np.atleast_1d([5.4488748e-04]))
-                data_vars['ze'] = (['n'], np.atleast_1d([-1.0]))
+                data_vars['shot'] = (['n'], np.atleast_1d([0] * len(coords['n'])))
+                data_vars['masse'] = (['n'], np.atleast_1d([5.4488748e-04] * len(coords['n'])))
+                data_vars['ze'] = (['n'], np.atleast_1d([-1.0] * len(coords['n'])))
                 if 'Phi_b' in data:
                     data_vars['torfluxa'] = (['n'], data['Phi_b'].to_numpy().flatten())
                 #if 'R_major' in data:
@@ -1755,8 +1756,8 @@ class gacode_io(io):
                             names.append(f'{key}')
                             main_splits.append(iondict[key].get('value', ['float', [0.0]])[1][-1])
                             _, ia, iz = define_ion_species(short_name=f'{key}')
-                            masses.append(np.expand_dims(zeros + ia, axis=-1))
-                            charges.append(np.expand_dims(zeros + iz, axis=-1))
+                            masses.append(np.mean(np.expand_dims(zeros + ia, axis=-1), axis=1))
+                            charges.append(np.mean(np.expand_dims(zeros + iz, axis=-1), axis=1))
                         if len(main_splits) > 0:
                             ni = np.concatenate([val * ni for val in main_splits], axis=-1)
                     zeff = np.sum(ni, axis=-1) / ne
@@ -1770,7 +1771,7 @@ class gacode_io(io):
                             simps.append(f'{key}')
                             aimps.append(np.expand_dims(zeros + impa, axis=-1))
                             zimps.append(np.expand_dims(data['Z_impurity_species'].sel(impurity_symbol=f'{key}', drop=True).interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy(), axis=-1))
-                            nimps.append(np.expand_dims(data['n_impurity_species'].sel(impurity_symbol=f'{key}', drop=True).interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy(), axis=-1))
+                            nimps.append(1.0e-19 * np.expand_dims(data['n_impurity_species'].sel(impurity_symbol=f'{key}', drop=True).interp({'rho_cell_norm': data['rho_norm'].to_numpy()}, kwargs={'fill_value': 'extrapolate'}).to_numpy(), axis=-1))
                     elif 'config' in data.attrs and 'n_impurity' in data:
                         nimp = 1.0e-19 * np.expand_dims(data['n_impurity'].to_numpy(), axis=-1)
                         impdict = data.attrs['config'].get('plasma_composition', {}).get('impurity', {})
@@ -1785,20 +1786,20 @@ class gacode_io(io):
                             nimps = [val * nimp for val in imp_splits]
                     if len(nimps) > 0:
                         nimp = np.concatenate(nimps, axis=-1)
-                        nimp[0, :] = nimp[1, :]
+                        nimp[:, 0, :] = nimp[:, 1, :]
                         ni = np.concatenate([ni, nimp], axis=-1)
-                    types = [np.expand_dims(['[therm]' for i in range(len(data['time']))], axis=-1) for i in names]
+                    types = [np.expand_dims(['[therm]' for i in range(len(coords['n']))], axis=-1) for i in names]
                     ii = len(names)
                     for zz in range(len(simps)):
                         zimps[zz][:, 0] = zimps[zz][:, 1]
                         names.append(simps[zz])
-                        types.append(np.expand_dims(['[therm]' for i in range(len(data['time']))], axis=-1))
+                        types.append(np.expand_dims(['[therm]' for i in range(len(coords['n']))], axis=-1))
                         masses.append(np.mean(aimps[zz], axis=1))
                         charges.append(np.mean(zimps[zz], axis=1))
-                        zeff += ni[..., zz+ii] * (zimps[zz] ** 2.0) / ne
+                        zeff += ni[..., zz+ii] * (zimps[zz][..., 0] ** 2.0) / ne
                     coords['name'] = np.array(names)
                     data_vars['ni'] = (['n', 'rho', 'name'], ni)
-                    data_vars['nion'] = (['n'], np.array([len(names) for i in range(len(data['time']))]).astype(int))
+                    data_vars['nion'] = (['n'], np.array([len(names) for i in range(len(coords['n']))]).astype(int))
                     data_vars['type'] = (['n', 'name'], np.concatenate(types, axis=-1))
                     data_vars['mass'] = (['n', 'name'], np.concatenate(masses, axis=-1))
                     data_vars['z'] = (['n', 'name'], np.concatenate(charges, axis=-1))
@@ -1908,7 +1909,7 @@ class gacode_io(io):
                 #'vpol'
                 #'omega0'
                 #'qmom'
-                attrs['header'] = [newobj.make_file_header()] * len(data['time'])
+                attrs['header'] = [newobj.make_file_header()] * len(coords['n'])
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
 
