@@ -102,6 +102,8 @@ def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int
         'rmagx': eqdsk.get('rmagx', None),
         'zmagx': eqdsk.get('zmagx', None),
         'cpasma': eqdsk.get('cpasma', None),
+        'nbdry': eqdsk.get('nbdry', 0),
+        'nlim': eqdsk.get('nlim', 0),
     }
     sign_dict = define_cocos_converter(cocos_in, cocos_out)
     sIp = sign_dict['scyl']
@@ -133,11 +135,9 @@ def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int
     if 'qpsi' in eqdsk:
         out['qpsi'] = copy.deepcopy(eqdsk['qpsi']) * sign_dict['spol'] * sIp * sBt
     if 'rlim' in eqdsk and 'zlim' in eqdsk:
-        out['nlim'] = copy.deepcopy(eqdsk['nlim'])
         out['rlim'] = copy.deepcopy(eqdsk['rlim'])
         out['zlim'] = copy.deepcopy(eqdsk['zlim'])
     if 'rbdry' in eqdsk and 'zbdry' in eqdsk:
-        out['nbdry'] = copy.deepcopy(eqdsk['nbdry'])
         out['rbdry'] = copy.deepcopy(eqdsk['rbdry'])
         out['zbdry'] = copy.deepcopy(eqdsk['zbdry'])
     return out
@@ -379,11 +379,11 @@ def write_eqdsk(data: MutableMapping[str, Any], path: str | Path) -> None:
         kk = 0
         for ii in range(nlim):
             dstr += '%16.9E' % (rlim[ii])
-            if (kk + 1) % 5 == 0 and (kk + 1) != nlim:
+            if (kk + 1) % 5 == 0 and (ii + 1) != nlim:
                 dstr += '\n'
             kk = kk + 1
             dstr += '%16.9E' % (zlim[ii])
-            if (kk + 1) % 5 == 0 and (kk + 1) != nlim:
+            if (kk + 1) % 5 == 0 and (ii + 1) != nlim:
                 dstr += '\n'
             kk = kk + 1
         dstr += '\n'

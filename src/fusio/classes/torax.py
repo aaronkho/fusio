@@ -9,7 +9,10 @@ import xarray as xr
 import copy
 import json
 from .io import io
-from ..utils.plasma_tools import define_ion_species
+from ..utils.plasma_tools import (
+    constants_si,
+    define_ion_species,
+)
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
 )
@@ -609,6 +612,46 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def enforce_monotonic_gradient_kinetic_profiles(
+        self,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        newvars: MutableMapping[str, Any] = {}
+        if 'profile_conditions.T_e' in data:
+            val = data['profile_conditions.T_e'].to_numpy()
+            for tidx, tval in enumerate(time):
+                mask = (val[tidx] < val[tidx, -1])
+                if np.any(mask):
+                    tlidx = np.where(mask)[0][0] - 1
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * val[tidx, -1]
+                    rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
+                    val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
+            newvars['profile_conditions.T_e'] = (['time', 'rho'], copy.deepcopy(val))
+        if 'profile_conditions.T_i' in data:
+            val = data['profile_conditions.T_i'].to_numpy()
+            for tidx, tval in enumerate(time):
+                mask = (val[tidx] < val[tidx, -1])
+                if np.any(mask):
+                    tlidx = np.where(mask)[0][0] - 1
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * val[tidx, -1]
+                    rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
+                    val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
+            newvars['profile_conditions.T_i'] = (['time', 'rho'], copy.deepcopy(val))
+        if 'profile_conditions.n_e' in data:
+            val = data['profile_conditions.n_e'].to_numpy()
+            for tidx, tval in enumerate(time):
+                mask = (val[tidx] < val[tidx, -1])
+                if np.any(mask):
+                    tlidx = np.where(mask)[0][0] - 1
+                    val_ref = val[tidx, tlidx] if tlidx >= 0 else 10.0 * val[tidx, -1]
+                    rho_ref = rho[tlidx] if tlidx >= 0 else rho[0]
+                    val[tidx, mask] = val[tidx, -1] + (rho[mask] - rho[-1]) * (val_ref - val[tidx, -1]) / (rho_ref - rho[-1])
+            newvars['profile_conditions.n_e'] = (['time', 'rho'], copy.deepcopy(val))
+        self.update_input_data_vars(newvars)
+
+
     def set_constant_flat_main_ion_composition(
         self,
         ions: MutableMapping[str, float],
@@ -650,6 +693,26 @@ class torax_io(io):
                 newvars: MutableMapping[str, Any] = {}
                 newvars['plasma_composition.main_ion'] = (['main_ion', 'time'], (val / val.sum('main_ion')).to_numpy())
                 self.update_input_data_vars(newvars)
+
+
+    def add_impurity_species_by_electron_density_ratio(
+        self,
+        sname: str,
+        sfrac: float,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        rho = data.get('rho', xr.DataArray()).to_numpy().flatten()
+        if sname in self.allowed_radiation_species and sname not in ['H', 'D', 'T'] and sname not in data.get('impurity', xr.DataArray()) and 'profile_conditions.n_e' in data:
+            if data.attrs.get('plasma_composition.impurity.impurity_mode', 'n_e_ratios') == 'fractions':
+                raise NotImplementedError('Setting impurity species not implemented with impurity fractions mode yet')
+            coords: MutableMapping[str, Any] = {'impurity': np.array([sname]), 'time': time, 'rho': rho}
+            data_vars: MutableMapping[str, Any] = {}
+            if 'plasma_composition.impurity.species' in data:
+                ne = np.ones_like(data['profile_conditions.n_e'].to_numpy())
+                data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.expand_dims(sfrac * ne, axis=0))
+            newdata = xr.Dataset(coords=coords, data_vars=data_vars)
+            self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer')
 
 
     def set_constant_flat_effective_charge(
@@ -890,6 +953,7 @@ class torax_io(io):
         geotype: str,
         geofiles: str | Mapping[str, str],
         geodir: str | None = None,
+        **kwargs: MutableMapping[str, Any],
     ) -> None:
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
@@ -906,15 +970,15 @@ class torax_io(io):
                 geotime: MutableMapping[str, Any] = {}
                 geotime['geometry_file'] = f'{geofile}'
                 if geotype == 'eqdsk':
-                    geotime['n_surfaces'] = 251
-                    geotime['last_surface_factor'] = 0.9999
+                    geotime['n_surfaces'] = kwargs.get('n_surfaces', 251)
+                    geotime['last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
                 geoconfig[time] = geotime
             newattrs['geometry.geometry_configs'] = geoconfig
         else:
             newattrs['geometry.geometry_file'] = f'{geofiles}'
             if geotype == 'eqdsk':
-                newattrs['geometry.n_surfaces'] = 251
-                newattrs['geometry.last_surface_factor'] = 0.9999
+                newattrs['geometry.n_surfaces'] = kwargs.get('n_surfaces', 251)
+                newattrs['geometry.last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
         self.update_input_attrs(newattrs)
 
 
@@ -1225,7 +1289,7 @@ class torax_io(io):
             prefix = f'transport.transport_models.{len(models):d}'
             if 'pedestal.rho_norm_ped_top' in data:
                 #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
-                newattrs[f'{prefix}.rho_max'] = float(data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
             newattrs[f'{prefix}.apply_inner_patch'] = False
             newattrs[f'{prefix}.apply_outer_patch'] = False
             models.append('qualikiz')
@@ -1339,6 +1403,124 @@ class torax_io(io):
                 if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qlknn':
                     newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
         if data.attrs.get('transport.model_name', '') == 'qlknn':
+            newattrs['transport.model_path'] = f'{path}'
+        self.update_input_attrs(newattrs)
+
+
+    def add_tglf_transport(
+        self,
+        rho_min: float | None = None,
+        rho_max: float | None = None,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        prefix = 'transport'
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_core_models', [])
+            prefix = f'transport.transport_models.{len(models):d}'
+            if 'pedestal.rho_norm_ped_top' in data:
+                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
+                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+            newattrs[f'{prefix}.apply_inner_patch'] = False
+            newattrs[f'{prefix}.apply_outer_patch'] = False
+            models.append('tglf')
+            newattrs['map_combined_core_models'] = models
+        if rho_min is not None:
+            #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
+            newattrs[f'{prefix}.rho_min'] = float(rho_min)
+        if rho_max is not None:
+            #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
+            newattrs[f'{prefix}.rho_max'] = float(rho_max)
+        newattrs[f'{prefix}.model_name'] = 'tglf'
+        newattrs[f'{prefix}.n_processes'] = 30
+        newattrs[f'{prefix}.DV_effective'] = True
+        newattrs[f'{prefix}.An_min'] = 0.05
+        newattrs['transport.chi_min'] = 0.05
+        newattrs['transport.chi_max'] = 100.0
+        newattrs['transport.D_e_min'] = 0.05
+        newattrs['transport.D_e_max'] = 100.0
+        newattrs['transport.V_e_min'] = -50.0
+        newattrs['transport.V_e_max'] = 50.0
+        newattrs['transport.smoothing_width'] = 0.1
+        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def set_tglf_model_path(
+        self,
+        path: str | Path,
+    ) -> None:
+        data = self.input
+        newattrs: MutableMapping[str, Any] = {}
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_core_models', [])
+            for n in range(len(models)):
+                if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'tglf':
+                    newattrs['TORAX_TGLF_EXEC_PATH'] = f'{path}'  # Is this still necessary?
+        elif data.attrs.get('transport.model_name', '') == 'tglf':
+            newattrs['TORAX_TGLF_EXEC_PATH'] = f'{path}'  # Is this still necessary?
+        self.update_input_attrs(newattrs)
+
+
+    def add_tglfnn_transport(
+        self,
+        rho_min: float | None = None,
+        rho_max: float | None = None,
+        machine: str = 'sparc',
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        prefix = 'transport'
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_core_models', [])
+            prefix = f'transport.transport_models.{len(models):d}'
+            if 'pedestal.rho_norm_ped_top' in data:
+                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+            newattrs[f'{prefix}.apply_inner_patch'] = False
+            newattrs[f'{prefix}.apply_outer_patch'] = False
+            models.append('tglfnn')
+            newattrs['map_combined_core_models'] = models
+        if rho_min is not None:
+            newattrs[f'{prefix}.rho_min'] = float(rho_min)
+        if rho_max is not None:
+            newattrs[f'{prefix}.rho_max'] = float(rho_max)
+        newattrs[f'{prefix}.model_name'] = 'tglfnn'
+        if machine == 'multimachine':
+            newattrs[f'{prefix}.model_name'] = 'tglfnn-ukaea'
+            newattrs[f'{prefix}.machine'] = 'multimachine'
+        newattrs[f'{prefix}.clip_inputs'] = False
+        newattrs[f'{prefix}.clip_margin'] = 0.95
+        newattrs[f'{prefix}.DV_effective'] = True
+        newattrs[f'{prefix}.An_min'] = 0.05
+        newattrs['transport.chi_min'] = 0.05
+        newattrs['transport.chi_max'] = 100.0
+        newattrs['transport.D_e_min'] = 0.05
+        newattrs['transport.D_e_max'] = 100.0
+        newattrs['transport.V_e_min'] = -50.0
+        newattrs['transport.V_e_max'] = 50.0
+        newattrs['transport.smoothing_width'] = 0.0
+        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def set_tglfnn_model_path(
+        self,
+        path: str | Path,
+    ) -> None:
+        data = self.input
+        newattrs: MutableMapping[str, Any] = {}
+        if data.attrs.get('transport.model_name', '') == 'combined':
+            models = data.attrs.get('map_combined_core_models', [])
+            for n in range(len(models)):
+                if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'tglfnn':
+                    newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
+        if data.attrs.get('transport.model_name', '') == 'tglfnn':
             newattrs['transport.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
@@ -1897,14 +2079,21 @@ class torax_io(io):
         mu: float,
         sigma: float,
         total: float,
+        tvec: NDArray | None = None,
     ) -> None:
         self.reset_generic_particle_source()
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        tvar = 'time'
+        if isinstance(tvec, np.ndarray):
+            time = copy.deepcopy(tvec).flatten()
+            tvar = 'time_generic_particle'
+            newcoords = {tvar: time}
+            self.update_input_coords(newcoords)
         newvars: MutableMapping[str, Any] = {}
-        newvars['sources.generic_particle.deposition_location'] = (['time'], np.zeros_like(time) + mu)
-        newvars['sources.generic_particle.particle_width'] = (['time'], np.zeros_like(time) + sigma)
-        newvars['sources.generic_particle.S_total'] = (['time'], np.zeros_like(time) + total)
+        newvars['sources.generic_particle.deposition_location'] = ([tvar], np.zeros_like(time) + mu)
+        newvars['sources.generic_particle.particle_width'] = ([tvar], np.zeros_like(time) + sigma)
+        newvars['sources.generic_particle.S_total'] = ([tvar], np.zeros_like(time) + total)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
         newattrs['sources.generic_particle.mode'] = 'MODEL_BASED'
@@ -2102,13 +2291,247 @@ class torax_io(io):
         self,
         restart_path: str | Path,
         restart_time: float,
+        stitch: bool = False,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
         newattrs['restart.filename'] = f'{restart_path}'
         newattrs['restart.time'] = float(restart_time)
         newattrs['restart.do_restart'] = True
-        newattrs['restart.stitch'] = False
+        newattrs['restart.stitch'] = stitch
         self.update_input_attrs(newattrs)
+
+
+    def to_qualikiz_parameters(
+        self,
+        time: float | NDArray | None = None,
+        full_impurities: bool = False,
+    ) -> xr.Dataset:
+        #TODO: Use plasma_tools utility functions
+        c = constants_si()
+        data = self.output
+        coords: MutableMapping[str, Any] = {}
+        data_vars: MutableMapping[str, Any] = {}
+        attrs: MutableMapping[str, Any] = {}
+        if 'rho_norm' in data and 'rho_face_norm' in data and 'rho_cell_norm' in data:
+            if 'time' in data and time is not None:
+                data = data.sel({'time': np.array([time]).flatten()}, method='nearest').drop_duplicates('time')
+            coords['time'] = data['time'].to_numpy().flatten()
+            coords['rho'] = data['rho_cell_norm'].to_numpy().flatten()
+            if 'R_major' in data:
+                data_vars['Ro'] = (['time', 'rho'], np.repeat(np.expand_dims(data['R_major'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+            if 'a_minor' in data:
+                data_vars['Rmin'] = (['time', 'rho'], np.repeat(np.expand_dims(data['a_minor'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+            if 'B_0' in data:
+                data_vars['Bo'] = (['time', 'rho'], np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True))
+                bunit = (psi.differentiate('rho_face_norm') * data['q']).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'}) / (np.pi * (data['R_out'] - data['R_in'])) / drdrho
+                attrs['b_unit'] = bunit.to_numpy()
+                attrs['b_zero'] = np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1)
+            if 'R_out' in data and 'R_in' in data:
+                data_vars['x'] = (['time', 'rho'], ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'n_e' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                data_vars['ne'] = (['time', 'rho'], 1.0e-19 * data['n_e'].interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['Ane'] = (['time', 'rho'], (-data['R_major'] * data['n_e'].differentiate('rho_norm') / data['n_e'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'T_e' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                data_vars['Te'] = (['time', 'rho'], data['T_e'].interp({'rho_norm': coords['rho']}).to_numpy())  # keV
+                data_vars['Ate'] = (['time', 'rho'], (-data['R_major'] * data['T_e'].differentiate('rho_norm') / data['T_e'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'A_i' in data:
+                data_vars['Ai0'] = (['time', 'rho'], np.repeat(np.expand_dims(data['A_i'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+            if 'Z_i' in data:
+                data_vars['Zi0'] = (['time', 'rho'], data['Z_i'].interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'n_i' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                data_vars['ni0'] = (['time', 'rho'], (data['n_i'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['Ani0'] = (['time', 'rho'], (-data['R_major'] * data['n_i'].differentiate('rho_norm') / data['n_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'T_i' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                data_vars['Ti0'] = (['time', 'rho'], data['T_i'].interp({'rho_norm': coords['rho']}).to_numpy())  # keV
+                data_vars['Ati0'] = (['time', 'rho'], (-data['R_major'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            nion = 1
+            if full_impurities:
+                for j, symbol in enumerate(data.get('impurity_symbol', xr.DataArray()).to_numpy()):
+                    sname = symbol if 'He' not in symbol else 'He'
+                    sn, sa, sz = define_ion_species(short_name=sname)
+                    if symbol == 'He3':
+                        sa = 3.0
+                    data_vars[f'Ai{nion:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([sa]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+                    if 'Z_impurity_species' in data:
+                        data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity_species'].sel(impurity_symbol=symbol, drop=True).to_numpy())
+                    if 'n_impurity_species' in data:
+                        drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm').interp({'rho_norm': coords['rho']}).rename({'rho_norm': 'rho_cell_norm'})
+                        ne = data['n_e'].interp({'rho_norm': coords['rho']}).rename({'rho_norm': 'rho_cell_norm'})
+                        data_vars[f'ni{nion:d}'] = (['time', 'rho'], (data['n_impurity_species'].sel(impurity_symbol=symbol, drop=True) / ne).to_numpy())
+                        data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (-data['R_major'] * (data['n_impurity_species'].differentiate('rho_cell_norm') / data['n_impurity_species']).sel(impurity_symbol=symbol, drop=True) / drdrho).to_numpy())
+                    if 'T_i' in data:
+                        drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                        data_vars[f'Ti{nion:d}'] = (['time', 'rho'], data['T_i'].interp({'rho_norm': coords['rho']}).to_numpy())  # keV
+                        data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (-data['R_major'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                    nion += 1
+            else:
+                if 'A_impurity' in data:
+                    data_vars[f'Ai{nion:d}'] = (['time', 'rho'], np.repeat(np.expand_dims(data['A_impurity'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+                if 'Z_impurity' in data:
+                    data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity'].interp({'rho_norm': coords['rho']}).to_numpy())
+                if 'n_impurity' in data:
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                    data_vars[f'ni{nion:d}'] = (['time', 'rho'], (data['n_impurity'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                    data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (-data['R_major'] * data['n_impurity'].differentiate('rho_norm') / data['n_impurity'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                if 'T_i' in data:
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                    data_vars[f'Ti{nion:d}'] = (['time', 'rho'], data['T_i'].interp({'rho_norm': coords['rho']}).to_numpy())  # keV
+                    data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (-data['R_major'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                    nion += 1
+            if 'q' in data:
+                q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                data_vars['q'] = (['time', 'rho'], q.to_numpy())
+            if 'magnetic_shear' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                srho = data['magnetic_shear'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                sfac = (((data['R_out'] - data['R_in']) / 2.0 / data['rho_norm']) / drdrho).interp({'rho_norm': coords['rho']})
+                data_vars['smag'] = (['time', 'rho'], (srho * sfac).fillna(0.0).to_numpy())
+            if 'q' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                pprime = c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i']).differentiate('rho_norm')
+                prho = (-2.0 * c['mu'] * data['R_major'] * pprime / (data['B_0'] ** 2) / drdrho).interp({'rho_norm': coords['rho']})
+                data_vars['alpha'] = (['time', 'rho'], ((q ** 2) * prho).to_numpy())
+            # Use internal nuei calc
+        return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+
+
+    def to_tglf_parameters(
+        self,
+        time: float | NDArray | None = None,
+        full_impurities: bool = False,
+    ) -> xr.Dataset:
+        #TODO: Use plasma_tools utility functions
+        c = constants_si()
+        data = self.output
+        coords: MutableMapping[str, Any] = {}
+        data_vars: MutableMapping[str, Any] = {}
+        attrs: MutableMapping[str, Any] = {}
+        if 'rho_norm' in data and 'rho_face_norm' in data and 'rho_cell_norm' in data:
+            if 'time' in data and time is not None:
+                data = data.sel({'time': np.array([time]).flatten()}, method='nearest').drop_duplicates('time')
+            coords['time'] = data['time'].to_numpy().flatten()
+            coords['rho'] = data['rho_cell_norm'].to_numpy().flatten()
+            if 'R_out' in data and 'R_in' in data and 'a_minor' in data:
+                roa = (data['R_out'] - data['R_in']) / 2.0 / data['a_minor']
+                rmoa = (data['R_out'] + data['R_in']) / 2.0 / data['a_minor']
+                drdrho = roa.differentiate('rho_norm')
+                data_vars['RMIN_LOC'] = (['time', 'rho'], roa.interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['RMAJ_LOC'] = (['time', 'rho'], rmoa.interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['DRMAJDX_LOC'] = (['time', 'rho'], (rmoa.differentiate('rho_norm') / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                if 'z_magnetic_axis' in data:
+                    data_vars['ZMAJ_LOC'] = (['time', 'rho'], np.repeat(np.expand_dims(data['z_magnetic_axis'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+                    #data_vars['DZMAJDX_LOC'] = (['time', 'rho'], (data['Z'].differentiate('rho_norm') / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                    data_vars['DZMAJDX_LOC'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+            if 'n_e' in data:
+                data_vars['MASS_1'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.00027428995]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+                data_vars['ZS_1'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([-1.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                data_vars['AS_1'] = (['time', 'rho'], xr.ones_like(data['n_e'].interp({'rho_norm': coords['rho']})).to_numpy())
+                data_vars['RLNS_1'] = (['time', 'rho'], (-data['a_minor'] * data['n_e'].differentiate('rho_norm') / data['n_e'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'T_e' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                data_vars['TAUS_1'] = (['time', 'rho'], xr.ones_like(data['T_e'].interp({'rho_norm': coords['rho']})).to_numpy())
+                data_vars['RLTS_1'] = (['time', 'rho'], (-data['a_minor'] * data['T_e'].differentiate('rho_norm') / data['T_e'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'A_i' in data:
+                data_vars['MASS_2'] = (['time', 'rho'], np.repeat(np.expand_dims(data['A_i'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+            if 'Z_i' in data:
+                data_vars['ZS_2'] = (['time', 'rho'], data['Z_i'].interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'n_i' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                data_vars['AS_2'] = (['time', 'rho'], (data['n_i'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['RLNS_2'] = (['time', 'rho'], (-data['a_minor'] * data['n_i'].differentiate('rho_norm') / data['n_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'T_i' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                data_vars['TAUS_2'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['RLTS_2'] = (['time', 'rho'], (-data['a_minor'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            ns = 2
+            if full_impurities:
+                for j, symbol in enumerate(data.get('impurity_symbol', xr.DataArray()).to_numpy()):
+                    ns += 1
+                    sname = symbol if 'He' not in symbol else 'He'
+                    sn, sa, sz = define_ion_species(short_name=sname)
+                    if symbol == 'He3':
+                        sa = 3.0
+                    data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([sa]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+                    if 'Z_impurity_species' in data:
+                        data_vars[f'ZS_{ns:d}'] = (['time', 'rho'], data['Z_impurity_species'].sel(impurity_symbol=symbol, drop=True).to_numpy())
+                    if 'n_impurity' in data:
+                        drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm').interp({'rho_norm': coords['rho']}).rename({'rho_norm': 'rho_cell_norm'})
+                        ne = data['n_e'].interp({'rho_norm': coords['rho']}).rename({'rho_norm': 'rho_cell_norm'})
+                        data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (data['n_impurity_species'].sel(impurity_symbol=symbol, drop=True) / ne).to_numpy())
+                        data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (-data['a_minor'] * (data['n_impurity_species'].differentiate('rho_cell_norm') / data['n_impurity_species']).sel(impurity_symbol=symbol, drop=True) / drdrho).to_numpy())
+                    if 'T_i' in data:
+                        drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                        data_vars[f'TAUS_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                        data_vars[f'RLTS_{ns:d}'] = (['time', 'rho'], (-data['a_minor'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            else:
+                if 'A_impurity' in data:
+                    ns += 1
+                    data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], np.repeat(np.expand_dims(data['A_impurity'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+                if 'Z_impurity' in data:
+                    data_vars[f'ZS_{ns:d}'] = (['time', 'rho'], data['Z_impurity'].interp({'rho_norm': coords['rho']}).to_numpy())
+                if 'n_impurity' in data:
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                    data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (data['n_impurity'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                    data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (-data['a_minor'] * data['n_impurity'].differentiate('rho_norm') / data['n_impurity'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                if 'T_i' in data:
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                    data_vars[f'TAUS_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                    data_vars[f'RLTS_{ns:d}'] = (['time', 'rho'], (-data['a_minor'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+            data_vars['NS'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([ns]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+            if 'q' in data:
+                q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                data_vars['Q_LOC'] = (['time', 'rho'], q.to_numpy())
+            if 'magnetic_shear' in data:
+                roa = (data['R_out'] - data['R_in']) / 2.0 / data['a_minor']
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                srho = data['magnetic_shear'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                sfac = (((data['R_out'] - data['R_in']) / 2.0 / data['rho_norm']) / drdrho).interp({'rho_norm': coords['rho']})
+                data_vars['Q_PRIME_LOC'] = (['time', 'rho'], ((q ** 2 / roa ** 2) * srho * sfac).fillna(0.0).to_numpy())
+            if 'q' in data:
+                roa = (data['R_out'] - data['R_in']) / 2.0 / data['a_minor']
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True))
+                bunit = (psi.differentiate('rho_face_norm') * data['q']).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'}) / (np.pi * (data['R_out'] - data['R_in'])) / drdrho
+                q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                pprime = c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i']).differentiate('rho_norm')
+                prho = ((2.0 * c['mu'] / (8.0 * np.pi)) * (data['a_minor'] / roa) * pprime / (bunit ** 2) / drdrho).interp({'rho_norm': coords['rho']})
+                data_vars['P_PRIME_LOC'] = (['time', 'rho'], ((q ** 2) * prho).fillna(0.0).to_numpy())
+                attrs['b_unit'] = bunit.to_numpy()
+                attrs['b_zero'] = np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1)
+            if 'n_e' in data and 'T_e' in data:
+                csoa = (c['e'] * 1.0e3 * data['T_e'] / (2.0 * c['u'])) ** 0.5 / data['a_minor']
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True))
+                bunit = (psi.differentiate('rho_face_norm') * data['q']).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'}) / (np.pi * (data['R_out'] - data['R_in'])) / drdrho
+                rhos = (2.0 * c['u']) * csoa * data['a_minor'] / (c['e'] * bunit)
+                data_vars['BETAE'] = (['time', 'rho'], (2.0 * c['mu'] * c['e'] * data['n_e'] * 1.0e3 * data['T_e'] / (bunit ** 2)).interp({'rho_norm': coords['rho']}).to_numpy())
+                cl = 74.2 - 0.5 * np.log(data['n_e']) + np.log(c['e'] * 1.0e3 * data['T_e'])
+                data_vars['XNUE'] = (['time', 'rho'], (np.sqrt(2.0) * data['n_e'] * (c['e'] ** 4) * cl / (16.0 * np.pi * (c['eps'] ** 2) * (c['me'] ** 0.5) * (c['e'] * 1.0e3 * data['T_e'] ** 1.5)) / csoa).interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['DEBYE'] = (['time', 'rho'], (((c['eps'] / c['e']) * 1.0e3 * data['T_e'] / data['n_e']) ** 0.5 / rhos).interp({'rho_norm': coords['rho']}).to_numpy())
+                zeff = (data['n_i'] * (data['Z_i'] ** 2) + data['n_impurity'] * (data['Z_impurity'] ** 2)) / data['n_e']
+                data_vars['ZEFF'] = (['time', 'rho'], zeff.interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'elongation' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                skappa = ((data['R_out'] - data['R_in']) / 2.0 / data['elongation']) * data['elongation'].differentiate('rho_norm') / drdrho
+                data_vars['KAPPA_LOC'] = (['time', 'rho'], data['elongation'].interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['S_KAPPA_LOC'] = (['time', 'rho'], skappa.interp({'rho_norm': coords['rho']}).to_numpy())
+            if 'delta' in data:
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                sdelta = ((data['R_out'] - data['R_in']) / 2.0) * data['delta'].differentiate('rho_face_norm').interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'}) / drdrho
+                data_vars['DELTA_LOC'] = (['time', 'rho'], data['delta'].interp({'rho_face_norm': coords['rho']}).to_numpy())
+                data_vars['S_DELTA_LOC'] = (['time', 'rho'], sdelta.interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['ZETA_LOC'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+                data_vars['S_ZETA_LOC'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+        return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
 
 
     def print_summary(
@@ -2180,31 +2603,31 @@ class torax_io(io):
                         rtag = str(dim)
                         break
             if ttag is not None and ttag in dims:
-                time = ds[ttag].to_numpy().flatten()
+                #time = ds[ttag].to_numpy().flatten()
                 if 'main_ion' in dims:
                     for species in ds['main_ion'].to_numpy().flatten():
                         da = ds[key].sel(main_ion=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0)
                         if da.size > 0:
-                            datadict[f'{key}.{species}'] = da
+                            datadict[f'{key}.{species}'] = da.rename({ttag: 'time'})
                 elif 'impurity' in dims:
                     for species in ds['impurity'].to_numpy().flatten():
                         da = ds[key].sel(impurity=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
-                            datadict[f'{key}.{species}'] = da
+                            datadict[f'{key}.{species}'] = da.rename({ttag: 'time'})
                         else:
                             datadict[f'{key}.{species}'] = None
                 elif rtag is not None and rtag in dims:
                     da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
                     if da.size > 0:
-                        datadict[f'{key}'] = da
+                        datadict[f'{key}'] = da.rename({ttag: 'time'})
                 else:
                     da = ds[key].dropna(ttag)
                     if da.size > 0:
-                        datadict[f'{key}'] = da
+                        datadict[f'{key}'] = da.rename({ttag: 'time'})
         core_models = datadict.pop('map_combined_core_models', {})
         pedestal_models = datadict.pop('map_combined_pedestal_models', {})
         if datadict.get('transport.model_name', '') == 'combined':
@@ -2268,6 +2691,7 @@ class torax_io(io):
         datadict.pop('profile_conditions.j_ohmic', None)
         datadict.pop('profile_conditions.j_bootstrap', None)
         datadict.pop('TORAX_QLK_EXEC_PATH', None)
+        datadict.pop('TORAX_TGLF_EXEC_PATH', None)
         if 'pedestal.set_pedestal' not in datadict:
             datadict['pedestal.set_pedestal'] = False
         return self._unflatten(datadict)
@@ -2711,7 +3135,7 @@ class torax_io(io):
                     if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
                         if external_el_heat_source is None:
                             external_el_heat_source = np.zeros_like(data.sel({src_cs: srctag})[omas_tag].to_numpy())
-                        external_el_heat_source += 1.0e6 * data.sel({src_cs: srctag})[omas_tag].to_numpy()
+                        external_el_heat_source += data.sel({src_cs: srctag})[omas_tag].to_numpy()
                     srctag = 'fusion'
                     if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
                         if fusion_source is None:
@@ -2723,7 +3147,7 @@ class torax_io(io):
                     if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
                         if external_ion_heat_source is None:
                             external_ion_heat_source = np.zeros_like(data.sel({src_cs: srctag})[omas_tag].to_numpy())
-                        external_ion_heat_source += 1.0e6 * data.sel({src_cs: srctag})[omas_tag].to_numpy()
+                        external_ion_heat_source += data.sel({src_cs: srctag})[omas_tag].to_numpy()
                 #omas_tag = 'core_sources.source.global_quantities.power'
                 #if omas_tag in data:
                 #    srctag = 'ic'
@@ -2784,6 +3208,10 @@ class torax_io(io):
                         'profile_conditions.psi',
                     ]
                     dsmap['core_profiles'] = dsmap['core_profiles'].drop_vars(drop, errors='ignore')
+                full_attrs = {}
+                for key in dsmap:
+                    full_attrs.update(dsmap[key].attrs)
                 newobj.input = xr.merge([v for k, v in dsmap.items()], join='outer')
+                newobj.update_input_attrs(full_attrs)
 
         return newobj

@@ -124,9 +124,13 @@ class omas_io(io):
             elif segments[0] == 'equilibrium' and 'profiles_1d' in segments:
                 newdims.append('equilibrium.time_slice.profiles_1d.psi:i')
             elif segments[0] == 'equilibrium' and 'profiles_2d' in segments and 'grid' not in segments:
-                newdims.extend(['equilibrium.time_slice.profiles_2d.grid.dim2:i', 'equilibrium.time_slice.profiles_2d.grid.dim1:i'])
+                newdims.extend(['equilibrium.time_slice.profiles_2d.grid.dim1:i', 'equilibrium.time_slice.profiles_2d.grid.dim2:i'])
             elif segments[0] == 'equilibrium' and 'boundary' in segments and 'outline' in segments:
                 newdims.append('equilibrium.time_slice.boundary.outline.r:i')
+            elif segments[0] == 'pf_active' and ('data' in segments or 'data_error_upper' in segments or 'data_error_lower' in segments or 'time' in segments):
+                newdims.append('pf_active.time')
+            elif segments[0] == 'pf_passive' and ('current' in segments or 'time' in segments):
+                newdims.append('pf_passive.time')
             elif segments[0] == 'pulse_schedule' and 'reference' in segments:
                 dims = list(segments[:-1])
                 dims.append('time')
@@ -345,7 +349,7 @@ class omas_io(io):
     def output_cocos(
         self,
     ) -> int:
-        cocos = self.input.attrs.get('cocos', None)
+        cocos = self.output.attrs.get('cocos', None)
         if cocos is None:
             version = self.output.attrs.get('data_dictionary_version', '4.0.0')
             cocos = self.default_cocos_3 if Version(version) < Version('4') else self.default_cocos_4
@@ -512,6 +516,7 @@ class omas_io(io):
         if isinstance(basepath, (str, Path)):
             path = Path(basepath)
         assert isinstance(path, Path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         data = self.input if side == 'input' else self.output
         time_eq = 'equilibrium.time'
         if time_eq in data:
@@ -520,7 +525,7 @@ class omas_io(io):
                 if stem.endswith('_input'):
                     stem = stem[:-6]
                 time_tag = int(np.rint(time * 1000))
-                eqpath = path.parent / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
+                eqpath = path.parent.resolve() / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
                 self.generate_eqdsk_file(eqpath, time_index=ii, side=side, cocos=cocos, transpose=transpose)
 
 
