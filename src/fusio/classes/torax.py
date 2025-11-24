@@ -1054,6 +1054,42 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def add_pedestal_constant_transport(
+        self,
+        chi_i: float = 0.0,
+        chi_e: float = 0.0,
+        D_e: float = 0.0,
+        V_e: float = 0.0,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        wrho_array = self.input.get('pedestal.rho_norm_ped_top', None)
+        if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
+            models = self.input.attrs.get('map_combined_pedestal_models', [])
+            prefix = f'transport.pedestal_transport_models.{len(models):d}'
+            #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
+            wrho = float(wrho_array.mean().to_numpy())
+            xrho = np.linspace(wrho, 1.0, 25)
+            chiirho = np.zeros_like(xrho) + chi_i
+            chierho = np.zeros_like(xrho) + chi_e
+            derho = np.zeros_like(xrho) + D_e
+            verho = np.zeros_like(xrho) + V_e
+            newcoords['rho_ped_const'] = xrho.flatten()
+            newvars[f'{prefix}.chi_i'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(chiirho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.chi_e'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(chierho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(derho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(verho, axis=0), len(time), axis=0))
+            newattrs[f'{prefix}.model_name'] = 'constant'
+            #newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
+            models.append('constant')
+            newattrs['map_combined_pedestal_models'] = models
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+
+
     def add_pedestal_exponential_transport(
         self,
         chiscale: float,
