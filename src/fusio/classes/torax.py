@@ -1067,9 +1067,9 @@ class torax_io(io):
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        wrho_array = self.input.get('pedestal.rho_norm_ped_top', None)
-        if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
-            models = self.input.attrs.get('map_combined_pedestal_models', [])
+        wrho_array = data.get('pedestal.rho_norm_ped_top', None)
+        if data.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
+            models = data.attrs.get('map_combined_pedestal_models', [])
             prefix = f'transport.pedestal_transport_models.{len(models):d}'
             #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
             wrho = float(wrho_array.mean().to_numpy())
@@ -1104,9 +1104,9 @@ class torax_io(io):
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        wrho_array = self.input.get('pedestal.rho_norm_ped_top', None)
-        if self.input.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
-            models = self.input.attrs.get('map_combined_pedestal_models', [])
+        wrho_array = data.get('pedestal.rho_norm_ped_top', None)
+        if data.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
+            models = data.attrs.get('map_combined_pedestal_models', [])
             prefix = f'transport.pedestal_transport_models.{len(models):d}'
             #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
             wrho = float(wrho_array.mean().to_numpy())
@@ -1123,6 +1123,45 @@ class torax_io(io):
             newattrs[f'{prefix}.model_name'] = 'constant'
             #newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
             models.append('constant')
+            newattrs['map_combined_pedestal_models'] = models
+        self.update_input_coords(newcoords)
+        self.update_input_data_vars(newvars)
+        self.update_input_attrs(newattrs)
+
+
+    def add_pedestal_critical_gradient_transport(
+        self,
+        alpha: float = 2.0,
+        chi_grad: float = 2.0,
+        ei_ratio: float = 2.0,
+        D_ratio: float = 5.0,
+        peaking: float = 0.0,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        wrho_array = data.get('pedestal.rho_norm_ped_top', None)
+        prefix = 'transport'
+        if data.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
+            models = data.attrs.get('map_combined_pedestal_models', [])
+            prefix = f'transport.pedestal_transport_models.{len(models):d}'
+            #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
+            wrho = float(wrho_array.mean().to_numpy())
+            xrho = np.linspace(wrho, 1.0, 25)
+            erho = np.zeros_like(xrho) + ei_ratio
+            drho = np.zeros_like(xrho) + D_ratio
+            prho = np.zeros_like(xrho) + peaking
+            newcoords['rho_ped_exp'] = xrho.flatten()
+            newvars[f'{prefix}.chi_e_i_ratio'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(erho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.chi_D_ratio'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.VR_D_ratio'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(prho, axis=0), len(time), axis=0))
+            newattrs[f'{prefix}.alpha'] = float(alpha)
+            newattrs[f'{prefix}.chi_stiff'] = float(chi_grad)
+            newattrs[f'{prefix}.model_name'] = 'CGM'
+            #newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
+            models.append('CGM')
             newattrs['map_combined_pedestal_models'] = models
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
