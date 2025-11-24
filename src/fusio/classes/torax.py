@@ -1137,6 +1137,7 @@ class torax_io(io):
         D_ratio: float = 5.0,
         peaking: float = 0.0,
     ) -> None:
+        # TODO: Currently does not work with TORAX-v1.1.1
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newcoords: MutableMapping[str, Any] = {}
