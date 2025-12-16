@@ -1714,8 +1714,8 @@ class gacode_io(io):
                 if 'magnetic_flux' in data:
                     data_vars['torfluxa'] = (['n'], data['magnetic_flux'].isel(radius=-1).sel(direction='toroidal', drop=True).to_numpy())
                     data_vars['polflux'] = (['n', 'rho'], data['magnetic_flux'].sel(direction='poloidal', drop=True).to_numpy())
-                if 'rmaj' in data:
-                    data_vars['rcentr'] = (['n'], data['rmaj'].isel(radius=0).to_numpy())
+                if 'r_geometric' in data:
+                    data_vars['rcentr'] = (['n'], data['r_geometric'].isel(radius=0).to_numpy())
                 if 'safety_factor' in data:
                     data_vars['q'] = (['n', 'rho'], data['safety_factor'].to_numpy())
                 if 'effective_charge' in data:
