@@ -350,6 +350,36 @@ class plasma_io(io):
                 self.update_output_data_vars(newvars)
 
 
+    def add_safety_factor_profile(
+        self,
+        q: ArrayLike,
+        r: ArrayLike,
+        base: str = 'poloidal',
+        side: str = 'input',
+    ) -> None:
+        data = self.input if side == 'input' else self.output
+        if 'magnetic_flux' in data:
+            newvars: MutableMapping[str, Any] = {}
+            root = 'poloidal' if base != 'toroidal' else 'toroidal'
+            fill = 'poloidal' if base == 'toroidal' else 'toroidal'
+            root_idx = self.directions.index(root)
+            fill_idx = self.directions.index(fill)
+            q_values = vectorized_numpy_interpolation(data['magnetic_flux'].sel(direction=root).to_numpy(), np.asarray(r), np.asarray(q), extrapolate=True)
+            newvars['safety_factor'] = (['time', 'radius'], q_values)
+            flux = data['magnetic_flux'].to_numpy()
+            if fill == 'poloidal':
+                flux[..., fill_idx] = vectorized_numpy_integration(q_values, flux[..., root_idx])
+            else:
+                flux[..., fill_idx] = vectorized_numpy_integration(1.0 / q_values, flux[..., root_idx])
+            newvars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
+            if side == 'input':
+                self.update_input_data_vars(newvars)
+            else:
+                self.update_output_data_vars(newvars)
+        else:
+            logger.error(f'No magnetic flux data found in {self.format} data! Aborting safety factor insertion...')
+
+
     def _compute_derived_coordinates(
         self,
         side: str = 'input',
@@ -384,9 +414,12 @@ class plasma_io(io):
             #contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
             contour_r = data['contour'].sel(grid='r')
             contour_z = data['contour'].sel(grid='z')
+            arc_length = trapezoid((data['contour'].differentiate('angle_geometric') ** 2 + data['contour'] ** 2).to_numpy() ** 0.5, x=data['angle_geometric'].to_numpy(), axis=-1)
+            surf_area = 2.0 * np.pi * data['r_geometric'].to_numpy() * arc_length
             xs_area = trapezoid(contour_r, x=contour_z, axis=-1)
             vol = 2.0 * np.pi * data['r_geometric'].to_numpy() * xs_area
             volp = vectorized_numpy_derivative(data['r_minor'].to_numpy(), vol)
+            newvars['surface_area'] = (['time', 'radius'], surf_area)
             newvars['cross_sectional_area'] = (['time', 'radius'], xs_area)
             newvars['volume'] = (['time', 'radius'], vol)
             newvars['dvolume_dr'] = (['time', 'radius'], volp)
@@ -1430,6 +1463,7 @@ class plasma_io(io):
         cls,
         obj: io,
         side: str = 'output',
+        window: Sequence[int | float] | None = None,
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
@@ -1459,6 +1493,13 @@ class plasma_io(io):
             data_vars: MutableMapping[str, Any] = {}
             attrs: MutableMapping[str, Any] = {}
             if 'n' in data and 'rho' in data:
+                time = data['time'].to_numpy() if 'time' in data else np.arange(len(data['n']))
+                time_window_indices = data['n'].to_numpy().astype(int)
+                if window is not None and len(window) >= 2:
+                    window_mask = (time >= window[0]) & (time <= window[-1])
+                    if np.any(window_mask):
+                        time_window_indices = data['n'].to_numpy().astype(int)[window_mask]
+                data = data.sel(n=time_window_indices).drop_duplicates('n')  # Fine because data is a copy
                 coords['time'] = data['time'].to_numpy() if 'time' in data else np.arange(len(data['n']))
                 coords['radius'] = data['rho'].to_numpy()
                 attrs['radius'] = 'rho_tor_norm'
@@ -1518,8 +1559,8 @@ class plasma_io(io):
                         polflux = -polflux
                     flux[..., 1] = polflux
                 data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
-                if 'q' in data:
-                    data_vars['safety_factor'] = (['time', 'radius'], data['q'].to_numpy())
+                #if 'q' in data:
+                #    data_vars['safety_factor'] = (['time', 'radius'], data['q'].to_numpy())
                 if 'name' in data:
                     velocity = np.repeat(np.expand_dims(np.zeros((len(coords['time']), len(coords['radius']), len(coords['ion']))), axis=-1), len(coords['direction']), axis=-1)
                     if 'vtor' in data:
@@ -1641,6 +1682,8 @@ class plasma_io(io):
                     coords['grid'] = ['r', 'z']
                     data_vars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], np.stack([r_contour, z_contour], axis=2))
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+            if 'q' in data and 'polflux' in data:
+                newobj.add_safety_factor_profile(data['q'].to_numpy(), data['polflux'].to_numpy(), base='poloidal', side='input')
         return newobj
 
 
@@ -1719,3 +1762,21 @@ class plasma_io(io):
             fig.tight_layout()
             fig.savefig(savepath)
             plt.close(fig)
+
+
+    @classmethod
+    def from_torax(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[int | float] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input if side == 'input' else obj.output
+            coords: MutableMapping[str, Any] = {}
+            data_vars: MutableMapping[str, Any] = {}
+            attrs: MutableMapping[str, Any] = {}
+            newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+        return newobj
