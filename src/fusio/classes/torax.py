@@ -2790,7 +2790,7 @@ class torax_io(io):
         cls,
         obj: io,
         side: str = 'output',
-        item: int = 0,
+        window: Sequence[int | float] | None = None,
         impurities: str = 'n_e_ratios',
         **kwargs: Any,
     ) -> Self:
@@ -2801,8 +2801,13 @@ class torax_io(io):
                 coords = {}
                 data_vars = {}
                 attrs: MutableMapping[str, Any] = {}
-                data = data.sel(n=item)
-                time = data.get('time', 0.0)
+                time = data['time'].to_numpy() if 'time' in data else np.arange(len(data['n'])).astype(float)
+                time_window_indices = data['n'].to_numpy().astype(int)
+                if window is not None and len(window) >= 2:
+                    window_mask = (time >= window[0]) & (time <= window[-1])
+                    if np.any(window_mask):
+                        time_window_indices = data['n'].to_numpy().astype(int)[window_mask]
+                data = data.sel(n=time_window_indices).drop_duplicates('n')  # Fine because data is a copy
                 attrs['numerics.t_initial'] = float(time)
                 coords['time'] = np.array([time]).flatten()
                 coords['rho'] = data['rho'].to_numpy().flatten()
