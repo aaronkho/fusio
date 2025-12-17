@@ -2808,15 +2808,16 @@ class torax_io(io):
                     if np.any(window_mask):
                         time_window_indices = data['n'].to_numpy().astype(int)[window_mask]
                 data = data.sel(n=time_window_indices).drop_duplicates('n')  # Fine because data is a copy
-                attrs['numerics.t_initial'] = float(time)
+                attrs['numerics.t_initial'] = float(time[0])
                 coords['time'] = np.array([time]).flatten()
                 coords['rho'] = data['rho'].to_numpy().flatten()
                 if 'z' in data and 'name' in data and 'type' in data and 'ni' in data:
                     species = []
                     density = []
-                    nfilt = (np.isclose(data['z'], 1.0) & (['fast' not in v for v in data['type'].to_numpy().flatten()]))
+                    nfilt = (np.isclose(data['z'], 1.0) & (data['type'] == '[therm]')).any('n')
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
+                        print(namelist)
                         nfuelsum = data['ni'].sel(name=namelist).sum('name')
                         for ii in range(len(namelist)):
                             species.append(namelist[ii])
@@ -2828,7 +2829,7 @@ class torax_io(io):
                     coords['main_ion'] = np.array(species).flatten()
                     data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.concatenate(density, axis=0))
                 if 'z' in data and 'mass' in data and 'ni' in data and 'ne' in data:
-                    nfilt = (~np.isclose(data['z'], 1.0))
+                    nfilt = ((data['z'] > 1.1) & (data['mass'] > 2.1)).any('n')
                     zeff = xr.ones_like(data['ne'])
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy().tolist()
@@ -2887,27 +2888,27 @@ class torax_io(io):
                             zeff = data['z_eff']
                         coords['impurity'] = np.array(impcoord).flatten()
                         data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(impfracs, axis=0))
-                    data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], np.expand_dims(zeff.to_numpy().flatten(), axis=0))
+                    data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 if 'current' in data:
-                    data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * np.expand_dims(data['current'].mean(), axis=0))
+                    data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * data['current'].to_numpy())
                 if 'ne' in data:
-                    data_vars['profile_conditions.n_e'] = (['time', 'rho'], np.expand_dims(1.0e19 * data['ne'].to_numpy().flatten(), axis=0))
+                    data_vars['profile_conditions.n_e'] = (['time', 'rho'], 1.0e19 * data['ne'].to_numpy())
                     attrs['profile_conditions.normalize_n_e_to_nbar'] = False
                     attrs['profile_conditions.n_e_nbar_is_fGW'] = False
                 if 'te' in data:
-                    data_vars['profile_conditions.T_e'] = (['time', 'rho'], np.expand_dims(data['te'].to_numpy().flatten(), axis=0))
+                    data_vars['profile_conditions.T_e'] = (['time', 'rho'], data['te'].to_numpy())
                 if 'ti' in data and 'z' in data:
-                    nfilt = (np.isclose(data['z'], 1.0) & (['fast' not in v for v in data['type'].to_numpy().flatten()]))
+                    nfilt = (np.isclose(data['z'], 1.0) & (data['type'] == '[therm]')).any('n')
                     tfuel = data['ti'].mean('name')
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
                         tfuel = data['ti'].sel(name=namelist).mean('name')
-                    data_vars['profile_conditions.T_i'] = (['time', 'rho'], np.expand_dims(tfuel.to_numpy().flatten(), axis=0))
+                    data_vars['profile_conditions.T_i'] = (['time', 'rho'], tfuel.to_numpy())
                 if 'polflux' in data:
                     attrs['use_psi'] = True
-                    data_vars['profile_conditions.psi'] = (['time', 'rho'], np.expand_dims(data['polflux'].to_numpy().flatten(), axis=0))
+                    data_vars['profile_conditions.psi'] = (['time', 'rho'], data['polflux'].to_numpy())
                 if 'q' in data:
-                    data_vars['profile_conditions.q'] = (['time', 'rho'], np.expand_dims(data['q'].to_numpy().flatten(), axis=0))
+                    data_vars['profile_conditions.q'] = (['time', 'rho'], data['q'].to_numpy())
                 # Place the sources
                 external_el_heat_source = None
                 external_ion_heat_source = None
@@ -2916,43 +2917,43 @@ class torax_io(io):
                 fusion_source = None
                 if 'qohme' in data and np.abs(data['qohme']).sum() != 0.0:
                     attrs['sources.ohmic.mode'] = 'PRESCRIBED'
-                    data_vars['sources.ohmic.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qohme'].to_numpy().flatten(), axis=0))
+                    data_vars['sources.ohmic.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qohme'].to_numpy())
                 if 'qbeame' in data and np.abs(data['qbeame']).sum() != 0.0:
                     if external_el_heat_source is None:
-                        external_el_heat_source = np.zeros_like(data['qbeame'].to_numpy().flatten())
-                    external_el_heat_source += 1.0e6 * data['qbeame'].to_numpy().flatten()
+                        external_el_heat_source = np.zeros_like(data['qbeame'].to_numpy())
+                    external_el_heat_source += 1.0e6 * data['qbeame'].to_numpy()
                 if 'qbeami' in data and np.abs(data['qbeami']).sum() != 0.0:
                     if external_ion_heat_source is None:
-                        external_ion_heat_source = np.zeros_like(data['qbeami'].to_numpy().flatten())
-                    external_ion_heat_source += 1.0e6 * data['qbeami'].to_numpy().flatten()
+                        external_ion_heat_source = np.zeros_like(data['qbeami'].to_numpy())
+                    external_ion_heat_source += 1.0e6 * data['qbeami'].to_numpy()
                 if 'qrfe' in data and np.abs(data['qrfe']).sum() != 0.0:
                     if external_el_heat_source is None:
-                        external_el_heat_source = np.zeros_like(data['qrfe'].to_numpy().flatten())
-                    external_el_heat_source += 1.0e6 * data['qrfe'].to_numpy().flatten()
+                        external_el_heat_source = np.zeros_like(data['qrfe'].to_numpy())
+                    external_el_heat_source += 1.0e6 * data['qrfe'].to_numpy()
                 if 'qrfi' in data and np.abs(data['qrfi']).sum() != 0.0:
                     if external_ion_heat_source is None:
-                        external_ion_heat_source = np.zeros_like(data['qrfi'].to_numpy().flatten())
-                    external_ion_heat_source += 1.0e6 * data['qrfi'].to_numpy().flatten()
+                        external_ion_heat_source = np.zeros_like(data['qrfi'].to_numpy())
+                    external_ion_heat_source += 1.0e6 * data['qrfi'].to_numpy()
                 if 'qsync' in data and np.abs(data['qsync']).sum() != 0.0:
                     attrs['sources.cyclotron_radiation.mode'] = 'PRESCRIBED'
-                    data_vars['sources.cyclotron_radiation.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qsync'].to_numpy().flatten(), axis=0))
+                    data_vars['sources.cyclotron_radiation.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qsync'].to_numpy())
                 if 'qbrem' in data and np.abs(data['qbrem']).sum() != 0.0:
                     attrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
-                    data_vars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qbrem'].to_numpy().flatten(), axis=0))
+                    data_vars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qbrem'].to_numpy())
                 if 'qline' in data and np.abs(data['qline']).sum() != 0.0:
                     attrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
-                    data_vars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qline'].to_numpy().flatten(), axis=0))
+                    data_vars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qline'].to_numpy())
                 if 'qfuse' in data and np.abs(data['qfuse']).sum() != 0.0:
                     if fusion_source is None:
-                        fusion_source = np.zeros_like(data['qfuse'].to_numpy().flatten())
-                    fusion_source += 1.0e6 * data['qfuse'].to_numpy().flatten()
+                        fusion_source = np.zeros_like(data['qfuse'].to_numpy())
+                    fusion_source += 1.0e6 * data['qfuse'].to_numpy()
                 if 'qfusi' in data and np.abs(data['qfusi']).sum() != 0.0:
                     if fusion_source is None:
-                        fusion_source = np.zeros_like(data['qfuse'].to_numpy().flatten())
-                    fusion_source += 1.0e6 * data['qfuse'].to_numpy().flatten()
+                        fusion_source = np.zeros_like(data['qfuse'].to_numpy())
+                    fusion_source += 1.0e6 * data['qfuse'].to_numpy()
                 if 'qei' in data and np.abs(data['qei']).sum() != 0.0:
                     attrs['sources.ei_exchange.mode'] = 'PRESCRIBED'
-                    data_vars['sources.ei_exchange.prescribed_values'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['qei'].to_numpy().flatten(), axis=0))
+                    data_vars['sources.ei_exchange.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qei'].to_numpy())
                 #if 'qione' in data and np.abs(data['qione']).sum() != 0.0:
                 #    pass
                 #if 'qioni' in data and np.abs(data['qioni']).sum() != 0.0:
@@ -2960,56 +2961,56 @@ class torax_io(io):
                 #if 'qcxi' in data and np.abs(data['qcxi']).sum() != 0.0:
                 #    pass
                 if 'jbs' in data and np.abs(data['jbs']).sum() != 0.0:
-                    data_vars['profile_conditions.j_bootstrap'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['jbs'].to_numpy().flatten(), axis=0))
+                    data_vars['profile_conditions.j_bootstrap'] = (['time', 'rho'], 1.0e6 * data['jbs'].to_numpy())
                     if external_current_source is None:
-                        external_current_source = np.zeros_like(data['jbs'].to_numpy().flatten())
-                    external_current_source += 1.0e6 * data['jbs'].to_numpy().flatten()
+                        external_current_source = np.zeros_like(data['jbs'].to_numpy())
+                    external_current_source += 1.0e6 * data['jbs'].to_numpy()
                 #if 'jbstor' in data and data['jbstor'].sum() != 0.0:
                 #    pass
                 if 'johm' in data and np.abs(data['johm']).sum() != 0.0:
-                    data_vars['profile_conditions.j_ohmic'] = (['time', 'rho'], np.expand_dims(1.0e6 * data['johm'].to_numpy().flatten(), axis=0))
+                    data_vars['profile_conditions.j_ohmic'] = (['time', 'rho'], 1.0e6 * data['johm'].to_numpy())
                     if external_current_source is None:
-                        external_current_source = np.zeros_like(data['johm'].to_numpy().flatten())
-                    external_current_source += 1.0e6 * data['johm'].to_numpy().flatten()
+                        external_current_source = np.zeros_like(data['johm'].to_numpy())
+                    external_current_source += 1.0e6 * data['johm'].to_numpy()
                 if 'jrf' in data and np.abs(data['jrf']).sum() != 0.0:
                     if external_current_source is None:
-                        external_current_source = np.zeros_like(data['jrf'].to_numpy().flatten())
-                    external_current_source += 1.0e6 * data['jrf'].to_numpy().flatten()
+                        external_current_source = np.zeros_like(data['jrf'].to_numpy())
+                    external_current_source += 1.0e6 * data['jrf'].to_numpy()
                 if 'jnb' in data and np.abs(data['jnb']).sum() != 0.0:
                     if external_current_source is None:
-                        external_current_source = np.zeros_like(data['jnb'].to_numpy().flatten())
-                    external_current_source += 1.0e6 * data['jnb'].to_numpy().flatten()
+                        external_current_source = np.zeros_like(data['jnb'].to_numpy())
+                    external_current_source += 1.0e6 * data['jnb'].to_numpy()
                 if 'qpar_beam' in data and np.abs(data['qpar_beam']).sum() != 0.0:
                     if external_particle_source is None:
-                        external_particle_source = np.zeros_like(data['qpar_beam'].to_numpy().flatten())
-                    external_particle_source += data['qpar_beam'].to_numpy().flatten()
+                        external_particle_source = np.zeros_like(data['qpar_beam'].to_numpy())
+                    external_particle_source += data['qpar_beam'].to_numpy()
                 if 'qpar_wall' in data and np.abs(data['qpar_wall']).sum() != 0.0:
                     if external_particle_source is None:
-                        external_particle_source = np.zeros_like(data['qpar_wall'].to_numpy().flatten())
-                    external_particle_source += data['qpar_wall'].to_numpy().flatten()
+                        external_particle_source = np.zeros_like(data['qpar_wall'].to_numpy())
+                    external_particle_source += data['qpar_wall'].to_numpy()
                 #if 'qmom' in data and np.abs(data['qmom']).sum() != 0.0:
                 #    pass
                 if external_el_heat_source is not None:
                     attrs['use_generic_heat'] = True
                     attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
-                    data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], np.expand_dims(external_el_heat_source, axis=0))
+                    data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], external_el_heat_source)
                 if external_ion_heat_source is not None:
                     attrs['use_generic_heat'] = True
                     attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
-                    data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], np.expand_dims(external_ion_heat_source, axis=0))
+                    data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], external_ion_heat_source)
                 if external_particle_source is not None:
                     attrs['use_generic_particle'] = True
                     attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
-                    data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_particle_source, axis=0))
+                    data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], external_particle_source)
                 if external_current_source is not None:
                     attrs['use_generic_current'] = True
                     attrs['sources.generic_current.mode'] = 'PRESCRIBED'
-                    data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], np.expand_dims(external_current_source, axis=0))
+                    data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], external_current_source)
                     attrs['sources.generic_current.use_absolute_current'] = True
                 if fusion_source is not None:
                     attrs['use_fusion'] = True
                     attrs['sources.fusion.mode'] = 'PRESCRIBED'
-                    data_vars['sources.fusion.prescribed_values'] = (['time', 'rho'], np.expand_dims(fusion_source, axis=0))
+                    data_vars['sources.fusion.prescribed_values'] = (['time', 'rho'], fusion_source)
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
 
