@@ -2429,33 +2429,42 @@ class torax_io(io):
                 data_vars['Rmin'] = (['time', 'rho'], np.repeat(np.expand_dims(data['a_minor'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
             if 'B_0' in data:
                 data_vars['Bo'] = (['time', 'rho'], np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
-                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
-                psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True))
-                bunit = (psi.differentiate('rho_face_norm') * data['q']).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'}) / (np.pi * (data['R_out'] - data['R_in'])) / drdrho
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True)).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
+                bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
                 attrs['b_unit'] = bunit.to_numpy()
                 attrs['b_zero'] = np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1)
             if 'R_out' in data and 'R_in' in data:
                 data_vars['x'] = (['time', 'rho'], ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']}).to_numpy())
             if 'n_e' in data:
-                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
-                data_vars['ne'] = (['time', 'rho'], 1.0e-19 * data['n_e'].interp({'rho_norm': coords['rho']}).to_numpy())
-                data_vars['Ane'] = (['time', 'rho'], (-data['R_major'] * data['n_e'].differentiate('rho_norm') / data['n_e'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                norm = -1.0 * data['R_major'].interp({'rho_norm': coords['rho']})
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                prof = data['n_e'].interp({'rho_norm': coords['rho']})
+                data_vars['ne'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
+                data_vars['Ane'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
             if 'T_e' in data:
-                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
-                data_vars['Te'] = (['time', 'rho'], data['T_e'].interp({'rho_norm': coords['rho']}).to_numpy())  # keV
-                data_vars['Ate'] = (['time', 'rho'], (-data['R_major'] * data['T_e'].differentiate('rho_norm') / data['T_e'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                norm = -1.0 * data['R_major'].interp({'rho_norm': coords['rho']})
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                prof = data['T_e'].interp({'rho_norm': coords['rho']})
+                data_vars['Te'] = (['time', 'rho'], prof.to_numpy())  # keV
+                data_vars['Ate'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
             if 'A_i' in data:
                 data_vars['Ai0'] = (['time', 'rho'], np.repeat(np.expand_dims(data['A_i'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
             if 'Z_i' in data:
                 data_vars['Zi0'] = (['time', 'rho'], data['Z_i'].interp({'rho_norm': coords['rho']}).to_numpy())
             if 'n_i' in data:
-                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                norm = -1.0 * data['R_major'].interp({'rho_norm': coords['rho']})
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                prof = data['n_i'].interp({'rho_norm': coords['rho']})
                 data_vars['ni0'] = (['time', 'rho'], (data['n_i'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
-                data_vars['Ani0'] = (['time', 'rho'], (-data['R_major'] * data['n_i'].differentiate('rho_norm') / data['n_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                data_vars['Ani0'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
             if 'T_i' in data:
-                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
-                data_vars['Ti0'] = (['time', 'rho'], data['T_i'].interp({'rho_norm': coords['rho']}).to_numpy())  # keV
-                data_vars['Ati0'] = (['time', 'rho'], (-data['R_major'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                norm = -1.0 * data['R_major'].interp({'rho_norm': coords['rho']})
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                prof = data['T_i'].interp({'rho_norm': coords['rho']})
+                data_vars['Ti0'] = (['time', 'rho'], prof.to_numpy())  # keV
+                data_vars['Ati0'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
             nion = 1
             if full_impurities:
                 for j, symbol in enumerate(data.get('impurity_symbol', xr.DataArray()).to_numpy()):
@@ -2467,14 +2476,18 @@ class torax_io(io):
                     if 'Z_impurity_species' in data:
                         data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity_species'].sel(impurity_symbol=symbol, drop=True).to_numpy())
                     if 'n_impurity_species' in data:
-                        drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm').interp({'rho_norm': coords['rho']}).rename({'rho_norm': 'rho_cell_norm'})
-                        ne = data['n_e'].interp({'rho_norm': coords['rho']}).rename({'rho_norm': 'rho_cell_norm'})
-                        data_vars[f'ni{nion:d}'] = (['time', 'rho'], (data['n_impurity_species'].sel(impurity_symbol=symbol, drop=True) / ne).to_numpy())
-                        data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (-data['R_major'] * (data['n_impurity_species'].differentiate('rho_cell_norm') / data['n_impurity_species']).sel(impurity_symbol=symbol, drop=True) / drdrho).to_numpy())
+                        denom = data['n_e'].interp({'rho_norm': coords['rho']})
+                        norm = -1.0 * data['R_major'].interp({'rho_norm': coords['rho']})
+                        drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                        prof = data['n_impurity_species'].sel(impurity_symbol=symbol, drop=True).interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+                        data_vars[f'ni{nion:d}'] = (['time', 'rho'], (prof / denom).to_numpy())
+                        data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
                     if 'T_i' in data:
-                        drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
-                        data_vars[f'Ti{nion:d}'] = (['time', 'rho'], data['T_i'].interp({'rho_norm': coords['rho']}).to_numpy())  # keV
-                        data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (-data['R_major'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                        norm = -1.0 * data['R_major'].interp({'rho_norm': coords['rho']})
+                        drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                        prof = data['T_i'].interp({'rho_norm': coords['rho']})
+                        data_vars[f'Ti{nion:d}'] = (['time', 'rho'], prof.to_numpy())  # keV
+                        data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
                     nion += 1
             else:
                 if 'A_impurity' in data:
@@ -2482,28 +2495,32 @@ class torax_io(io):
                 if 'Z_impurity' in data:
                     data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity'].interp({'rho_norm': coords['rho']}).to_numpy())
                 if 'n_impurity' in data:
-                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                    norm = -1.0 * data['R_major'].interp({'rho_norm': coords['rho']})
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                    prof = data['n_impurity'].interp({'rho_norm': coords['rho']})
                     data_vars[f'ni{nion:d}'] = (['time', 'rho'], (data['n_impurity'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
-                    data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (-data['R_major'] * data['n_impurity'].differentiate('rho_norm') / data['n_impurity'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                    data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
                 if 'T_i' in data:
-                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
-                    data_vars[f'Ti{nion:d}'] = (['time', 'rho'], data['T_i'].interp({'rho_norm': coords['rho']}).to_numpy())  # keV
-                    data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (-data['R_major'] * data['T_i'].differentiate('rho_norm') / data['T_i'] / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                    norm = -1.0 * data['R_major'].interp({'rho_norm': coords['rho']})
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                    prof = data['T_i'].interp({'rho_norm': coords['rho']})
+                    data_vars[f'Ti{nion:d}'] = (['time', 'rho'], prof.to_numpy())  # keV
+                    data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
                     nion += 1
             if 'q' in data:
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 data_vars['q'] = (['time', 'rho'], q.to_numpy())
             if 'magnetic_shear' in data:
-                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 srho = data['magnetic_shear'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
-                sfac = (((data['R_out'] - data['R_in']) / 2.0 / data['rho_norm']) / drdrho).interp({'rho_norm': coords['rho']})
+                sfac = ((data['R_out'] - data['R_in']) / 2.0 / data['rho_norm']).interp({'rho_norm': coords['rho']}) / drdrho
                 data_vars['smag'] = (['time', 'rho'], (srho * sfac).fillna(0.0).to_numpy())
             if 'q' in data:
-                drdrho = ((data['R_out'] - data['R_in']) / 2.0).differentiate('rho_norm')
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
-                pprime = c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i']).differentiate('rho_norm')
-                prho = (-2.0 * c['mu'] * data['R_major'] * pprime / (data['B_0'] ** 2) / drdrho).interp({'rho_norm': coords['rho']})
-                data_vars['alpha'] = (['time', 'rho'], ((q ** 2) * prho).to_numpy())
+                pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                prho = (q ** 2) * (-2.0 * c['mu'] * data['R_major'].interp({'rho_norm': coords['rho']}) * pprime / (data['B_0'] ** 2) / drdrho)
+                data_vars['alpha'] = (['time', 'rho'], prho.fillna(0.0).to_numpy())
             # Use internal nuei calc
         return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
 
@@ -2623,6 +2640,7 @@ class torax_io(io):
                 srho = data['magnetic_shear'].interp({'rho_face_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_face_norm': 'rho_norm'})
                 sfac = ((data['R_out'] - data['R_in']) / 2.0 / data['rho_norm']).interp({'rho_norm': coords['rho']}) / drdrho
                 data_vars['Q_PRIME_LOC'] = (['time', 'rho'], ((q ** 2 / roa ** 2) * srho * sfac).fillna(0.0).to_numpy())
+                data_vars[r'#S'] = (['time', 'rho'], (srho * sfac).to_numpy())
             if 'q' in data:
                 roa = ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']})
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
@@ -2630,7 +2648,9 @@ class torax_io(io):
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
                 pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
-                data_vars['P_PRIME_LOC'] = (['time', 'rho'], (q * (2.0 * c['mu'] / (8.0 * np.pi)) * (data['a_minor'] / roa) * pprime / (bunit ** 2) / drdrho).fillna(0.0).to_numpy())
+                prho = q * (2.0 * c['mu'] / (8.0 * np.pi)) * (data['a_minor'] / roa) * pprime / (bunit ** 2) / drdrho
+                data_vars['P_PRIME_LOC'] = (['time', 'rho'], prho.fillna(0.0).to_numpy())
+                data_vars[r'#BUNIT_BY_BREF'] = (['time', 'rho'], (bunit / data['B_0']).to_numpy())
                 attrs['b_unit'] = bunit.to_numpy()
                 attrs['b_zero'] = np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1)
             if 'n_e' in data and 'T_e' in data:
