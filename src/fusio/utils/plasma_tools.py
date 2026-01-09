@@ -47,6 +47,7 @@ mu_si = 4.0e-7 * np.pi   # H/m
 eps_si = 8.85419e-12     # F/m
 me_si = 5.4858e-4 * u_si
 mp_si = (1.0 + 7.2764e-3) * u_si
+md_si = 2.0141 * u_si
 
 
 def constants_si():
@@ -57,6 +58,7 @@ def constants_si():
         'eps': eps_si,
         'me': me_si,
         'mp': mp_si,
+        'md': md_si,
     }
 
 
