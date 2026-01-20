@@ -2435,6 +2435,7 @@ class torax_io(io):
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
                 attrs['b_unit'] = bunit.to_numpy()
                 attrs['b_zero'] = np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1)
+                data_vars[r'#Bunit_by_Bo'] = (['time', 'rho'], (bunit / data['B_0']).to_numpy())
             if 'R_out' in data and 'R_in' in data:
                 data_vars['x'] = (['time', 'rho'], ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']}).to_numpy())
             if 'n_e' in data:
@@ -2640,7 +2641,7 @@ class torax_io(io):
                 srho = data['magnetic_shear'].interp({'rho_face_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_face_norm': 'rho_norm'})
                 sfac = ((data['R_out'] - data['R_in']) / 2.0 / data['rho_norm']).interp({'rho_norm': coords['rho']}) / drdrho
                 data_vars['Q_PRIME_LOC'] = (['time', 'rho'], ((q ** 2 / roa ** 2) * srho * sfac).fillna(0.0).to_numpy())
-                data_vars[r'#S'] = (['time', 'rho'], (srho * sfac).to_numpy())
+                data_vars['SHAT_SA'] = (['time', 'rho'], (srho * sfac).to_numpy())
             if 'q' in data:
                 roa = ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']})
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
