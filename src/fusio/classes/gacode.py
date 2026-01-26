@@ -1413,7 +1413,7 @@ class gacode_io(io):
                     newlines.append(' '.join([f'{val:14.7E}' for val in np.atleast_1d(wdata[title].values)]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
-            for title in list(wdata.coords) + list(wdata.data_vars):
+            for title in list(wdata.coords.keys()) + list(wdata.data_vars.keys()):
                 newlines = []
                 if title not in processed_titles:
                     newtitle = title
