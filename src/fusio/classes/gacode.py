@@ -575,6 +575,8 @@ class gacode_io(io):
             newvars['geo_bt'] = (['n', 'rho'], bt[i1] + (bt[i2] - bt[i1]) * ztheta)
             denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1] / b[:-1], axis=0)
             denom[..., 0] = 2.0 * denom[..., 1] - denom[..., 2]
+            #newvars['gradr_miller_debug'] = (['n', 'rho'], np.mean(grad_r, axis=0))
+            #newvars['bp_miller_debug'] = (['n', 'rho'], np.mean(bp, axis=0))
             newvars['gradr_miller'] = (['n', 'rho'], np.sum(grad_r[:-1] * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bp2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bt2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
@@ -643,6 +645,7 @@ class gacode_io(io):
             newvars['gradr_miller'][1][..., 0] = 1.0
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
+            newvars['jac_surface'] = (['theta', 'n', 'rho'], j_r)
             newvars['surfxs'] = (['n', 'rho'], trapezoid(r, x=z, axis=0))
             newvars['r_out'] = (['n', 'rho'], np.nanmax(r, axis=0))
             newvars['r_in'] = (['n', 'rho'], np.nanmin(r, axis=0))
