@@ -1705,7 +1705,6 @@ class torax_io(io):
         newattrs['mhd.sawtooth.crash_step_duration'] = float(deltat)
         newattrs['mhd.sawtooth.trigger_model.model_name'] = 'simple'
         newattrs['mhd.sawtooth.redistribution_model.model_name'] = 'simple'
-        newattrs['mhd.sawtooth.crash_step_duration'] = 1.0e-3
         self.update_input_attrs(newattrs)
 
 
