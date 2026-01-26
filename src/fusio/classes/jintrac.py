@@ -110,6 +110,7 @@ class jintrac_io(io):
         self.autoformat()
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _pairwise(
         self,
         iterable: Iterable,
@@ -119,6 +120,7 @@ class jintrac_io(io):
         return zip(a, b)
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _decode_spec(
         self,
         spec: str,
@@ -136,6 +138,7 @@ class jintrac_io(io):
         return label, dformat, npoints, nlines
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _decode_metadata(
         self,
         raw: Sequence[bytes],
@@ -151,6 +154,7 @@ class jintrac_io(io):
         return meta
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _decode_block(
         self,
         block: Sequence[bytes],
@@ -230,6 +234,7 @@ class jintrac_io(io):
         return var_label.lower(), decoded_var, var_metadata, corrupted
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _decode_section(self, section, sec_num, endianness='>', metadata=None, data_start_num=-1):
         # A section is the entire portion between lines beginning with **
         known_info = metadata if isinstance(metadata, dict) else {}
@@ -268,6 +273,7 @@ class jintrac_io(io):
         return section_header, section_data, section_info
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _read_jintrac_file(self, path):
 
         coords = {}
@@ -373,6 +379,7 @@ class jintrac_io(io):
         return xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _write_jintrac_binary_file(self, data, output_file='custom'):
 
         if not isinstance(data, dict):
@@ -499,6 +506,7 @@ class jintrac_io(io):
         return status
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _remove_duplicate_times(self, data, keep='first'):
         time_vector = None
         if 'Traces' in data and 'PPF Base Vectors' in data and 'tvec1' in data['PPF Base Vectors']:
@@ -522,6 +530,7 @@ class jintrac_io(io):
         return data
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     def _standardize_data_representation(self, data, header_info, endianness):
         data['sections'] = [key for key in data.keys() if key != 'info']
         for key in data['sections']:
@@ -553,6 +562,7 @@ class jintrac_io(io):
         return data
 
 
+    # Original version in https://gitlab.com/jintrac/jetto-pythontools
     @classmethod
     def create_empty_structure(cls, database, shot, version_tag=None, extfile=False):
 
