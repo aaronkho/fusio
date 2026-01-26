@@ -2888,7 +2888,7 @@ class torax_io(io):
                 if 'z' in data and 'name' in data and 'type' in data and 'ni' in data:
                     species = []
                     density = []
-                    nfilt = (np.isclose(data['z'], 1.0) & (data['type'] == '[therm]')).any('n')
+                    nfilt = ((data['type'] == '[therm]') & np.isclose(data['z'], 1.0)).any('n')
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
                         print(namelist)
@@ -2972,7 +2972,7 @@ class torax_io(io):
                 if 'te' in data:
                     data_vars['profile_conditions.T_e'] = (['time', 'rho'], data['te'].to_numpy())
                 if 'ti' in data and 'z' in data:
-                    nfilt = (np.isclose(data['z'], 1.0) & (data['type'] == '[therm]')).any('n')
+                    nfilt = ((data['type'] == '[therm]') & np.isclose(data['z'], 1.0)).any('n')
                     tfuel = data['ti'].mean('name')
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
