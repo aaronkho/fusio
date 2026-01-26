@@ -1383,6 +1383,7 @@ class gacode_io(io):
             lines = [f'{line:<70}\n' for line in header]
             lines += ['#\n']
             processed_titles.append('header')
+            title: Any = None
             for title in self.titles_singleInt:
                 newlines = []
                 if title in wdata:
