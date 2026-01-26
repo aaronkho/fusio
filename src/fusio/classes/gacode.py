@@ -1383,6 +1383,7 @@ class gacode_io(io):
             lines = [f'{line:<70}\n' for line in header]
             lines += ['#\n']
             processed_titles.append('header')
+            title: Any = None
             for title in self.titles_singleInt:
                 newlines = []
                 if title in wdata:
@@ -1413,7 +1414,8 @@ class gacode_io(io):
                     newlines.append(' '.join([f'{val:14.7E}' for val in np.atleast_1d(wdata[title].values)]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
-            for title in list(wdata.coords) + list(wdata.data_vars):
+            data_fields = [k for k in wdata.coords.keys()] + [k for k in wdata.data_vars.keys()]
+            for title in data_fields:
                 newlines = []
                 if title not in processed_titles:
                     newtitle = title
