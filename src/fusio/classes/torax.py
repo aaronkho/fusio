@@ -2422,22 +2422,25 @@ class torax_io(io):
             if 'time' in data and time is not None:
                 data = data.sel({'time': np.array([time]).flatten()}, method='nearest').drop_duplicates('time')
             coords['time'] = data['time'].to_numpy().flatten()
-            coords['rho'] = data['rho_cell_norm'].to_numpy().flatten()
+            coords['rho'] = data['rho_cell_norm'].to_numpy().flatten() if use_cell_grid else data['rho_face_norm'].to_numpy().flatten()
             if 'R_major' in data:
-                data_vars['Ro'] = (['time', 'rho'], np.repeat(np.expand_dims(data['R_major'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+                data_vars['Ro'] = (['time', 'rho'], np.repeat(np.expand_dims(data['R_major'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))  # Not consistent with QuaLiKiz manual, but consistent with TORAX
             if 'a_minor' in data:
                 data_vars['Rmin'] = (['time', 'rho'], np.repeat(np.expand_dims(data['a_minor'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
             if 'B_0' in data:
-                data_vars['Bo'] = (['time', 'rho'], np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+                data_vars['Bo'] = (['time', 'rho'], np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))  # Not consistent with QuaLiKiz manual, but consistent with TORAX
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True)).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
+                bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
                 attrs['b_unit'] = bunit.to_numpy()
                 attrs['b_zero'] = np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1)
                 data_vars[r'#Bunit_by_Bo'] = (['time', 'rho'], (bunit / data['B_0']).to_numpy())
             if 'R_out' in data and 'R_in' in data:
-                data_vars['x'] = (['time', 'rho'], ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']}).to_numpy())
+                roa = ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']})
+                roa = roa.where(abs(roa) > 1.0e-5, 1.0e-5)
+                data_vars['x'] = (['time', 'rho'], roa.to_numpy())
             if 'n_e' in data:
                 norm = -1.0 * data['R_major']
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
@@ -2543,13 +2546,15 @@ class torax_io(io):
                 data = data.sel({'time': np.array([time]).flatten()}, method='nearest').drop_duplicates('time')
             coords['time'] = data['time'].to_numpy().flatten()
             coords['rho'] = data['rho_cell_norm'].to_numpy().flatten() if use_cell_grid else data['rho_face_norm'].to_numpy().flatten()
+            data_vars[r'#RHO'] = (['time', 'rho'], np.repeat(np.expand_dims(coords['rho'], axis=0), len(coords['time']), axis=0))
             if 'R_out' in data and 'R_in' in data and 'a_minor' in data:
-                roa = (data['R_out'] - data['R_in']) / 2.0 / data['a_minor']
-                rmoa = (data['R_out'] + data['R_in']) / 2.0 / data['a_minor']
+                roa = ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']})
+                rmoa = ((data['R_out'] + data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']})
                 drdrho = roa.differentiate('rho_norm')
-                data_vars['RMIN_LOC'] = (['time', 'rho'], roa.interp({'rho_norm': coords['rho']}).to_numpy())
-                data_vars['RMAJ_LOC'] = (['time', 'rho'], rmoa.interp({'rho_norm': coords['rho']}).to_numpy())
-                data_vars['DRMAJDX_LOC'] = (['time', 'rho'], (rmoa.differentiate('rho_norm') / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
+                roa = roa.where(abs(roa) > 1.0e-5, 1.0e-5)
+                data_vars['RMIN_LOC'] = (['time', 'rho'], roa.to_numpy())
+                data_vars['RMAJ_LOC'] = (['time', 'rho'], rmoa.to_numpy())
+                data_vars['DRMAJDX_LOC'] = (['time', 'rho'], (rmoa.differentiate('rho_norm') / drdrho).to_numpy())
                 if 'z_magnetic_axis' in data:
                     data_vars['ZMAJ_LOC'] = (['time', 'rho'], np.repeat(np.expand_dims(data['z_magnetic_axis'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
                     #data_vars['DZMAJDX_LOC'] = (['time', 'rho'], (data['Z'].differentiate('rho_norm') / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
@@ -2636,8 +2641,8 @@ class torax_io(io):
                 data_vars['Q_LOC'] = (['time', 'rho'], q.to_numpy())
             if 'magnetic_shear' in data:
                 roa = ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']})
-                roa.loc[dict(rho_norm=0)] = 1.0e-5
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                roa = roa.where(abs(roa) > 1.0e-5, 1.0e-5)
                 q = data['q'].interp({'rho_face_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_face_norm': 'rho_norm'})
                 srho = data['magnetic_shear'].interp({'rho_face_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_face_norm': 'rho_norm'})
                 sfac = ((data['R_out'] - data['R_in']) / 2.0 / data['rho_norm']).interp({'rho_norm': coords['rho']}) / drdrho
@@ -2645,8 +2650,8 @@ class torax_io(io):
                 data_vars['SHAT_SA'] = (['time', 'rho'], (srho * sfac).fillna(0.0).to_numpy())
             if 'q' in data:
                 roa = ((data['R_out'] - data['R_in']) / 2.0 / data['a_minor']).interp({'rho_norm': coords['rho']})
-                roa.loc[dict(rho_norm=0)] = 1.0e-5
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                roa = roa.where(abs(roa) > 1.0e-5, 1.0e-5)
                 psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True)).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
