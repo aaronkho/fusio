@@ -2408,7 +2408,8 @@ class torax_io(io):
 
     def to_qualikiz_parameters(
         self,
-        time: float | NDArray | None = None,
+        time: float | Sequence[float] | NDArray | None = None,
+        rho: float | Sequence[float] | NDArray | None = None,
         full_impurities: bool = False,
         use_cell_grid: bool = False,
     ) -> xr.Dataset:
@@ -2511,6 +2512,7 @@ class torax_io(io):
                     data_vars[f'Ti{nion:d}'] = (['time', 'rho'], prof.to_numpy())  # keV
                     data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).interp({'rho_norm': coords['rho']}).to_numpy())
                     nion += 1
+            data_vars['nion'] = (['time'], np.repeat(np.array([nion]), len(coords['time']), axis=0))
             if 'q' in data:
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 data_vars['q'] = (['time', 'rho'], q.to_numpy())
@@ -2526,12 +2528,16 @@ class torax_io(io):
                 prho = (q ** 2) * (-2.0 * c['mu'] * data['R_major'] * pprime / (data['B_0'] ** 2) / drdrho)
                 data_vars['alpha'] = (['time', 'rho'], prho.fillna(0.0).to_numpy())
             # Use internal nuei calc
-        return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+        out = xr.Dataset(coords=coords, data_vars=data_vars) #, attrs=attrs)
+        if 'rho' in out and rho is not None:
+            out = out.sel({'rho': np.array([rho]).flatten()}, method='nearest').drop_duplicates('rho')
+        return out
 
 
     def to_tglf_parameters(
         self,
-        time: float | NDArray | None = None,
+        time: float | Sequence[float] | NDArray | None = None,
+        rho: float | Sequence[float] | NDArray | None = None,
         full_impurities: bool = False,
         use_cell_grid: bool = False,
     ) -> xr.Dataset:
@@ -2693,7 +2699,10 @@ class torax_io(io):
                 data_vars['S_DELTA_LOC'] = (['time', 'rho'], sdelta.to_numpy())
                 data_vars['ZETA_LOC'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
                 data_vars['S_ZETA_LOC'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
-        return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+        out = xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+        if 'rho' in out and rho is not None:
+            out = out.sel({'rho': np.array([rho]).flatten()}, method='nearest').drop_duplicates('rho')
+        return out
 
 
     def print_summary(
