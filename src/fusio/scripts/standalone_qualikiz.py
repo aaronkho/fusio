@@ -7,9 +7,6 @@ from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, 
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 
-from qualikiz_tools.qualikiz_io import inputfiles as qualikiz_inputtools
-from qualikiz_tools.qualikiz_io import qualikizrun as qualikiz_runtools
-
 logger = logging.getLogger('fusio')
 
 
@@ -21,10 +18,11 @@ def convert_torax_to_qualikiz_input(
 ) -> Sequence[Any]:
 
     from ..classes.torax import torax_io
-    t = torax_io.from_file(output=torax_output_path)
+    opath = Path(torax_output_path)
+    t = torax_io.from_file(output=opath)
     p = t.to_qualikiz_parameters(time=time, rho=rho, full_impurities=full_impurities)
 
-    ion_template = {
+    ion_template: Final[Mapping[str, Any]] = {
         'Ti': None,
         'ni': None,
         'Ati': None,
@@ -32,7 +30,7 @@ def convert_torax_to_qualikiz_input(
         'Zi': None,
         'Ai': None,
     }
-    qualikiz_input_template = {
+    qualikiz_input_template: Final[Mapping[str, Any]] = {
         'Ro': None,
         'Rmin': None,
         'Bo': None,
@@ -51,7 +49,7 @@ def convert_torax_to_qualikiz_input(
 
     qualikiz_plan = []
     for j, ptime in enumerate(p['time']):
-        qualikiz_runpars = copy.deepcopy(qualikiz_input_template)
+        qualikiz_runpars: MutableMapping[str, Any] = {k: v for k, v in qualikiz_input_template.items()}
         for s in range(int(p['nion'].isel(time=j, drop=True).to_numpy())):
             qualikiz_runpars.update({k+f'{s:d}': v for k, v in ion_template.items()})
         for key in p.data_vars:
@@ -73,6 +71,8 @@ def convert_torax_to_qualikiz_input(
             'field_conversion': copy.deepcopy(conversion),
         })
 
+    logger.info(f'Generated {len(qualikiz_plan)} QuaLiKiz input sets from {opath.name}')
+
     return qualikiz_plan
 
 
@@ -82,6 +82,14 @@ def generate_qualikiz_run_directories(
     qualikiz_run_path: str | Path,
 ) -> None:
 
+    try:
+        import qualikiz_tools.qualikiz_io.inputfiles as qualikiz_inputtools  # type: ignore[import-untyped, import-not-found]
+        import qualikiz_tools.qualikiz_io.qualikizrun as qualikiz_runtools  # type: ignore[import-untyped, import-not-found]
+    except ImportError:
+        logger.error(f'Critical Python package, qualikiz-pythontools, not found in environment. QuaLiKiz run directory generation aborted!')
+        return None
+
+    execpath = Path(f'{executable_path}')
     runpath = Path(f'{qualikiz_run_path}')
     runpath.mkdir(parents=True, exist_ok=True)
 
@@ -174,7 +182,7 @@ def generate_qualikiz_run_directories(
         rpath = runpath / run_input['location']
         run = qualikiz_runtools.QuaLiKizRun(
             parent_dir=str(rpath.parent.resolve()),
-            binaryrelpath=str(executable_path.resolve()),
+            binaryrelpath=str(execpath.resolve()),
             name=str(rpath.name),
             qualikiz_plan=plan,
             verbose=0,
@@ -209,7 +217,7 @@ def main():
     ipaths = [Path(f'{ip}').resolve() for ip in args.ifiles if Path(f'{ip}').is_file()]
     xpath = Path(f'{args.executable}')
     for i, ipath in enumerate(ipaths):
-        qualikiz_plan = []
+        qualikiz_plan: Sequence[Any] = []
         match args.format:
             case 'torax':
                 qualikiz_plan = convert_torax_to_qualikiz_input(

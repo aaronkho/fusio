@@ -18,10 +18,11 @@ def convert_torax_to_tglf_input(
 ) -> Sequence[Any]:
 
     from ..classes.torax import torax_io
-    t = torax_io.from_file(output=torax_output_path)
+    opath = Path(torax_output_path)
+    t = torax_io.from_file(output=opath)
     p = t.to_tglf_parameters(time=time, rho=rho, full_impurities=full_impurities)
 
-    species_template = {
+    species_template: Final[Mapping[str, Any]] = {
         'ZS': None,
         'MASS': None,
         'RLNS': None,
@@ -33,7 +34,7 @@ def convert_torax_to_tglf_input(
         #'VNS_SHEAR': 0.0,
         #'VTS_SHEAR': 0.0,
     }
-    tglf_input_template = {
+    tglf_input_template: Final[Mapping[str, Any]] = {
         # control
         'UNITS': 'CGYRO',
         'NS': 2,
@@ -125,7 +126,7 @@ def convert_torax_to_tglf_input(
     tglf_plan = []
     for j, ptime in enumerate(p['time']):
         for i, prho in enumerate(p['rho']):
-            tglf_runpars = copy.deepcopy(tglf_input_template)
+            tglf_runpars: MutableMapping[str, Any] = {k: v for k, v in tglf_input_template.items()}
             for s in range(int(p['NS'].isel(time=j, drop=True).isel(rho=i, drop=True).to_numpy())):
                 tglf_runpars.update({k+f'_{s+1:d}': v for k, v in species_template.items()})
             for key in p.data_vars:
@@ -141,7 +142,7 @@ def convert_torax_to_tglf_input(
                 'location': f'tglf_run_t{j:05d}_r{i:04d}',
             })
 
-    logger.info(f'Generated {len(tglf_plan)} TGLF input sets from {torax_output_path.name}')
+    logger.info(f'Generated {len(tglf_plan)} TGLF input sets from {opath.name}')
 
     return tglf_plan
 
@@ -181,7 +182,7 @@ def main():
     args = parse_args()
     ipaths = [Path(f'{ip}').resolve() for ip in args.ifiles if Path(f'{ip}').is_file()]
     for i, ipath in enumerate(ipaths):
-        tglf_plan = []
+        tglf_plan: Sequence[Any] = []
         match args.format:
             case 'torax':
                 tglf_plan = convert_torax_to_tglf_input(
