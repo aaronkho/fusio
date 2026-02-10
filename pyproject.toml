@@ -43,6 +43,10 @@ build = ["build", "twine"]
 [project.urls]
 "Homepage" = "https://github.com/aaronkho/fusio"
 
+[project.scripts]
+generate_qualikiz_runs = "fusio.scripts.standalone_qualikiz:main"
+generate_tglf_runs = "fusio.scripts.standalone_tglf:main"
+
 [tool.setuptools.dynamic]
 version = {attr = "fusio.__version__"}
 
