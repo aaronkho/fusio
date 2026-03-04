@@ -2754,6 +2754,7 @@ class torax_io(io):
 
     def to_dict(
         self,
+        json_compatible: bool = False,
     ) -> MutableMapping[str, Any]:
         datadict: MutableMapping[str, Any] = {}
         self._clean()
@@ -2779,9 +2780,14 @@ class torax_io(io):
                     for species in ds['main_ion'].to_numpy().flatten():
                         da = ds[key].sel(main_ion=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
-                            da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0)
+                            da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0, drop=True)
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da.rename({ttag: 'time'})
+                            if json_compatible:
+                                datadict[f'{key}.{species}'] = (
+                                    datadict[f'{key}.{species}']['time'].to_numpy().flatten().tolist(),
+                                    datadict[f'{key}.{species}'].to_numpy().tolist(),
+                                )
                 elif 'impurity' in dims:
                     for species in ds['impurity'].to_numpy().flatten():
                         da = ds[key].sel(impurity=species).dropna(ttag)
@@ -2789,16 +2795,33 @@ class torax_io(io):
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da.rename({ttag: 'time'})
+                            if json_compatible:
+                                datadict[f'{key}.{species}'] = (
+                                    datadict[f'{key}.{species}']['time'].to_numpy().flatten().tolist(),
+                                    datadict[f'{key}.{species}']['rho_norm'].to_numpy().flatten().tolist(),
+                                    datadict[f'{key}.{species}'].to_numpy().tolist(),
+                                )
                         else:
                             datadict[f'{key}.{species}'] = None
                 elif rtag is not None and rtag in dims:
                     da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
                     if da.size > 0:
                         datadict[f'{key}'] = da.rename({ttag: 'time'})
+                        if json_compatible:
+                            datadict[f'{key}'] = (
+                                datadict[f'{key}']['time'].to_numpy().flatten().tolist(),
+                                datadict[f'{key}']['rho_norm'].to_numpy().flatten().tolist(),
+                                datadict[f'{key}'].to_numpy().tolist(),
+                            )
                 else:
                     da = ds[key].dropna(ttag)
                     if da.size > 0:
                         datadict[f'{key}'] = da.rename({ttag: 'time'})
+                        if json_compatible:
+                            datadict[f'{key}'] = (
+                                datadict[f'{key}']['time'].to_numpy().flatten().tolist(),
+                                datadict[f'{key}'].to_numpy().tolist(),
+                            )
         core_models = datadict.pop('map_combined_core_models', {})
         pedestal_models = datadict.pop('map_combined_pedestal_models', {})
         if datadict.get('transport.model_name', '') == 'combined':
