@@ -1134,6 +1134,14 @@ def calc_nuei_from_ne_te_and_zeff(ne, te, zeff, zi, ze=1.0, cle=False):
     nuei = factor * ne * (c['e'] * te / (c['me'])) ** 0.5 / (invb90 ** 2) * cl
     return nuei
 
+def calc_nuee_from_nuei_and_zeff(nuei, zeff):
+    nuee = normalize(nuee, zeff)
+    return nuee
+
+def calc_nuei_from_nuee_and_zeff(nuee, zeff):
+    nuei = unnormalize(nuee, zeff)
+    return nuei
+
 def calc_nunorm_from_nu(nu, gref):
     nunorm = normalize(nu, gref)
     return nunorm
@@ -1202,6 +1210,46 @@ def calc_ne_from_nueenorm(nueenorm, te, aref, lref, ze=1.0):
     #logger.debug(f'<{calc_ne_from_nueenorm.__name__}>: data')
     #logger.debug(pd.DataFrame(data={'nueenorm': nueenorm, 'te': te, 'ne': ne}))
     return ne
+
+def calc_ne_from_nueenorm_and_betae(nueenorm, betae, bref, aref, lref):
+    c = constants_si()
+    f_nu = 0.5 * np.pi * (2.0 * np.pi) ** 0.5
+    nc = f_nu * lref * (c['u'] * aref / c['me']) ** 0.5
+    bs = (4.0 * np.pi * c['eps']) * betae * bref ** 2 / (2.0 * c['mu'] * (c['e'] ** 2))
+    nc = f_nu * lref * (c['u'] * aref / c['me']) ** 0.5
+    nl = (bs ** 1.5) / (4.0 * np.pi) ** 0.5
+    log_arr = ensure_numpy(np.log(nl))
+    cst_arr = ensure_numpy(1.0e-60 * nueenorm * (bs ** 2) / nc)   # 1e20 density factor moved here for numerical stability
+    data = {'logterm': log_arr.flatten(), 'constant': cst_arr.flatten()}
+    rootdata = pd.DataFrame(data)
+    logger.debug(rootdata)
+    warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
+    func_ne20 = lambda row: root_scalar(
+        lambda ne: (row['logterm'] - 2.0 * np.log(ne * 1.0e20)) * (ne ** 3) - row['constant'],
+        x0=0.01,
+        x1=1.0,
+        maxiter=100,
+    )
+    sol_ne20 = rootdata.apply(func_ne20, axis=1)
+    retry = sol_ne20.apply(lambda sol: not sol.converged)
+    if np.any(retry):
+        func_ne20_v2 = lambda row: root_scalar(
+            lambda ne: (row['logterm'] - 2.0 * np.log(ne * 1.0e20)) * (ne ** 3) - row['constant'],
+            x0=1.0,
+            x1=0.1,
+            maxiter=100,
+        )
+        sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
+    warnings.resetwarnings()
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne = ensure_type_match(ne_sol.reshape(cst_arr.shape), nueenorm)
+    #logger.debug(f'<{calc_ne_from_nueenorm_and_betae.__name__}>: data')
+    #logger.debug(pd.DataFrame(data={'nueenorm': nueenorm, 'betae': betae, 'ne': ne}))
+    return ne
+
+def calc_te_from_betae(betae, ne, bref):
+    te = calc_te_from_beta_and_pnorm(betae, 1.0, bref, ne)
+    return te
 
 def calc_bunit_from_ldenorm(ldenorm, ne, aref, ze=1.0):
     c = constants_si()
