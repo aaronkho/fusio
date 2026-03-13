@@ -245,6 +245,12 @@ class gacode_io(io):
                 newvars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos5']), axis=0))
             if overwrite or np.abs(data.get('shape_cos6', np.array([0.0]))).sum() == 0.0:
                 newvars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
+            if 'fpol' in eqdsk_data:
+                psi_eqdsk = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
+                polflux_gacode = data.isel(n=0)['polflux'].to_numpy().flatten()
+                sort_idx = np.argsort(psi_eqdsk)
+                fpol_interp = np.interp(polflux_gacode, psi_eqdsk[sort_idx], eqdsk_data['fpol'][sort_idx])
+                newvars['fpol'] = (['n', 'rho'], np.expand_dims(fpol_interp, axis=0))
             if newvars:
                 if side == 'input':
                     self.update_input_data_vars(newvars)
@@ -542,6 +548,12 @@ class gacode_io(io):
             newvars['gradr_miller'] = (['n', 'rho'], np.sum(grad_r[:-1] * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bp2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bt2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_1_over_R'] = (['n', 'rho'], np.sum((1.0 / r[:-1]) * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_1_over_R2'] = (['n', 'rho'], np.sum((1.0 / r[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_B2'] = (['n', 'rho'], np.sum(b[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_1_over_B2'] = (['n', 'rho'], np.sum((1.0 / b[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_gradr2'] = (['n', 'rho'], np.sum(grad_r[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_gradr2_over_R2'] = (['n', 'rho'], np.sum((grad_r[:-1] ** 2 / r[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
             newvars['surfxs'] = (['n', 'rho'], trapezoid(r, x=z, axis=0))
