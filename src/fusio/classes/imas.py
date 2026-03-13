@@ -888,7 +888,7 @@ class imas_io(io):
             delta = d['delta'].to_numpy().flatten()
             nrho = polflux.size
 
-            rho_tor_norm = rmin / rmin[-1] if rmin[-1] > 0.0 else np.linspace(0.0, 1.0, nrho)
+
 
             dpsi = np.gradient(polflux, rmin)
             phi = np.zeros(nrho)
@@ -898,8 +898,7 @@ class imas_io(io):
             if 'b_unit' in d:
                 b_unit = d['b_unit'].to_numpy().flatten()
             else:
-                torfluxa = float(d['torfluxa'].to_numpy().flatten()[0]) if 'torfluxa' in d else phi[-1] / (2 * np.pi)
-                torflux = 2.0 * np.pi * np.abs(torfluxa) * rho_tor_norm ** 2
+                torflux = phi
                 b_unit = np.ones(nrho)
                 dtf = np.diff(torflux)
                 drmin_diff = np.diff(rmin)
@@ -907,8 +906,9 @@ class imas_io(io):
                 b_unit[1:] = np.where(bu_mask, np.abs(dtf) / (2 * np.pi * rmin[1:] * drmin_diff), 1.0)
                 b_unit[0] = b_unit[1] if nrho > 1 else 1.0
 
-            rho_tor = np.sqrt(phi / (np.pi * np.abs(bcentr))) if np.abs(bcentr) > 0 else rho_tor_norm * rmin[-1]
+            rho_tor = np.sqrt(phi / (np.pi * np.abs(bcentr))) if np.abs(bcentr) > 0 else rmin
             rho_tor_a = rho_tor[-1] if rho_tor[-1] > 0.0 else 1.0
+            rho_tor_norm = rho_tor / rho_tor_a
 
             dpsi_drho_tor = np.gradient(polflux, rho_tor)
             drho_tor_drmin = np.gradient(rho_tor, rmin)
