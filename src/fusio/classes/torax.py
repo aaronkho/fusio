@@ -959,7 +959,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
         newattrs['profile_conditions.initial_psi_mode'] = 'geometry'
-        newattrs['geometry.cocos'] = 2
+        newattrs['geometry.cocos'] = kwargs.get('cocos', 2)
         #newattrs['geometry.hires_factor'] = 4
         newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
         newattrs['geometry.geometry_type'] = f'{geotype}'
@@ -971,6 +971,7 @@ class torax_io(io):
                 geotime: MutableMapping[str, Any] = {}
                 geotime['geometry_file'] = f'{geofile}'
                 if geotype == 'eqdsk':
+                    geotime['cocos'] = kwargs.get('cocos', 2)
                     geotime['n_surfaces'] = kwargs.get('n_surfaces', 251)
                     geotime['last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
                 geoconfig[time] = geotime
