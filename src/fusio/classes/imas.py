@@ -913,7 +913,10 @@ class imas_io(io):
             dpsi_drho_tor = np.gradient(polflux, rho_tor)
             drho_tor_drmin = np.gradient(rho_tor, rmin)
 
-            F = np.full(nrho, np.abs(bcentr * rcentr))
+            if 'fpol' in d:
+                F = np.abs(d['fpol'].to_numpy().flatten())
+            else:
+                F = np.full(nrho, np.abs(bcentr * rcentr))
 
             r_in = d['r_in'].to_numpy().flatten() if 'r_in' in d else rmaj - rmin
             r_out = d['r_out'].to_numpy().flatten() if 'r_out' in d else rmaj + rmin
@@ -931,12 +934,20 @@ class imas_io(io):
 
             fsa_1_over_R = d['fsa_1_over_R'].to_numpy().flatten() if 'fsa_1_over_R' in d else 1.0 / rmaj
             fsa_1_over_R2 = d['fsa_1_over_R2'].to_numpy().flatten() if 'fsa_1_over_R2' in d else 1.0 / rmaj ** 2
-            fsa_B2 = F ** 2 * fsa_1_over_R2
-            fsa_1_over_B2 = np.where(
-                fsa_B2 > 1e-30,
-                1.0 / fsa_B2,
-                1.0 / (bcentr ** 2),
-            )
+
+            if 'fsa_B2' in d and 'bt2_miller' in d:
+                bt2_miller = d['bt2_miller'].to_numpy().flatten()
+                f_miller_sq = np.where(fsa_1_over_R2 > 1e-30, bt2_miller / fsa_1_over_R2, F ** 2)
+                B_sq_norm = np.where(f_miller_sq > 1e-30, F ** 2 / f_miller_sq, 1.0)
+                fsa_B2 = d['fsa_B2'].to_numpy().flatten() * B_sq_norm
+                fsa_1_over_B2 = d['fsa_1_over_B2'].to_numpy().flatten() / B_sq_norm
+            else:
+                fsa_B2 = F ** 2 * fsa_1_over_R2
+                fsa_1_over_B2 = np.where(
+                    fsa_B2 > 1e-30,
+                    1.0 / fsa_B2,
+                    1.0 / (bcentr ** 2),
+                )
             gradr_miller = d['gradr_miller'].to_numpy().flatten() if 'gradr_miller' in d else np.ones(nrho)
             fsa_gradr2 = d['fsa_gradr2'].to_numpy().flatten() if 'fsa_gradr2' in d else gradr_miller ** 2
             fsa_gradr2_over_R2 = d['fsa_gradr2_over_R2'].to_numpy().flatten() if 'fsa_gradr2_over_R2' in d else gradr_miller ** 2 / rmaj ** 2
