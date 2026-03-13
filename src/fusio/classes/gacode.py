@@ -245,6 +245,12 @@ class gacode_io(io):
                 newvars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos5']), axis=0))
             if overwrite or np.abs(data.get('shape_cos6', np.array([0.0]))).sum() == 0.0:
                 newvars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
+            if 'fpol' in eqdsk_data:
+                psi_eqdsk = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
+                polflux_gacode = data.isel(n=0)['polflux'].to_numpy().flatten()
+                sort_idx = np.argsort(psi_eqdsk)
+                fpol_interp = np.interp(polflux_gacode, psi_eqdsk[sort_idx], eqdsk_data['fpol'][sort_idx])
+                newvars['fpol'] = (['n', 'rho'], np.expand_dims(fpol_interp, axis=0))
             if newvars:
                 if side == 'input':
                     self.update_input_data_vars(newvars)
