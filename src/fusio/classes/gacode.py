@@ -552,10 +552,6 @@ class gacode_io(io):
             newvars['gradr_miller'] = (['n', 'rho'], np.sum(grad_r[:-1] * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bp2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bt2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['fsa_1_over_R'] = (['n', 'rho'], np.sum((1.0 / r[:-1]) * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['fsa_1_over_R2'] = (['n', 'rho'], np.sum((1.0 / r[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['fsa_B2'] = (['n', 'rho'], np.sum(b[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
-            newvars['fsa_1_over_B2'] = (['n', 'rho'], np.sum((1.0 / b[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['fsa_gradr2'] = (['n', 'rho'], np.sum(grad_r[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['fsa_gradr2_over_R2'] = (['n', 'rho'], np.sum((grad_r[:-1] ** 2 / r[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
             mu0 = 4.0e-7 * np.pi
@@ -583,12 +579,48 @@ class gacode_io(io):
             bp_phys = grad_psi_mag / (2.0 * np.pi * r)
             bp_phys_line_integral = np.sum(bp_phys[:-1] * l_t[:-1], axis=0) * 2.0 * np.pi / float(n_theta - 1)
             newvars['Ip_profile_miller'] = (['n', 'rho'], bp_phys_line_integral / mu0)
+            b_phys = np.sqrt(bt ** 2 + bp_phys ** 2)
+            j_psi = r * l_t / np.where(grad_psi_mag > 1.0e-10, grad_psi_mag, 1.0e-10)
+            j_psi_safe = np.where(np.isfinite(j_psi), j_psi, 0.0)
+            denom_psi = np.sum(j_psi_safe[:-1], axis=0)
+            denom_psi[..., 0] = 2.0 * denom_psi[..., 1] - denom_psi[..., 2]
+            denom_psi = np.where(np.abs(denom_psi) > 1.0e-30, denom_psi, 1.0)
+            newvars['fsa_B2'] = (['n', 'rho'], np.sum(b[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_1_over_B2'] = (['n', 'rho'], np.sum((1.0 / b[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_bp2_phys'] = (['n', 'rho'], np.sum(bp_phys[:-1] ** 2 * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_b_phys2'] = (['n', 'rho'], np.sum(b_phys[:-1] ** 2 * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_1_over_b_phys2'] = (['n', 'rho'], np.sum((1.0 / b_phys[:-1] ** 2) * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_1_over_R'] = (['n', 'rho'], np.sum((1.0 / r[:-1]) * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_1_over_R2'] = (['n', 'rho'], np.sum((1.0 / r[:-1] ** 2) * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_grad_psi2'] = (['n', 'rho'], np.sum(grad_psi_mag[:-1] ** 2 * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_grad_psi2_over_R2'] = (['n', 'rho'], np.sum((grad_psi_mag[:-1] ** 2 / r[:-1] ** 2) * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_grad_psi'] = (['n', 'rho'], np.sum(grad_psi_mag[:-1] * j_psi_safe[:-1], axis=0) / denom_psi)
+
+            R_axis = np.mean(r[:, :, 0], axis=0)
+            F_axis = f[:, 0]
+            B0 = np.abs(F_axis / R_axis)
+            B0_sq = B0 ** 2
+            newvars['fsa_1_over_R'][1][..., 0] = 1.0 / R_axis
+            newvars['fsa_1_over_R2'][1][..., 0] = 1.0 / R_axis ** 2
+            newvars['fsa_b_phys2'][1][..., 0] = B0_sq
+            newvars['fsa_1_over_b_phys2'][1][..., 0] = 1.0 / B0_sq
+            newvars['fsa_B2'][1][..., 0] = B0_sq
+            newvars['fsa_1_over_B2'][1][..., 0] = 1.0 / B0_sq
+            newvars['fsa_bp2_phys'][1][..., 0] = 0.0
+            newvars['fsa_grad_psi2'][1][..., 0] = 0.0
+            newvars['fsa_grad_psi2_over_R2'][1][..., 0] = 0.0
+            newvars['fsa_grad_psi'][1][..., 0] = 0.0
+            newvars['Ip_profile_miller'][1][..., 0] = 0.0
+            newvars['volp_miller'][1][..., 0] = 0.0
+            newvars['bp2_miller'][1][..., 0] = 0.0
+            newvars['bt2_miller'][1][..., 0] = B0_sq
+            newvars['gradr_miller'][1][..., 0] = 1.0
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
             newvars['surfxs'] = (['n', 'rho'], trapezoid(r, x=z, axis=0))
             newvars['r_out'] = (['n', 'rho'], np.nanmax(r, axis=0))
             newvars['r_in'] = (['n', 'rho'], np.nanmin(r, axis=0))
-            newvars['b_ref'] = (['n', 'rho'], np.abs(data['b_unit'].to_numpy() * newvars['geo_bt'][-1]))  # For synchrotron
+            newvars['b_ref'] = (['n', 'rho'], np.abs(data['b_unit'].to_numpy() * newvars['geo_bt'][-1]))
             bt = np.squeeze(np.take_along_axis(bt, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
             bp = np.squeeze(np.take_along_axis(bp, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
             newvars['bt_out'] = (['n', 'rho'], np.where(np.isfinite(bt), bt, 0.0))

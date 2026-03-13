@@ -935,7 +935,10 @@ class imas_io(io):
             fsa_1_over_R = d['fsa_1_over_R'].to_numpy().flatten() if 'fsa_1_over_R' in d else 1.0 / rmaj
             fsa_1_over_R2 = d['fsa_1_over_R2'].to_numpy().flatten() if 'fsa_1_over_R2' in d else 1.0 / rmaj ** 2
 
-            if 'fsa_B2' in d and 'bt2_miller' in d:
+            if 'fsa_b_phys2' in d:
+                fsa_B2 = d['fsa_b_phys2'].to_numpy().flatten()
+                fsa_1_over_B2 = d['fsa_1_over_b_phys2'].to_numpy().flatten()
+            elif 'fsa_B2' in d and 'bt2_miller' in d:
                 bt2_miller = d['bt2_miller'].to_numpy().flatten()
                 bp2_miller = d['bp2_miller'].to_numpy().flatten() if 'bp2_miller' in d else np.zeros(nrho)
                 fsa_B2_miller = d['fsa_B2'].to_numpy().flatten()
@@ -960,11 +963,21 @@ class imas_io(io):
             drho_tor_drmin_safe = np.where(mask_rho, drho_tor_drmin, 1.0)
 
             gm1 = fsa_1_over_R2
-            gm2 = fsa_gradr2_over_R2 * drho_tor_drmin_safe ** 2
-            gm3 = fsa_gradr2 * drho_tor_drmin_safe ** 2
+            dpsi_drho_tor_safe = np.where(np.abs(dpsi_drho_tor) > 1.0e-30, dpsi_drho_tor, 1.0)
+            if 'fsa_grad_psi2_over_R2' in d:
+                gm2 = d['fsa_grad_psi2_over_R2'].to_numpy().flatten() / dpsi_drho_tor_safe ** 2
+            else:
+                gm2 = fsa_gradr2_over_R2 * drho_tor_drmin_safe ** 2
+            if 'fsa_grad_psi2' in d:
+                gm3 = d['fsa_grad_psi2'].to_numpy().flatten() / dpsi_drho_tor_safe ** 2
+            else:
+                gm3 = fsa_gradr2 * drho_tor_drmin_safe ** 2
             gm4 = fsa_1_over_B2
             gm5 = fsa_B2
-            gm7 = gradr_miller * drho_tor_drmin_safe
+            if 'fsa_grad_psi' in d:
+                gm7 = d['fsa_grad_psi'].to_numpy().flatten() / np.abs(dpsi_drho_tor_safe)
+            else:
+                gm7 = gradr_miller * drho_tor_drmin_safe
             gm9 = fsa_1_over_R
 
             jtor_fields = ['johm', 'jbs', 'jbstor', 'jrf', 'jnb']
