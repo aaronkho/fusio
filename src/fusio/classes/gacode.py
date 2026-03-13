@@ -524,8 +524,12 @@ class gacode_io(io):
             #nsin = (r_r * r_t + z_r * z_t) / l_t
             c = 2.0 * np.pi * np.sum(l_t[:-1] / (r[:-1] * grad_r[:-1]), axis=0)
             c_vol = 2.0 * np.pi * np.sum(r[:-1] ** 2 * l_t[:-1] / (r[:-1] * grad_r[:-1]), axis=0)
-            f = 2.0 * np.pi * data['rmin'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
-            f[..., 0] = 2.0 * f[..., 1] - f[..., 2]
+            f_miller = 2.0 * np.pi * data['rmin'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
+            f_miller[..., 0] = 2.0 * f_miller[..., 1] - f_miller[..., 2]
+            if 'fpol' in data:
+                f = np.abs(data['fpol'].to_numpy())
+            else:
+                f = f_miller
             newvars['volp_miller'] = (['n', 'rho'], 2.0 * np.pi * np.where(np.isfinite(c_vol), c_vol, 0.0) / float(n_theta - 1))
             newvars['surf_miller'] = (['n', 'rho'], 2.0 * np.pi * np.sum(l_t[:-1] * r[:-1], axis=0) * 2.0 * np.pi / float(n_theta - 1))
             bt = np.expand_dims(f, axis=0) / r

@@ -937,10 +937,14 @@ class imas_io(io):
 
             if 'fsa_B2' in d and 'bt2_miller' in d:
                 bt2_miller = d['bt2_miller'].to_numpy().flatten()
-                f_miller_sq = np.where(fsa_1_over_R2 > 1e-30, bt2_miller / fsa_1_over_R2, F ** 2)
-                B_sq_norm = np.where(f_miller_sq > 1e-30, F ** 2 / f_miller_sq, 1.0)
-                fsa_B2 = d['fsa_B2'].to_numpy().flatten() * B_sq_norm
-                fsa_1_over_B2 = d['fsa_1_over_B2'].to_numpy().flatten() / B_sq_norm
+                bp2_miller = d['bp2_miller'].to_numpy().flatten() if 'bp2_miller' in d else np.zeros(nrho)
+                fsa_B2_miller = d['fsa_B2'].to_numpy().flatten()
+                fsa_1_over_B2_miller = d['fsa_1_over_B2'].to_numpy().flatten()
+                bt2_corrected = F ** 2 * fsa_1_over_R2
+                bp2_from_miller = np.maximum(fsa_B2_miller - bt2_miller, 0.0)
+                fsa_B2 = bt2_corrected + bp2_from_miller
+                B_sq_norm = np.where(fsa_B2_miller > 1e-30, fsa_B2 / fsa_B2_miller, 1.0)
+                fsa_1_over_B2 = np.where(B_sq_norm > 1e-30, fsa_1_over_B2_miller / B_sq_norm, fsa_1_over_B2_miller)
             else:
                 fsa_B2 = F ** 2 * fsa_1_over_R2
                 fsa_1_over_B2 = np.where(
