@@ -974,13 +974,18 @@ class imas_io(io):
                     j_phi += d[jfield].to_numpy().flatten()
 
             if np.all(j_phi == 0) and np.abs(ip_A) > 0 and np.any(volume > 0):
-                mu0 = 4.0e-7 * np.pi
-                area = volume / (2.0 * np.pi * rmaj)
-                darea_drmin = np.gradient(area, rmin)
-                Ip_enc = ip_A * rho_tor_norm ** 2
-                dIp_drmin = np.gradient(Ip_enc, rmin)
-                mask_a = np.abs(darea_drmin) > 1.0e-30
-                j_phi[mask_a] = dIp_drmin[mask_a] / darea_drmin[mask_a]
+                if 'Ip_profile_miller' in d:
+                    Ip_enc = d['Ip_profile_miller'].to_numpy().flatten()
+                else:
+                    Ip_enc = ip_A * rho_tor_norm ** 2
+                rho_tor_a = rho_tor[-1] if rho_tor[-1] > 0.0 else 1.0
+                drho_norm_drmin = drho_tor_drmin / rho_tor_a
+                drho_norm_drmin_safe = np.where(np.abs(drho_norm_drmin) > 1e-30, drho_norm_drmin, 1.0)
+                vpr = volp_miller / drho_norm_drmin_safe
+                spr = vpr * fsa_1_over_R / (2.0 * np.pi)
+                dIp_drhon = np.gradient(Ip_enc, rho_tor_norm)
+                mask_s = np.abs(spr) > 1.0e-30
+                j_phi[mask_s] = dIp_drhon[mask_s] / spr[mask_s]
 
             ds_vars = {}
             ds_coords = {}

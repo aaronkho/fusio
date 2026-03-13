@@ -558,6 +558,31 @@ class gacode_io(io):
             newvars['fsa_1_over_B2'] = (['n', 'rho'], np.sum((1.0 / b[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['fsa_gradr2'] = (['n', 'rho'], np.sum(grad_r[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['fsa_gradr2_over_R2'] = (['n', 'rho'], np.sum((grad_r[:-1] ** 2 / r[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
+            mu0 = 4.0e-7 * np.pi
+            polflux_1d = data['polflux'].to_numpy().flatten()
+            n_rho_dim = r.shape[-1]
+            grad_psi_mag = np.zeros_like(r)
+            for i_rho in range(n_rho_dim):
+                if i_rho == 0:
+                    dr_surf = r[:, :, 1] - r[:, :, 0]
+                    dz_surf = z[:, :, 1] - z[:, :, 0]
+                    dpsi = polflux_1d[1] - polflux_1d[0]
+                elif i_rho == n_rho_dim - 1:
+                    dr_surf = r[:, :, -1] - r[:, :, -2]
+                    dz_surf = z[:, :, -1] - z[:, :, -2]
+                    dpsi = polflux_1d[-1] - polflux_1d[-2]
+                else:
+                    dr_surf = r[:, :, i_rho + 1] - r[:, :, i_rho - 1]
+                    dz_surf = z[:, :, i_rho + 1] - z[:, :, i_rho - 1]
+                    dpsi = polflux_1d[i_rho + 1] - polflux_1d[i_rho - 1]
+                z_t_i = z_t[:, :, i_rho]
+                r_t_i = r_t[:, :, i_rho]
+                l_t_i = l_t[:, :, i_rho]
+                dn_normal = np.abs(dr_surf * z_t_i - dz_surf * r_t_i) / np.where(l_t_i > 1.0e-10, l_t_i, 1.0e-10)
+                grad_psi_mag[:, :, i_rho] = np.where(dn_normal > 1.0e-10, np.abs(dpsi) / dn_normal, 0.0)
+            bp_phys = grad_psi_mag / (2.0 * np.pi * r)
+            bp_phys_line_integral = np.sum(bp_phys[:-1] * l_t[:-1], axis=0) * 2.0 * np.pi / float(n_theta - 1)
+            newvars['Ip_profile_miller'] = (['n', 'rho'], bp_phys_line_integral / mu0)
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
             newvars['surfxs'] = (['n', 'rho'], trapezoid(r, x=z, axis=0))
