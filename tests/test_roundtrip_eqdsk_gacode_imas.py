@@ -70,8 +70,6 @@ _SKIP_FIELDS = frozenset({
     'z_magnetic_axis',
     'delta_upper_face',
     'delta_lower_face',
-    'flux_surf_avg_grad_psi2',
-    'flux_surf_avg_grad_psi2_over_R2',
 })
 
 _ABS_FIELDS = frozenset({
@@ -79,34 +77,29 @@ _ABS_FIELDS = frozenset({
     'Ip_profile',
 })
 
-_TRIM_FIELDS = frozenset({
+_TRIM_AXIS_FIELDS = frozenset({
     'psi',
     'vpr',
     'int_dl_over_Bp',
     'Ip_profile',
     'flux_surf_avg_grad_psi',
+    'flux_surf_avg_grad_psi2',
+    'flux_surf_avg_grad_psi2_over_R2',
 })
 
 _TRIM_BOUNDARY_FIELDS = frozenset({
     'psi',
 })
 
-_TIGHT_TOL = 0.05
-_LOOSE_TOL = 0.40
-
-_LOOSE_FIELDS = frozenset({
-    'psi',
-    'vpr',
-    'int_dl_over_Bp',
-    'flux_surf_avg_grad_psi',
-    'Ip_profile',
-    'flux_surf_avg_1_over_B2',
-    'flux_surf_avg_B2',
-    'flux_surf_avg_1_over_R',
-    'flux_surf_avg_1_over_R2',
-})
-
 _N_TRIM = 3
+
+_DEFAULT_TOL = 0.03
+
+_FIELD_TOLERANCES = {
+    'psi': 0.25,
+    'int_dl_over_Bp': 0.15,
+    'Ip_profile': 0.10,
+}
 
 
 def _get_eqdsk_path(filename: str = 'iterhybrid_cocos11.eqdsk') -> str:
@@ -251,7 +244,7 @@ def _compare(direct, roundtrip) -> dict[str, tuple[float, float]]:
                 )
                 val_roundtrip = interp_fn(rhon_direct)
 
-        if name in _TRIM_FIELDS and val_direct.ndim == 1:
+        if name in _TRIM_AXIS_FIELDS and val_direct.ndim == 1:
             val_direct = val_direct[_N_TRIM:]
             val_roundtrip = val_roundtrip[_N_TRIM:]
 
@@ -293,42 +286,30 @@ class TestRoundtripEQDSKGacodeIMAS:
         for name in ('R_major', 'a_minor', 'B_0'):
             if name in self.comparison:
                 max_err, _ = self.comparison[name]
-                assert max_err < _TIGHT_TOL, (
-                    f'{name}: max_rel_err={max_err:.4f} > {_TIGHT_TOL}'
+                assert max_err < _DEFAULT_TOL, (
+                    f'{name}: max_rel_err={max_err:.4f} > {_DEFAULT_TOL}'
                 )
 
-    def test_tight_fields(self):
-        tight_fields = {
-            k for k in self.comparison if k not in _LOOSE_FIELDS
-        }
-        for name in sorted(tight_fields):
+    def test_all_fields_within_tolerance(self):
+        for name in sorted(self.comparison):
+            tol = _FIELD_TOLERANCES.get(name, _DEFAULT_TOL)
             max_err, _ = self.comparison[name]
-            assert max_err < _TIGHT_TOL, (
-                f'{name}: max_rel_err={max_err:.4f} > {_TIGHT_TOL}'
-            )
-
-    def test_loose_fields(self):
-        for name in sorted(_LOOSE_FIELDS):
-            if name not in self.comparison:
-                continue
-            max_err, _ = self.comparison[name]
-            assert max_err < _LOOSE_TOL, (
-                f'{name}: max_rel_err={max_err:.4f} > {_LOOSE_TOL}'
+            assert max_err < tol, (
+                f'{name}: max_rel_err={max_err:.4f} > {tol}'
             )
 
     def test_print_summary(self):
         for name, (max_err, mean_err) in sorted(self.comparison.items()):
-            tol = _LOOSE_TOL if name in _LOOSE_FIELDS else _TIGHT_TOL
+            tol = _FIELD_TOLERANCES.get(name, _DEFAULT_TOL)
             status = '✓' if max_err < tol else '✗'
             print(
                 f'  {status} {name:45s}  max={max_err:.6f}'
-                f'  mean={mean_err:.6f}'
+                f'  mean={mean_err:.6f}  tol={tol:.2f}'
             )
         n_pass = sum(
             1
             for name, (max_err, _) in self.comparison.items()
-            if max_err
-            < (_LOOSE_TOL if name in _LOOSE_FIELDS else _TIGHT_TOL)
+            if max_err < _FIELD_TOLERANCES.get(name, _DEFAULT_TOL)
         )
         n_total = len(self.comparison)
         print(f'\n{n_pass}/{n_total} fields within tolerance')
