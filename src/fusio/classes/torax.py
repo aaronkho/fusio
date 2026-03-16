@@ -78,6 +78,9 @@ class torax_io(io):
             'model_name',
             'set_pedestal',
         ],
+        'edge': [
+            'model_name',
+        ],
         'transport': [
             'model_name',
             'chi_min',
@@ -120,13 +123,13 @@ class torax_io(io):
             'calculator_type',
             'tolerance',
         ],
+        'restart': [
+            'filename',
+            'time',
+            'do_restart',
+            'stitch',
+        ],
     }
-    restartvars: Final[Sequence[str]] = [
-        'filename',
-        'time',
-        'do_restart',
-        'stitch',
-    ]
     specvars: Final[Mapping[str, Any]] = {
         'geometry': {
             'circular': [
@@ -181,18 +184,32 @@ class torax_io(io):
                 'model_name',
                 'bootstrap_multiplier',
             ],
+            'transport': [
+                'model_name',
+                'chi_min',
+                'chi_max',
+                'D_e_min',
+                'D_e_max',
+                'V_e_min',
+                'V_e_max',
+            },
             'conductivity': [
                 'model_name',
             ],
         },
         'mhd': {
             'sawtooth': [
-                'model_name',
                 'crash_step_duration',
-                's_critical',
-                'minimum_radius',
-                'flattening_factor',
-                'mixing_radius_multiplier',
+                'trigger_model': [
+                    'model_name',
+                    's_critical',
+                    'minimum_radius',
+                ],
+                'redistribution_model': [
+                    'model_name',
+                    'flattening_factor',
+                    'mixing_radius_multiplier',
+                ],
             ],
         },
         'sources': {
@@ -3423,4 +3440,117 @@ class torax_io(io):
                 newobj.input = xr.merge([v for k, v in dsmap.items()], join='outer')
                 newobj.update_input_attrs(full_attrs)
 
+        return newobj
+
+
+    @classmethod
+    def from_dict(
+        cls,
+        json_dict: MutableMapping[str, Any],
+    ) -> Self:
+        newobj = cls()
+        coords: MutableMapping[str, Any] = {}
+        data_vars: MutableMapping[str, Any] = {}
+        attrs: MutableMapping[str, Any] = {}
+        for key in newobj.basevars:
+            if key in ['sources']:
+                continue
+            if key not in json_dict:
+                continue
+            for field in json_dict[key]:
+                if key == 'plasma_composition' and field in ['main_ion', 'impurity']:
+                    if 'species' in json_dict[key][field]:
+                        species = []
+                        values = []
+                        for k in json_dict[key][field]:
+                            if k == 'species':
+                                for spec, val in json_dict[key][field][k].items():
+                                    species.append(f'{spec}')
+                                    values.append(np.asarray(val))
+                            else:
+                                attrs[f'{key}.{field}.{k}'] = json_dict[key][field][k]
+                    else:
+                        species = []
+                        values = []
+                        for spec, val in json_dict[key][field].items():
+                            species.append(f'{spec}')
+                            values.append(np.asarray(val))
+                        coords[f'{field}'] = np.asarray(species).flatten()
+                        data_vars[f'{key}.{field}'] = 
+                if key == 'transport' and field in ['transport_models', 'pedestal_transport_models']:
+                    for i, settings in enumerate(json_dict[key][field]):
+                        for k, v in settings.items():
+                            if isinstance(v, (tuple, list)):
+                                ndim = len(v) - 1
+                                dims = [f'time_{key}_{k}']
+                                coords[dims[0]] = np.asarray(v[0])
+                                if ndim > 1:
+                                    dims.append(f'rho_{key}_{k}')
+                                    coords[dims[1]] = np.asarray(v[1])
+                                data_vars[f'{key}.{field}.{i:d}.{k}'] = (dims, np.asarray(v[-1]))
+                            else:
+                                attrs[f'{key}.{field}.{i:d}.{k}'] = v
+                elif isinstance(json_dict[key][field], dict):
+                    for k, v in json_dict[key][field].items():
+                        if isinstance(v, (tuple, list)):
+                            ndim = len(v) - 1
+                            dims = [f'time_{key}_{k}']
+                            coords[dims[0]] = np.asarray(v[0])
+                            if ndim > 1:
+                                dims.append(f'rho_{key}_{k}')
+                                coords[dims[1]] = np.asarray(v[1])
+                            data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[-1]))
+                        else:
+                            attrs[f'{key}.{field}.{k}'] = v
+                elif isinstance(json_dict[key][field], (tuple, list)):
+                    ndim = len(json_dict[key][field]) - 1
+                    dims = [f'time_{key}_{field}']
+                    coords[dims[0]] = np.asarray(json_dict[key][field][0])
+                    if ndim > 1:
+                        dims.append(f'rho_{key}_{field}')
+                        coords[dims[1]] = np.asarray(json_dict[key][field][1])
+                    data_vars[f'{key}.{field}.{field}'] = (dims, np.asarray(json_dict[key][field][-1]))
+                else:
+                    attrs[f'{key}.{field}.{field}'] = json_dict[key][field]
+        if 'sources' in json_dict:
+            key = 'sources'
+            for field in json_dict[key]:
+                for k, v in json_dict[key][field].items():
+                    if k == 'prescribed_values':
+                        if len(v) > 1:
+                            ndim_i = len(v[0]) - 1
+                            dims_i = [f'time_{field}_{k}_ion']
+                            coords[dims_i[0]] = np.asarray(v[0][0])
+                            if ndim_i > 1:
+                                dims_i.append(f'rho_{field}_{k}_ion')
+                                coords[dims_i[1]] = np.asarray(v[0][1])
+                            data_vars[f'{key}.{field}.{k}_ion'] = (dims_i, np.asarray(v[0][-1]))
+                            ndim_e = len(v[1]) - 1
+                            dims_e = [f'time_{field}_{k}_el']
+                            coords[dims_e[0]] = np.asarray(v[1][0])
+                            if ndim_e > 1:
+                                dims_e.append(f'rho_{field}_{k}_el')
+                                coords[dims_e[1]] = np.asarray(v[1][1])
+                            data_vars[f'{key}.{field}.{k}_el'] = (dims_e, np.asarray(v[1][-1]))
+                        else:
+                            ndim = len(v[0]) - 1
+                            dims = [f'time_{field}_{k}']
+                            coords[dims[0]] = np.asarray(v[0][0])
+                            if ndim > 1:
+                                dims.append(f'rho_{field}_{k}')
+                                coords[dims[1]] = np.asarray(v[0][1])
+                            data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[0][-1]))
+                    elif isinstance(v, (tuple, list)):
+                        ndim = len(v) - 1
+                        dims = [f'time_{field}_{k}']
+                        coords[dims[0]] = np.asarray(v[0][0])
+                        if ndim > 1:
+                            dims.append(f'rho_{field}_{k}')
+                            coords[dims[1]] = np.asarray(v[0][1])
+                        data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[0][-1]))
+                    else:
+                        attrs[f'{key}.{field}.{k}'] = v
+        if data_vars or attrs:
+            data = xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+            newobj.input = data
         return newobj
