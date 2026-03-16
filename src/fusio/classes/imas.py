@@ -893,7 +893,7 @@ class imas_io(io):
             dpsi = np.gradient(polflux, rmin)
             phi = np.zeros(nrho)
             phi[1:] = cumulative_simpson(y=q * dpsi, x=rmin)[: nrho - 1] if nrho > 2 else np.cumsum(q[1:] * np.diff(polflux))
-            phi = np.abs(phi)
+            phi = np.abs(phi)  # type: ignore[assignment]
 
             if 'b_unit' in d:
                 b_unit = d['b_unit'].to_numpy().flatten()
@@ -930,10 +930,11 @@ class imas_io(io):
             dpsi_drmin = np.gradient(polflux, rmin)
             mask = np.abs(dpsi_drmin) > 1.0e-30
             dvolume_dpsi[mask] = volp_miller[mask] / dpsi_drmin[mask]
-            dvolume_dpsi = np.abs(dvolume_dpsi)
+            dvolume_dpsi = np.abs(dvolume_dpsi)  # type: ignore[assignment]
 
             fsa_1_over_R = d['fsa_1_over_R'].to_numpy().flatten() if 'fsa_1_over_R' in d else 1.0 / rmaj
             fsa_1_over_R2 = d['fsa_1_over_R2'].to_numpy().flatten() if 'fsa_1_over_R2' in d else 1.0 / rmaj ** 2
+
 
             if 'fsa_b_phys2' in d:
                 fsa_B2 = d['fsa_b_phys2'].to_numpy().flatten()
@@ -945,12 +946,12 @@ class imas_io(io):
                 fsa_1_over_B2_miller = d['fsa_1_over_B2'].to_numpy().flatten()
                 bt2_corrected = F ** 2 * fsa_1_over_R2
                 bp2_from_miller = np.maximum(fsa_B2_miller - bt2_miller, 0.0)
-                fsa_B2 = bt2_corrected + bp2_from_miller
+                fsa_B2 = bt2_corrected + bp2_from_miller  # type: ignore[assignment]
                 B_sq_norm = np.where(fsa_B2_miller > 1e-30, fsa_B2 / fsa_B2_miller, 1.0)
-                fsa_1_over_B2 = np.where(B_sq_norm > 1e-30, fsa_1_over_B2_miller / B_sq_norm, fsa_1_over_B2_miller)
+                fsa_1_over_B2 = np.where(B_sq_norm > 1e-30, fsa_1_over_B2_miller / B_sq_norm, fsa_1_over_B2_miller)  # type: ignore[assignment]
             else:
-                fsa_B2 = F ** 2 * fsa_1_over_R2
-                fsa_1_over_B2 = np.where(
+                fsa_B2 = F ** 2 * fsa_1_over_R2  # type: ignore[assignment]
+                fsa_1_over_B2 = np.where(  # type: ignore[assignment]
                     fsa_B2 > 1e-30,
                     1.0 / fsa_B2,
                     1.0 / (bcentr ** 2),
@@ -990,7 +991,7 @@ class imas_io(io):
                 if 'Ip_profile_miller' in d:
                     Ip_enc = d['Ip_profile_miller'].to_numpy().flatten()
                 else:
-                    Ip_enc = ip_A * rho_tor_norm ** 2
+                    Ip_enc = ip_A * rho_tor_norm ** 2  # type: ignore[assignment]
                 rho_tor_a = rho_tor[-1] if rho_tor[-1] > 0.0 else 1.0
                 drho_norm_drmin = drho_tor_drmin / rho_tor_a
                 drho_norm_drmin_safe = np.where(np.abs(drho_norm_drmin) > 1e-30, drho_norm_drmin, 1.0)
