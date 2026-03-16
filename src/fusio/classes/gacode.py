@@ -206,6 +206,32 @@ class gacode_io(io):
         side: str = 'input',
         overwrite: bool = False,
     ) -> None:
+        """Trace flux surfaces from an EQDSK file and add MXH shape data.
+
+        .. warning::
+
+           This method uses ``data['polflux']`` as **contour levels** to
+           trace flux surfaces on the EQDSK 2-D ψ grid.  Therefore
+           ``polflux`` must be stored in the **same units** as the EQDSK
+           grid at the time this method is called:
+
+           * COCOS 11-18 (eBp=1): EQDSK ψ is in **Wb** – store Wb.
+           * COCOS  1-10 (eBp=0): EQDSK ψ is in **Wb/rad** – store Wb/rad.
+
+           If GACODE internally uses Wb/rad (the standard GACODE
+           convention), convert ``polflux`` back to Wb/rad **after**
+           calling this method and before computing derived geometry
+           quantities.
+
+        It also interpolates ``fpol`` from the EQDSK onto the stored
+        ``polflux`` grid, so the same unit-matching requirement applies
+        to the fpol interpolation.
+
+        Args:
+            path: Path to the EQDSK file.
+            side: ``'input'`` or ``'output'`` dataset to populate.
+            overwrite: If ``True``, overwrite existing shape data.
+        """
         data = self.input if side == 'input' else self.output
         if isinstance(path, (str, Path)) and 'polflux' in data:
             eqdsk_data = read_eqdsk(path)

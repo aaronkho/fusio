@@ -135,22 +135,71 @@ def _build_intermediates_from_eqdsk(eqdsk_path: str, cocos: int = 11):
     return intermediates
 
 
-def _gacode_from_eqdsk(eqdsk_path: str) -> gacode_io:
+def _gacode_from_eqdsk(eqdsk_path: str, cocos: int = 11) -> gacode_io:
+    """Convert EQDSK to a fusio gacode_io object with geometry.
+
+    COCOS handling
+    --------------
+    ``add_geometry_from_eqdsk`` traces flux surfaces by finding contours
+    of the **EQDSK 2-D ψ grid**.  The contour levels it uses are the 1-D
+    ``polflux`` array stored in the dataset.  Therefore ``polflux`` must
+    be in the **same units** as the EQDSK 2-D grid during that call:
+
+    * COCOS > 10  →  EQDSK ψ is in **Wb**.
+    * COCOS 1-10  →  EQDSK ψ is in **Wb/rad**.
+
+    After geometry tracing, ``polflux`` is converted to the standard
+    GACODE convention (**Wb/rad**) before computing derived geometry
+    quantities (``fsa_grad_psi*``, ``grad_psi_mag``, …).
+
+    Only COCOS 1-18 are physically meaningful.  Currently only COCOS with
+    ``sigma_Bp = +1`` (positive ψ increasing outward) are tested.
+
+    Args:
+        eqdsk_path: Path to an EQDSK equilibrium file.
+        cocos: COCOS index of the EQDSK file (default 11).
+
+    Returns:
+        A ``gacode_io`` object populated with equilibrium and geometry.
+    """
+    if cocos not in range(1, 19):
+        raise ValueError(
+            f'cocos={cocos} is not a valid COCOS index (must be 1-18).'
+        )
+    print(f'Assuming COCOS={cocos} for EQDSK: {os.path.basename(eqdsk_path)}')
+
     eqdsk_data = read_eqdsk(eqdsk_path)
     n_rho = eqdsk_data['nr']
     psi_axis = eqdsk_data['simagx']
     psi_bdry = eqdsk_data['sibdry']
-    polflux = np.linspace(psi_axis, psi_bdry, n_rho)
+
+    # ------------------------------------------------------------------
+    # COCOS convention (see Sauter & Medvedev, CPC 2013):
+    #   COCOS 1-10:  ψ in EQDSK is in Wb/rad  (eBp = 0)
+    #   COCOS 11-18: ψ in EQDSK is in Wb      (eBp = 1)
+    # GACODE always stores polflux in Wb/rad.
+    # ------------------------------------------------------------------
+    e_Bp = 1 if cocos > 10 else 0           # exponent for 2π factor
+    psi_to_gacode = 1.0 / (2.0 * np.pi) ** e_Bp  # Wb → Wb/rad
+
+    psi_eqdsk = np.linspace(psi_axis, psi_bdry, n_rho)
+    polflux_gacode = psi_eqdsk * psi_to_gacode
+
     q = eqdsk_data['qpsi']
     rcentr = eqdsk_data['rcentr']
     bcentr = eqdsk_data['bcentr']
     current_MA = eqdsk_data['cpasma'] / 1.0e6
-    psi_eqdsk = np.linspace(psi_axis, psi_bdry, n_rho)
-    torfluxa_val = np.trapezoid(q, psi_eqdsk) / (2.0 * np.pi)
+
+    # Toroidal flux:  Φ = ∫ q dψ  (ψ in native EQDSK units).
+    # GACODE torfluxa is stored in the same convention as ψ.
+    torfluxa_val = np.trapezoid(q, psi_eqdsk) / (2.0 * np.pi) ** e_Bp
     rho = np.linspace(0.0, 1.0, n_rho)
+
+    # Step 1: Store polflux in **EQDSK-native units** so that
+    # add_geometry_from_eqdsk traces contours at the correct levels.
     ds = xr.Dataset(
         data_vars={
-            'polflux': (['n', 'rho'], np.expand_dims(polflux, axis=0)),
+            'polflux': (['n', 'rho'], np.expand_dims(psi_eqdsk, axis=0)),
             'q': (['n', 'rho'], np.expand_dims(q, axis=0)),
             'rcentr': (['n'], np.array([rcentr])),
             'bcentr': (['n'], np.array([bcentr])),
@@ -164,7 +213,20 @@ def _gacode_from_eqdsk(eqdsk_path: str) -> gacode_io:
     )
     gc = gacode_io()
     gc.input = ds
+
+    # Step 2: Trace geometry — polflux is in EQDSK-native units (Wb for
+    # COCOS>10, Wb/rad for COCOS 1–10), matching the EQDSK 2-D ψ grid.
     gc.add_geometry_from_eqdsk(eqdsk_path, side='input', overwrite=True)
+
+    # Step 3: Convert polflux to GACODE convention (Wb/rad) *before*
+    # computing derived geometry quantities.
+    gc.update_input_data_vars({
+        'polflux': (
+            ['n', 'rho'],
+            np.expand_dims(polflux_gacode, axis=0),
+        ),
+    })
+
     gc._compute_derived_coordinates()
     gc._compute_derived_reference_quantities()
     gc._compute_derived_geometry()
@@ -172,7 +234,7 @@ def _gacode_from_eqdsk(eqdsk_path: str) -> gacode_io:
 
 
 def _build_intermediates_from_roundtrip(eqdsk_path: str, cocos: int = 11):
-    gc = _gacode_from_eqdsk(eqdsk_path)
+    gc = _gacode_from_eqdsk(eqdsk_path, cocos=cocos)
     imas_obj = imas_io.from_gacode(gc, side='input', time=0.0)
     tmp_dir = tempfile.mkdtemp()
     try:
@@ -258,18 +320,34 @@ def _compare(direct, roundtrip) -> dict[str, tuple[float, float]]:
     return results
 
 
+_COCOS_CASES = [
+    ('iterhybrid_cocos02.eqdsk', 2),
+    ('iterhybrid_cocos11.eqdsk', 11),
+]
+
+
+@pytest.mark.parametrize(
+    'eqdsk_filename,cocos',
+    _COCOS_CASES,
+    ids=[f'cocos{c}' for _, c in _COCOS_CASES],
+)
 class TestRoundtripEQDSKGacodeIMAS:
 
-    @pytest.fixture(autouse=True, scope='class')
-    def intermediates(self, request):
-        eqdsk_path = _get_eqdsk_path()
+    @pytest.fixture(autouse=True)
+    def intermediates(self, request, eqdsk_filename, cocos):
+        eqdsk_path = _get_eqdsk_path(eqdsk_filename)
         if not os.path.exists(eqdsk_path):
             pytest.skip(f'EQDSK file not found: {eqdsk_path}')
-        request.cls.direct = _build_intermediates_from_eqdsk(eqdsk_path)
-        request.cls.roundtrip = _build_intermediates_from_roundtrip(eqdsk_path)
+        request.cls.direct = _build_intermediates_from_eqdsk(
+            eqdsk_path, cocos=cocos,
+        )
+        request.cls.roundtrip = _build_intermediates_from_roundtrip(
+            eqdsk_path, cocos=cocos,
+        )
         request.cls.comparison = _compare(
             request.cls.direct, request.cls.roundtrip
         )
+        request.cls.cocos = cocos
 
     def test_all_fields_present(self):
         for field in dataclasses.fields(self.direct):
@@ -287,7 +365,8 @@ class TestRoundtripEQDSKGacodeIMAS:
             if name in self.comparison:
                 max_err, _ = self.comparison[name]
                 assert max_err < _DEFAULT_TOL, (
-                    f'{name}: max_rel_err={max_err:.4f} > {_DEFAULT_TOL}'
+                    f'[cocos={self.cocos}] {name}: '
+                    f'max_rel_err={max_err:.4f} > {_DEFAULT_TOL}'
                 )
 
     def test_all_fields_within_tolerance(self):
@@ -295,10 +374,12 @@ class TestRoundtripEQDSKGacodeIMAS:
             tol = _FIELD_TOLERANCES.get(name, _DEFAULT_TOL)
             max_err, _ = self.comparison[name]
             assert max_err < tol, (
-                f'{name}: max_rel_err={max_err:.4f} > {tol}'
+                f'[cocos={self.cocos}] {name}: '
+                f'max_rel_err={max_err:.4f} > {tol}'
             )
 
     def test_print_summary(self):
+        print(f'\n=== COCOS {self.cocos} ===')
         for name, (max_err, mean_err) in sorted(self.comparison.items()):
             tol = _FIELD_TOLERANCES.get(name, _DEFAULT_TOL)
             status = '✓' if max_err < tol else '✗'
