@@ -5,7 +5,7 @@ from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, 
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
-from scipy.integrate import cumulative_simpson
+from scipy.integrate import cumulative_simpson  # type: ignore[import-untyped]
 
 from packaging.version import Version
 import h5py  # type: ignore[import-untyped]
@@ -1000,8 +1000,8 @@ class imas_io(io):
                 mask_s = np.abs(spr) > 1.0e-30
                 j_phi[mask_s] = dIp_drhon[mask_s] / spr[mask_s]
 
-            ds_vars = {}
-            ds_coords = {}
+            ds_vars: dict[str, Any] = {}
+            ds_coords: dict[str, Any] = {}
 
             ds_vars['equilibrium.ids_properties.homogeneous_time'] = ([], np.int32(1))
             ds_vars['equilibrium.vacuum_toroidal_field.r0'] = ([], np.float64(rcentr))
