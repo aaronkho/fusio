@@ -2575,12 +2575,14 @@ class torax_io(io):
                 prof = data['n_e'].interp({'rho_norm': coords['rho']})
                 data_vars['AS_1'] = (['time', 'rho'], xr.ones_like(prof).to_numpy())
                 data_vars['RLNS_1'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[r'#N_1'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
             if 'T_e' in data:
                 norm = -1.0 * data['a_minor']
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prof = data['T_e'].interp({'rho_norm': coords['rho']})
                 data_vars['TAUS_1'] = (['time', 'rho'], xr.ones_like(prof).to_numpy())
                 data_vars['RLTS_1'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[r'#T_1'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             if 'A_i' in data:
                 mi = data['A_i'].to_numpy() * c['u'] / c['md']
                 data_vars['MASS_2'] = (['time', 'rho'], np.repeat(np.expand_dims(mi, axis=-1), len(coords['rho']), axis=-1))
@@ -2592,12 +2594,14 @@ class torax_io(io):
                 prof = data['n_i'].interp({'rho_norm': coords['rho']})
                 data_vars['AS_2'] = (['time', 'rho'], (data['n_i'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                 data_vars['RLNS_2'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[r'#N_2'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
             if 'T_i' in data:
                 norm = -1.0 * data['a_minor']
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prof = data['T_i'].interp({'rho_norm': coords['rho']})
                 data_vars['TAUS_2'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                 data_vars['RLTS_2'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[r'#T_2'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             ns = 2
             if full_impurities:
                 for j, symbol in enumerate(data.get('impurity_symbol', xr.DataArray()).to_numpy()):
@@ -2617,12 +2621,14 @@ class torax_io(io):
                         prof = data['n_impurity_species'].sel(impurity_symbol=symbol, drop=True).interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
                         data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (prof / denom).to_numpy())
                         data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                        data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
                     if 'T_i' in data:
                         norm = -1.0 * data['a_minor']
                         drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                         prof = data['T_i'].interp({'rho_norm': coords['rho']})
                         data_vars[f'TAUS_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                         data_vars[f'RLTS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                        data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             else:
                 if 'A_impurity' in data:
                     ns += 1
@@ -2636,12 +2642,14 @@ class torax_io(io):
                     prof = data['n_impurity'].interp({'rho_norm': coords['rho']})
                     data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (data['n_impurity'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                     data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                    data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
                 if 'T_i' in data:
                     norm = -1.0 * data['a_minor']
                     drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                     prof = data['T_i'].interp({'rho_norm': coords['rho']})
                     data_vars[f'TAUS_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                     data_vars[f'RLTS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                    data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             data_vars['NS'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([ns]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
             if 'q' in data:
                 q = data['q'].interp({'rho_face_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_face_norm': 'rho_norm'})
