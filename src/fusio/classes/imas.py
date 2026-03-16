@@ -5,6 +5,7 @@ from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, 
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
+from scipy.integrate import cumulative_simpson  # type: ignore[import-untyped]
 
 from packaging.version import Version
 import h5py  # type: ignore[import-untyped]
@@ -855,16 +856,217 @@ class imas_io(io):
         return newobj
 
 
-    # Assumed that the self creation method transfers output to input
     @classmethod
     def from_gacode(
         cls,
         obj: io,
         side: str = 'output',
+        time: float = 0.0,
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
             data = obj.input if side == 'input' else obj.output
+
+            if 'polflux' not in data:
+                logger.warning('No polflux found in gacode data. Aborting from_gacode...')
+                return newobj
+
+            d = data.isel(n=0)
+
+            rcentr = float(d['rcentr'].to_numpy().flatten()[0])
+            bcentr = float(d['bcentr'].to_numpy().flatten()[0])
+            current_MA = float(d['current'].to_numpy().flatten()[0])
+            ip_A = current_MA * 1.0e6
+
+            # GACODE polflux is ψ/(2π) in Wb/radian; IMAS psi is in Wb.
+            # Keep polflux_gacode in GACODE units for internal geometry
+            # computations (fsa_grad_psi* are in these units).
+            # polflux_imas = polflux_gacode * 2π for IMAS output fields.
+            polflux_gacode = d['polflux'].to_numpy().flatten()
+            polflux_imas = polflux_gacode * 2.0 * np.pi
+            q = d['q'].to_numpy().flatten()
+            rmin = d['rmin'].to_numpy().flatten()
+            rmaj = d['rmaj'].to_numpy().flatten()
+            zmag = d['zmag'].to_numpy().flatten()
+            kappa = d['kappa'].to_numpy().flatten()
+            delta = d['delta'].to_numpy().flatten()
+            nrho = polflux_gacode.size
+
+            # Use IMAS-scaled polflux for phi calculation:
+            # q = dΦ/dψ_Wb, so ∫ q·dψ_Wb gives Φ in Wb.
+            dpsi_imas = np.gradient(polflux_imas, rmin)
+            phi = np.zeros(nrho)
+            phi[1:] = cumulative_simpson(y=q * dpsi_imas, x=rmin)[: nrho - 1] if nrho > 2 else np.cumsum(q[1:] * np.diff(polflux_imas))
+            phi = np.abs(phi)  # type: ignore[assignment]
+
+            if 'b_unit' in d:
+                b_unit = d['b_unit'].to_numpy().flatten()
+            else:
+                torflux = phi
+                b_unit = np.ones(nrho)
+                dtf = np.diff(torflux)
+                drmin_diff = np.diff(rmin)
+                bu_mask = (drmin_diff > 0) & (rmin[1:] > 0)
+                b_unit[1:] = np.where(bu_mask, np.abs(dtf) / (2 * np.pi * rmin[1:] * drmin_diff), 1.0)
+                b_unit[0] = b_unit[1] if nrho > 1 else 1.0
+
+            rho_tor = np.sqrt(phi / (np.pi * np.abs(bcentr))) if np.abs(bcentr) > 0 else rmin
+            rho_tor_a = rho_tor[-1] if rho_tor[-1] > 0.0 else 1.0
+            rho_tor_norm = rho_tor / rho_tor_a
+
+            # dpsi_drho_tor in IMAS units (Wb) for IMAS output.
+            dpsi_drho_tor_imas = np.gradient(polflux_imas, rho_tor)
+            # dpsi_drho_tor in GACODE units (Wb/rad) for gm metric conversion
+            # (consistent with fsa_grad_psi* from GACODE geometry).
+            dpsi_drho_tor_gacode = np.gradient(polflux_gacode, rho_tor)
+            drho_tor_drmin = np.gradient(rho_tor, rmin)
+
+            if 'fpol' in d:
+                F = np.abs(d['fpol'].to_numpy().flatten())
+            else:
+                F = np.full(nrho, np.abs(bcentr * rcentr))
+
+            r_in = d['r_in'].to_numpy().flatten() if 'r_in' in d else rmaj - rmin
+            r_out = d['r_out'].to_numpy().flatten() if 'r_out' in d else rmaj + rmin
+
+            volp_miller = d['volp_miller'].to_numpy().flatten() if 'volp_miller' in d else np.zeros(nrho)
+            volume = np.zeros(nrho)
+            if nrho > 2 and np.any(volp_miller > 0):
+                volume[1:] = cumulative_simpson(y=volp_miller, x=rmin)[: nrho - 1]
+
+            dvolume_dpsi = np.zeros(nrho)
+            dpsi_drmin_imas = np.gradient(polflux_imas, rmin)
+            mask = np.abs(dpsi_drmin_imas) > 1.0e-30
+            dvolume_dpsi[mask] = volp_miller[mask] / dpsi_drmin_imas[mask]
+            dvolume_dpsi = np.abs(dvolume_dpsi)  # type: ignore[assignment]
+
+            fsa_1_over_R = d['fsa_1_over_R'].to_numpy().flatten() if 'fsa_1_over_R' in d else 1.0 / rmaj
+            fsa_1_over_R2 = d['fsa_1_over_R2'].to_numpy().flatten() if 'fsa_1_over_R2' in d else 1.0 / rmaj ** 2
+
+
+            if 'fsa_b_phys2' in d:
+                fsa_B2 = d['fsa_b_phys2'].to_numpy().flatten()
+                fsa_1_over_B2 = d['fsa_1_over_b_phys2'].to_numpy().flatten()
+            elif 'fsa_B2' in d and 'bt2_miller' in d:
+                bt2_miller = d['bt2_miller'].to_numpy().flatten()
+                bp2_miller = d['bp2_miller'].to_numpy().flatten() if 'bp2_miller' in d else np.zeros(nrho)
+                fsa_B2_miller = d['fsa_B2'].to_numpy().flatten()
+                fsa_1_over_B2_miller = d['fsa_1_over_B2'].to_numpy().flatten()
+                bt2_corrected = F ** 2 * fsa_1_over_R2
+                bp2_from_miller = np.maximum(fsa_B2_miller - bt2_miller, 0.0)
+                fsa_B2 = bt2_corrected + bp2_from_miller  # type: ignore[assignment]
+                B_sq_norm = np.where(fsa_B2_miller > 1e-30, fsa_B2 / fsa_B2_miller, 1.0)
+                fsa_1_over_B2 = np.where(B_sq_norm > 1e-30, fsa_1_over_B2_miller / B_sq_norm, fsa_1_over_B2_miller)  # type: ignore[assignment]
+            else:
+                fsa_B2 = F ** 2 * fsa_1_over_R2  # type: ignore[assignment]
+                fsa_1_over_B2 = np.where(  # type: ignore[assignment]
+                    fsa_B2 > 1e-30,
+                    1.0 / fsa_B2,
+                    1.0 / (bcentr ** 2),
+                )
+            gradr_miller = d['gradr_miller'].to_numpy().flatten() if 'gradr_miller' in d else np.ones(nrho)
+            fsa_gradr2 = d['fsa_gradr2'].to_numpy().flatten() if 'fsa_gradr2' in d else gradr_miller ** 2
+            fsa_gradr2_over_R2 = d['fsa_gradr2_over_R2'].to_numpy().flatten() if 'fsa_gradr2_over_R2' in d else gradr_miller ** 2 / rmaj ** 2
+
+            mask_rho = np.abs(drho_tor_drmin) > 1.0e-30
+            drho_tor_drmin_safe = np.where(mask_rho, drho_tor_drmin, 1.0)
+
+            gm1 = fsa_1_over_R2
+            # Use GACODE-unit dpsi_drho_tor for gm metrics, since
+            # fsa_grad_psi* from GACODE are in Wb/rad units.
+            dpsi_drho_tor_gac_safe = np.where(
+                np.abs(dpsi_drho_tor_gacode) > 1.0e-30,
+                dpsi_drho_tor_gacode, 1.0,
+            )
+            if 'fsa_grad_psi2_over_R2' in d:
+                gm2 = d['fsa_grad_psi2_over_R2'].to_numpy().flatten() / dpsi_drho_tor_gac_safe ** 2
+            else:
+                gm2 = fsa_gradr2_over_R2 * drho_tor_drmin_safe ** 2
+            if 'fsa_grad_psi2' in d:
+                gm3 = d['fsa_grad_psi2'].to_numpy().flatten() / dpsi_drho_tor_gac_safe ** 2
+            else:
+                gm3 = fsa_gradr2 * drho_tor_drmin_safe ** 2
+            gm4 = fsa_1_over_B2
+            gm5 = fsa_B2
+            if 'fsa_grad_psi' in d:
+                gm7 = d['fsa_grad_psi'].to_numpy().flatten() / np.abs(dpsi_drho_tor_gac_safe)
+            else:
+                gm7 = gradr_miller * drho_tor_drmin_safe
+            gm9 = fsa_1_over_R
+
+            jtor_fields = ['johm', 'jbs', 'jbstor', 'jrf', 'jnb']
+            j_phi = np.zeros(nrho)
+            for jfield in jtor_fields:
+                if jfield in d:
+                    j_phi += d[jfield].to_numpy().flatten()
+
+            if np.all(j_phi == 0) and np.abs(ip_A) > 0 and np.any(volume > 0):
+                if 'Ip_profile_miller' in d:
+                    Ip_enc = d['Ip_profile_miller'].to_numpy().flatten()
+                else:
+                    Ip_enc = ip_A * rho_tor_norm ** 2  # type: ignore[assignment]
+                rho_tor_a = rho_tor[-1] if rho_tor[-1] > 0.0 else 1.0
+                drho_norm_drmin = drho_tor_drmin / rho_tor_a
+                drho_norm_drmin_safe = np.where(np.abs(drho_norm_drmin) > 1e-30, drho_norm_drmin, 1.0)
+                vpr = volp_miller / drho_norm_drmin_safe
+                spr = vpr * fsa_1_over_R / (2.0 * np.pi)
+                dIp_drhon = np.gradient(Ip_enc, rho_tor_norm)
+                mask_s = np.abs(spr) > 1.0e-30
+                j_phi[mask_s] = dIp_drhon[mask_s] / spr[mask_s]
+
+            ds_vars: dict[str, Any] = {}
+            ds_coords: dict[str, Any] = {}
+
+            ds_vars['equilibrium.ids_properties.homogeneous_time'] = ([], np.int32(1))
+            ds_vars['equilibrium.vacuum_toroidal_field.r0'] = ([], np.float64(rcentr))
+            ds_vars['equilibrium.vacuum_toroidal_field.b0'] = (['equilibrium.time'], np.array([bcentr]))
+
+            ts_i = 'equilibrium.time_slice:i'
+            p1d = 'equilibrium.time_slice.profiles_1d'
+            gq = 'equilibrium.time_slice.global_quantities'
+            bdry = 'equilibrium.time_slice.boundary'
+            rho_dim = f'{p1d}.psi:i'
+
+            ds_coords['equilibrium.time'] = (['equilibrium.time'], np.array([time]))
+            ds_coords[ts_i] = ([ts_i], np.array([0]))
+            ds_coords[rho_dim] = ([rho_dim], np.arange(nrho))
+
+            # Write IMAS-unit polflux (Wb) to psi and dpsi_drho_tor.
+            ds_vars[f'{p1d}.psi'] = ([ts_i, rho_dim], np.expand_dims(polflux_imas, axis=0))
+            ds_vars[f'{p1d}.phi'] = ([ts_i, rho_dim], np.expand_dims(phi, axis=0))
+            ds_vars[f'{p1d}.rho_tor_norm'] = ([ts_i, rho_dim], np.expand_dims(rho_tor_norm, axis=0))
+            ds_vars[f'{p1d}.rho_tor'] = ([ts_i, rho_dim], np.expand_dims(rho_tor, axis=0))
+            ds_vars[f'{p1d}.f'] = ([ts_i, rho_dim], np.expand_dims(F, axis=0))
+            ds_vars[f'{p1d}.r_inboard'] = ([ts_i, rho_dim], np.expand_dims(r_in, axis=0))
+            ds_vars[f'{p1d}.r_outboard'] = ([ts_i, rho_dim], np.expand_dims(r_out, axis=0))
+            ds_vars[f'{p1d}.q'] = ([ts_i, rho_dim], np.expand_dims(q, axis=0))
+            ds_vars[f'{p1d}.dpsi_drho_tor'] = ([ts_i, rho_dim], np.expand_dims(dpsi_drho_tor_imas, axis=0))
+            ds_vars[f'{p1d}.dvolume_dpsi'] = ([ts_i, rho_dim], np.expand_dims(dvolume_dpsi, axis=0))
+            ds_vars[f'{p1d}.volume'] = ([ts_i, rho_dim], np.expand_dims(volume, axis=0))
+            ds_vars[f'{p1d}.elongation'] = ([ts_i, rho_dim], np.expand_dims(kappa, axis=0))
+            ds_vars[f'{p1d}.triangularity_upper'] = ([ts_i, rho_dim], np.expand_dims(delta, axis=0))
+            ds_vars[f'{p1d}.triangularity_lower'] = ([ts_i, rho_dim], np.expand_dims(delta, axis=0))
+            ds_vars[f'{p1d}.j_phi'] = ([ts_i, rho_dim], np.expand_dims(j_phi, axis=0))
+
+            ds_vars[f'{p1d}.gm1'] = ([ts_i, rho_dim], np.expand_dims(gm1, axis=0))
+            ds_vars[f'{p1d}.gm2'] = ([ts_i, rho_dim], np.expand_dims(gm2, axis=0))
+            ds_vars[f'{p1d}.gm3'] = ([ts_i, rho_dim], np.expand_dims(gm3, axis=0))
+            ds_vars[f'{p1d}.gm4'] = ([ts_i, rho_dim], np.expand_dims(gm4, axis=0))
+            ds_vars[f'{p1d}.gm5'] = ([ts_i, rho_dim], np.expand_dims(gm5, axis=0))
+            ds_vars[f'{p1d}.gm7'] = ([ts_i, rho_dim], np.expand_dims(gm7, axis=0))
+            ds_vars[f'{p1d}.gm9'] = ([ts_i, rho_dim], np.expand_dims(gm9, axis=0))
+
+            ds_vars[f'{gq}.ip'] = ([ts_i], np.array([ip_A]))
+            ds_vars[f'{gq}.magnetic_axis.r'] = ([ts_i], np.array([rmaj[0]]))
+            ds_vars[f'{gq}.magnetic_axis.z'] = ([ts_i], np.array([zmag[0]]))
+            ds_vars[f'{gq}.psi_axis'] = ([ts_i], np.array([polflux_imas[0]]))
+            ds_vars[f'{gq}.psi_boundary'] = ([ts_i], np.array([polflux_imas[-1]]))
+
+            ds_vars[f'{bdry}.minor_radius'] = ([ts_i], np.array([rmin[-1]]))
+            ds_vars[f'{bdry}.type'] = ([ts_i], np.array([0]))
+
+            newobj.input = xr.Dataset(data_vars=ds_vars, coords=ds_coords)
+
         return newobj
 

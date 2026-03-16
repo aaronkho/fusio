@@ -206,6 +206,32 @@ class gacode_io(io):
         side: str = 'input',
         overwrite: bool = False,
     ) -> None:
+        """Trace flux surfaces from an EQDSK file and add MXH shape data.
+
+        .. warning::
+
+           This method uses ``data['polflux']`` as **contour levels** to
+           trace flux surfaces on the EQDSK 2-D ψ grid.  Therefore
+           ``polflux`` must be stored in the **same units** as the EQDSK
+           grid at the time this method is called:
+
+           * COCOS 11-18 (eBp=1): EQDSK ψ is in **Wb** – store Wb.
+           * COCOS  1-10 (eBp=0): EQDSK ψ is in **Wb/rad** – store Wb/rad.
+
+           If GACODE internally uses Wb/rad (the standard GACODE
+           convention), convert ``polflux`` back to Wb/rad **after**
+           calling this method and before computing derived geometry
+           quantities.
+
+        It also interpolates ``fpol`` from the EQDSK onto the stored
+        ``polflux`` grid, so the same unit-matching requirement applies
+        to the fpol interpolation.
+
+        Args:
+            path: Path to the EQDSK file.
+            side: ``'input'`` or ``'output'`` dataset to populate.
+            overwrite: If ``True``, overwrite existing shape data.
+        """
         data = self.input if side == 'input' else self.output
         if isinstance(path, (str, Path)) and 'polflux' in data:
             eqdsk_data = read_eqdsk(path)
@@ -245,6 +271,12 @@ class gacode_io(io):
                 newvars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos5']), axis=0))
             if overwrite or np.abs(data.get('shape_cos6', np.array([0.0]))).sum() == 0.0:
                 newvars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
+            if 'fpol' in eqdsk_data:
+                psi_eqdsk = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
+                polflux_gacode = data.isel(n=0)['polflux'].to_numpy().flatten()
+                sort_idx = np.argsort(psi_eqdsk)
+                fpol_interp = np.interp(polflux_gacode, psi_eqdsk[sort_idx], eqdsk_data['fpol'][sort_idx])
+                newvars['fpol'] = (['n', 'rho'], np.expand_dims(fpol_interp, axis=0))
             if newvars:
                 if side == 'input':
                     self.update_input_data_vars(newvars)
@@ -518,8 +550,12 @@ class gacode_io(io):
             #nsin = (r_r * r_t + z_r * z_t) / l_t
             c = 2.0 * np.pi * np.sum(l_t[:-1] / (r[:-1] * grad_r[:-1]), axis=0)
             c_vol = 2.0 * np.pi * np.sum(r[:-1] ** 2 * l_t[:-1] / (r[:-1] * grad_r[:-1]), axis=0)
-            f = 2.0 * np.pi * data['rmin'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
-            f[..., 0] = 2.0 * f[..., 1] - f[..., 2]
+            f_miller = 2.0 * np.pi * data['rmin'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
+            f_miller[..., 0] = 2.0 * f_miller[..., 1] - f_miller[..., 2]
+            if 'fpol' in data:
+                f = np.abs(data['fpol'].to_numpy())
+            else:
+                f = f_miller
             newvars['volp_miller'] = (['n', 'rho'], 2.0 * np.pi * np.where(np.isfinite(c_vol), c_vol, 0.0) / float(n_theta - 1))
             newvars['surf_miller'] = (['n', 'rho'], 2.0 * np.pi * np.sum(l_t[:-1] * r[:-1], axis=0) * 2.0 * np.pi / float(n_theta - 1))
             bt = np.expand_dims(f, axis=0) / r
@@ -542,12 +578,75 @@ class gacode_io(io):
             newvars['gradr_miller'] = (['n', 'rho'], np.sum(grad_r[:-1] * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bp2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bt2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_gradr2'] = (['n', 'rho'], np.sum(grad_r[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_gradr2_over_R2'] = (['n', 'rho'], np.sum((grad_r[:-1] ** 2 / r[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
+            mu0 = 4.0e-7 * np.pi
+            polflux_1d = data['polflux'].to_numpy().flatten()
+            n_rho_dim = r.shape[-1]
+            grad_psi_mag = np.zeros_like(r)
+            for i_rho in range(n_rho_dim):
+                if i_rho == 0:
+                    dr_surf = r[:, :, 1] - r[:, :, 0]
+                    dz_surf = z[:, :, 1] - z[:, :, 0]
+                    dpsi = polflux_1d[1] - polflux_1d[0]
+                elif i_rho == n_rho_dim - 1:
+                    dr_surf = r[:, :, -1] - r[:, :, -2]
+                    dz_surf = z[:, :, -1] - z[:, :, -2]
+                    dpsi = polflux_1d[-1] - polflux_1d[-2]
+                else:
+                    dr_surf = r[:, :, i_rho + 1] - r[:, :, i_rho - 1]
+                    dz_surf = z[:, :, i_rho + 1] - z[:, :, i_rho - 1]
+                    dpsi = polflux_1d[i_rho + 1] - polflux_1d[i_rho - 1]
+                z_t_i = z_t[:, :, i_rho]
+                r_t_i = r_t[:, :, i_rho]
+                l_t_i = l_t[:, :, i_rho]
+                dn_normal = np.abs(dr_surf * z_t_i - dz_surf * r_t_i) / np.where(l_t_i > 1.0e-10, l_t_i, 1.0e-10)
+                grad_psi_mag[:, :, i_rho] = np.where(dn_normal > 1.0e-10, np.abs(dpsi) / dn_normal, 0.0)
+            bp_phys = grad_psi_mag / (2.0 * np.pi * r)
+            bp_phys_line_integral = np.sum(bp_phys[:-1] * l_t[:-1], axis=0) * 2.0 * np.pi / float(n_theta - 1)
+            newvars['Ip_profile_miller'] = (['n', 'rho'], bp_phys_line_integral / mu0)
+            b_phys = np.sqrt(bt ** 2 + bp_phys ** 2)
+            j_psi = r * l_t / np.where(grad_psi_mag > 1.0e-10, grad_psi_mag, 1.0e-10)
+            j_psi_safe = np.where(np.isfinite(j_psi), j_psi, 0.0)
+            denom_psi = np.sum(j_psi_safe[:-1], axis=0)
+            denom_psi[..., 0] = 2.0 * denom_psi[..., 1] - denom_psi[..., 2]
+            denom_psi = np.where(np.abs(denom_psi) > 1.0e-30, denom_psi, 1.0)
+            newvars['fsa_B2'] = (['n', 'rho'], np.sum(b[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_1_over_B2'] = (['n', 'rho'], np.sum((1.0 / b[:-1] ** 2) * g_t[:-1] / b[:-1], axis=0) / denom)
+            newvars['fsa_bp2_phys'] = (['n', 'rho'], np.sum(bp_phys[:-1] ** 2 * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_b_phys2'] = (['n', 'rho'], np.sum(b_phys[:-1] ** 2 * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_1_over_b_phys2'] = (['n', 'rho'], np.sum((1.0 / b_phys[:-1] ** 2) * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_1_over_R'] = (['n', 'rho'], np.sum((1.0 / r[:-1]) * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_1_over_R2'] = (['n', 'rho'], np.sum((1.0 / r[:-1] ** 2) * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_grad_psi2'] = (['n', 'rho'], np.sum(grad_psi_mag[:-1] ** 2 * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_grad_psi2_over_R2'] = (['n', 'rho'], np.sum((grad_psi_mag[:-1] ** 2 / r[:-1] ** 2) * j_psi_safe[:-1], axis=0) / denom_psi)
+            newvars['fsa_grad_psi'] = (['n', 'rho'], np.sum(grad_psi_mag[:-1] * j_psi_safe[:-1], axis=0) / denom_psi)
+
+            R_axis = np.mean(r[:, :, 0], axis=0)
+            F_axis = f[:, 0]
+            B0 = np.abs(F_axis / R_axis)
+            B0_sq = B0 ** 2
+            newvars['fsa_1_over_R'][1][..., 0] = 1.0 / R_axis
+            newvars['fsa_1_over_R2'][1][..., 0] = 1.0 / R_axis ** 2
+            newvars['fsa_b_phys2'][1][..., 0] = B0_sq
+            newvars['fsa_1_over_b_phys2'][1][..., 0] = 1.0 / B0_sq
+            newvars['fsa_B2'][1][..., 0] = B0_sq
+            newvars['fsa_1_over_B2'][1][..., 0] = 1.0 / B0_sq
+            newvars['fsa_bp2_phys'][1][..., 0] = 0.0
+            newvars['fsa_grad_psi2'][1][..., 0] = 0.0
+            newvars['fsa_grad_psi2_over_R2'][1][..., 0] = 0.0
+            newvars['fsa_grad_psi'][1][..., 0] = 0.0
+            newvars['Ip_profile_miller'][1][..., 0] = 0.0
+            newvars['volp_miller'][1][..., 0] = 0.0
+            newvars['bp2_miller'][1][..., 0] = 0.0
+            newvars['bt2_miller'][1][..., 0] = B0_sq
+            newvars['gradr_miller'][1][..., 0] = 1.0
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
             newvars['surfxs'] = (['n', 'rho'], trapezoid(r, x=z, axis=0))
             newvars['r_out'] = (['n', 'rho'], np.nanmax(r, axis=0))
             newvars['r_in'] = (['n', 'rho'], np.nanmin(r, axis=0))
-            newvars['b_ref'] = (['n', 'rho'], np.abs(data['b_unit'].to_numpy() * newvars['geo_bt'][-1]))  # For synchrotron
+            newvars['b_ref'] = (['n', 'rho'], np.abs(data['b_unit'].to_numpy() * newvars['geo_bt'][-1]))
             bt = np.squeeze(np.take_along_axis(bt, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
             bp = np.squeeze(np.take_along_axis(bp, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
             newvars['bt_out'] = (['n', 'rho'], np.where(np.isfinite(bt), bt, 0.0))
