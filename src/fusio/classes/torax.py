@@ -488,11 +488,18 @@ class torax_io(io):
         path: str | Path,
         side: str = 'output',
     ) -> None:
-        if side == 'input':
-            self.input = self._read_torax_file(path)
-        else:
-            self.output = self._read_torax_file(path)
-        #logger.warning(f'{self.format} reading function not defined yet...')
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)
+            if side == 'input':
+                if ipath.suffix.lower() in ['.json']:
+                    self.input = self._read_json_file(ipath)
+                else:
+                    self.input = self._read_torax_file(ipath)
+            else:
+                if ipath.suffix.lower() in ['.json']:
+                    logger.error(f'{self.format} cannot read JSON formatted data into {side}. Aborting!')
+                else:
+                    self.output = self._read_torax_file(ipath)
 
 
     def write(
@@ -501,10 +508,18 @@ class torax_io(io):
         side: str = 'input',
         overwrite: bool = False,
     ) -> None:
-        if side == 'input':
-            self._write_torax_file(path, self.input, overwrite=overwrite)
-        else:
-            self._write_torax_file(path, self.output, overwrite=overwrite)
+        if isinstance(path, (str, Path)):
+            opath = Path(path)
+            if side == 'input':
+                if opath.suffix.lower() in ['.json']:
+                    self._write_json_file(opath, self.input, overwrite=overwrite)
+                else:
+                    self._write_torax_file(opath, self.input, overwrite=overwrite)
+            else:
+                if opath.suffix.lower() in ['.json']:
+                    logger.error(f'{self.format} cannot write JSON formatted data into {side}. Aborting!')
+                else:
+                    self._write_torax_file(opath, self.output, overwrite=overwrite)
 
 
     def _read_torax_file(
@@ -551,6 +566,40 @@ class torax_io(io):
                             newattrs[attr] = str(data.attrs[attr])
                     data.attrs.update(newattrs)
                     data.to_netcdf(opath)
+                    logger.info(f'Saved {self.format} data into {opath.resolve()}')
+            else:
+                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
+        else:
+            logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
+
+
+    def _read_json_file(
+        self,
+        path: str | Path,
+    ) -> xr.Dataset:
+        ds = xr.Dataset()
+        if isinstance(path, (str, Path)):
+            jpath = Path(path)
+            if jpath.is_file() and path.suffix.lower() in ['.json']:
+                with open(jpath, 'r') as jf:
+                    json_dict = json.load(jf)
+                ds = self.from_dict(json_dict)
+        return ds
+
+
+    def _write_json_file(
+        self,
+        path: str | Path,
+        data: xr.Dataset,
+        overwrite: bool = False,
+    ) -> None:
+        if isinstance(path, (str, Path)):
+            opath = Path(path)
+            if overwrite or not opath.exists():
+                if isinstance(data, (xr.Dataset, xr.DataTree)):
+                    datadict = self.to_dict(data, json_compatible=True)
+                    with open(opath, 'w') as jf:
+                        json.dump(datadict, jf, indent=4)
                     logger.info(f'Saved {self.format} data into {opath.resolve()}')
             else:
                 logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
@@ -2781,14 +2830,13 @@ class torax_io(io):
 
     def to_dict(
         self,
+        data: xr.Dataset,
         json_compatible: bool = False,
     ) -> MutableMapping[str, Any]:
         datadict: MutableMapping[str, Any] = {}
-        self._clean()
-        ds = self.input
-        datadict.update(ds.attrs)
-        for key in ds.data_vars:
-            dims = ds[key].dims
+        datadict.update(data.attrs)
+        for key in data.data_vars:
+            dims = data[key].dims
             ttag: str | None = 'time' if 'time' in dims else None
             if ttag is None:
                 for dim in dims:
@@ -2802,10 +2850,10 @@ class torax_io(io):
                         rtag = str(dim)
                         break
             if ttag is not None and ttag in dims:
-                #time = ds[ttag].to_numpy().flatten()
+                #time = data[ttag].to_numpy().flatten()
                 if 'main_ion' in dims:
-                    for species in ds['main_ion'].to_numpy().flatten():
-                        da = ds[key].sel(main_ion=species).dropna(ttag)
+                    for species in data['main_ion'].to_numpy().flatten():
+                        da = data[key].sel(main_ion=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0, drop=True)
                         if da.size > 0:
@@ -2816,8 +2864,8 @@ class torax_io(io):
                                     datadict[f'{key}.{species}'].to_numpy().tolist(),
                                 )
                 elif 'impurity' in dims:
-                    for species in ds['impurity'].to_numpy().flatten():
-                        da = ds[key].sel(impurity=species).dropna(ttag)
+                    for species in data['impurity'].to_numpy().flatten():
+                        da = data[key].sel(impurity=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
@@ -2831,7 +2879,7 @@ class torax_io(io):
                         else:
                             datadict[f'{key}.{species}'] = None
                 elif rtag is not None and rtag in dims:
-                    da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
+                    da = data[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
                     if da.size > 0:
                         datadict[f'{key}'] = da.rename({ttag: 'time'})
                         if json_compatible:
@@ -2841,7 +2889,7 @@ class torax_io(io):
                                 datadict[f'{key}'].to_numpy().tolist(),
                             )
                 else:
-                    da = ds[key].dropna(ttag)
+                    da = data[key].dropna(ttag)
                     if da.size > 0:
                         datadict[f'{key}'] = da.rename({ttag: 'time'})
                         if json_compatible:
@@ -2921,7 +2969,8 @@ class torax_io(io):
     def from_dict(
         self,
         json_dict: MutableMapping[str, Any],
-    ) -> None:
+    ) -> xr.Dataset:
+        data = xr.Dataset()
         pre_coords: MutableMapping[str, Any] = {}
         data_vars: MutableMapping[str, Any] = {}
         attrs: MutableMapping[str, Any] = {}
@@ -3100,7 +3149,16 @@ class torax_io(io):
                         data_vars[field] = ([f'rho_{i+1:d}' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
         if coords and (data_vars or attrs):
             data = xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
-            self.input = data
+            #self.input = data
+        return data
+
+
+    def to_config(
+        self,
+        json_compatible: bool = False,
+    ) -> MutableMapping[str, Any]:
+        self._clean()
+        return self.to_dict(self.input, json_compatible=json_compatible)
 
 
     @classmethod
@@ -3626,18 +3684,4 @@ class torax_io(io):
                 newobj.input = xr.merge([v for k, v in dsmap.items()], join='outer')
                 newobj.update_input_attrs(full_attrs)
 
-        return newobj
-
-
-    @classmethod
-    def from_json(
-        cls,
-        json_file: str | Path,
-    ) -> Self:
-        newobj = cls()
-        jpath = Path(json_file)
-        if jpath.is_file():
-            with open(jpath, 'r') as jf:
-                json_dict = json.load(jf)
-            newobj.from_dict(json_dict)
         return newobj
