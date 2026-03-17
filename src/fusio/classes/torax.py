@@ -580,7 +580,7 @@ class torax_io(io):
         ds = xr.Dataset()
         if isinstance(path, (str, Path)):
             jpath = Path(path)
-            if jpath.is_file() and path.suffix.lower() in ['.json']:
+            if jpath.is_file() and jpath.suffix.lower() in ['.json']:
                 with open(jpath, 'r') as jf:
                     json_dict = json.load(jf)
                 ds = self.from_dict(json_dict)
@@ -3079,10 +3079,10 @@ class torax_io(io):
                         attrs[f'{key}.{field}.{k}'] = v
         coords: MutableMapping[str, Any] = {}
         if pre_coords:
-            unique_time_coords = []
-            unique_time_coords_list = []
-            unique_rho_coords = []
-            unique_rho_coords_list = []
+            unique_time_coords: list[Any] = []
+            unique_time_coords_list: list[Any] = []
+            unique_rho_coords: list[Any] = []
+            unique_rho_coords_list: list[Any] = []
             for c, v in pre_coords.items():
                 if c.startswith('time'):
                     index = -1
