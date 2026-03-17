@@ -73,10 +73,14 @@ class torax_io(io):
             'geometry_type',
             'n_rho',
             'hires_factor',
+            'cocos',
         ],
         'pedestal': [
             'model_name',
             'set_pedestal',
+        ],
+        'edge': [
+            'model_name',
         ],
         'transport': [
             'model_name',
@@ -120,13 +124,13 @@ class torax_io(io):
             'calculator_type',
             'tolerance',
         ],
+        'restart': [
+            'filename',
+            'time',
+            'do_restart',
+            'stitch',
+        ],
     }
-    restartvars: Final[Sequence[str]] = [
-        'filename',
-        'time',
-        'do_restart',
-        'stitch',
-    ]
     specvars: Final[Mapping[str, Any]] = {
         'geometry': {
             'circular': [
@@ -181,19 +185,33 @@ class torax_io(io):
                 'model_name',
                 'bootstrap_multiplier',
             ],
+            'transport': [
+                'model_name',
+                'chi_min',
+                'chi_max',
+                'D_e_min',
+                'D_e_max',
+                'V_e_min',
+                'V_e_max',
+            ],
             'conductivity': [
                 'model_name',
             ],
         },
         'mhd': {
-            'sawtooth': [
-                'model_name',
-                'crash_step_duration',
-                's_critical',
-                'minimum_radius',
-                'flattening_factor',
-                'mixing_radius_multiplier',
-            ],
+            'sawtooth': {
+                'crash_step_duration': [],
+                'trigger_model': [
+                    'model_name',
+                    's_critical',
+                    'minimum_radius',
+                ],
+                'redistribution_model': [
+                    'model_name',
+                    'flattening_factor',
+                    'mixing_radius_multiplier',
+                ],
+            },
         },
         'sources': {
             'generic_heat': [
@@ -470,11 +488,18 @@ class torax_io(io):
         path: str | Path,
         side: str = 'output',
     ) -> None:
-        if side == 'input':
-            self.input = self._read_torax_file(path)
-        else:
-            self.output = self._read_torax_file(path)
-        #logger.warning(f'{self.format} reading function not defined yet...')
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)
+            if side == 'input':
+                if ipath.suffix.lower() in ['.json']:
+                    self.input = self._read_json_file(ipath)
+                else:
+                    self.input = self._read_torax_file(ipath)
+            else:
+                if ipath.suffix.lower() in ['.json']:
+                    logger.error(f'{self.format} cannot read JSON formatted data into {side}. Aborting!')
+                else:
+                    self.output = self._read_torax_file(ipath)
 
 
     def write(
@@ -483,10 +508,18 @@ class torax_io(io):
         side: str = 'input',
         overwrite: bool = False,
     ) -> None:
-        if side == 'input':
-            self._write_torax_file(path, self.input, overwrite=overwrite)
-        else:
-            self._write_torax_file(path, self.output, overwrite=overwrite)
+        if isinstance(path, (str, Path)):
+            opath = Path(path)
+            if side == 'input':
+                if opath.suffix.lower() in ['.json']:
+                    self._write_json_file(opath, self.input, overwrite=overwrite)
+                else:
+                    self._write_torax_file(opath, self.input, overwrite=overwrite)
+            else:
+                if opath.suffix.lower() in ['.json']:
+                    logger.error(f'{self.format} cannot write JSON formatted data into {side}. Aborting!')
+                else:
+                    self._write_torax_file(opath, self.output, overwrite=overwrite)
 
 
     def _read_torax_file(
@@ -533,6 +566,40 @@ class torax_io(io):
                             newattrs[attr] = str(data.attrs[attr])
                     data.attrs.update(newattrs)
                     data.to_netcdf(opath)
+                    logger.info(f'Saved {self.format} data into {opath.resolve()}')
+            else:
+                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
+        else:
+            logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
+
+
+    def _read_json_file(
+        self,
+        path: str | Path,
+    ) -> xr.Dataset:
+        ds = xr.Dataset()
+        if isinstance(path, (str, Path)):
+            jpath = Path(path)
+            if jpath.is_file() and jpath.suffix.lower() in ['.json']:
+                with open(jpath, 'r') as jf:
+                    json_dict = json.load(jf)
+                ds = self.from_dict(json_dict)
+        return ds
+
+
+    def _write_json_file(
+        self,
+        path: str | Path,
+        data: xr.Dataset,
+        overwrite: bool = False,
+    ) -> None:
+        if isinstance(path, (str, Path)):
+            opath = Path(path)
+            if overwrite or not opath.exists():
+                if isinstance(data, (xr.Dataset, xr.DataTree)):
+                    datadict = self.to_dict(data, json_compatible=True)
+                    with open(opath, 'w') as jf:
+                        json.dump(datadict, jf, indent=4)
                     logger.info(f'Saved {self.format} data into {opath.resolve()}')
             else:
                 logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
@@ -959,7 +1026,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
         newattrs['profile_conditions.initial_psi_mode'] = 'geometry'
-        newattrs['geometry.cocos'] = 2
+        newattrs['geometry.cocos'] = kwargs.get('cocos', 2)
         #newattrs['geometry.hires_factor'] = 4
         newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
         newattrs['geometry.geometry_type'] = f'{geotype}'
@@ -971,6 +1038,7 @@ class torax_io(io):
                 geotime: MutableMapping[str, Any] = {}
                 geotime['geometry_file'] = f'{geofile}'
                 if geotype == 'eqdsk':
+                    geotime['cocos'] = kwargs.get('cocos', 2)
                     geotime['n_surfaces'] = kwargs.get('n_surfaces', 251)
                     geotime['last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
                 geoconfig[time] = geotime
@@ -2574,12 +2642,14 @@ class torax_io(io):
                 prof = data['n_e'].interp({'rho_norm': coords['rho']})
                 data_vars['AS_1'] = (['time', 'rho'], xr.ones_like(prof).to_numpy())
                 data_vars['RLNS_1'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[r'#N_1'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
             if 'T_e' in data:
                 norm = -1.0 * data['a_minor']
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prof = data['T_e'].interp({'rho_norm': coords['rho']})
                 data_vars['TAUS_1'] = (['time', 'rho'], xr.ones_like(prof).to_numpy())
                 data_vars['RLTS_1'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[r'#T_1'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             if 'A_i' in data:
                 mi = data['A_i'].to_numpy() * c['u'] / c['md']
                 data_vars['MASS_2'] = (['time', 'rho'], np.repeat(np.expand_dims(mi, axis=-1), len(coords['rho']), axis=-1))
@@ -2591,12 +2661,14 @@ class torax_io(io):
                 prof = data['n_i'].interp({'rho_norm': coords['rho']})
                 data_vars['AS_2'] = (['time', 'rho'], (data['n_i'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                 data_vars['RLNS_2'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[r'#N_2'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
             if 'T_i' in data:
                 norm = -1.0 * data['a_minor']
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prof = data['T_i'].interp({'rho_norm': coords['rho']})
                 data_vars['TAUS_2'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                 data_vars['RLTS_2'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[r'#T_2'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             ns = 2
             if full_impurities:
                 for j, symbol in enumerate(data.get('impurity_symbol', xr.DataArray()).to_numpy()):
@@ -2616,12 +2688,14 @@ class torax_io(io):
                         prof = data['n_impurity_species'].sel(impurity_symbol=symbol, drop=True).interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
                         data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (prof / denom).to_numpy())
                         data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                        data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
                     if 'T_i' in data:
                         norm = -1.0 * data['a_minor']
                         drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                         prof = data['T_i'].interp({'rho_norm': coords['rho']})
                         data_vars[f'TAUS_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                         data_vars[f'RLTS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                        data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             else:
                 if 'A_impurity' in data:
                     ns += 1
@@ -2635,12 +2709,14 @@ class torax_io(io):
                     prof = data['n_impurity'].interp({'rho_norm': coords['rho']})
                     data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (data['n_impurity'] / data['n_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                     data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                    data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
                 if 'T_i' in data:
                     norm = -1.0 * data['a_minor']
                     drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                     prof = data['T_i'].interp({'rho_norm': coords['rho']})
                     data_vars[f'TAUS_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                     data_vars[f'RLTS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                    data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             data_vars['NS'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([ns]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
             if 'q' in data:
                 q = data['q'].interp({'rho_face_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_face_norm': 'rho_norm'})
@@ -2754,13 +2830,13 @@ class torax_io(io):
 
     def to_dict(
         self,
+        data: xr.Dataset,
+        json_compatible: bool = False,
     ) -> MutableMapping[str, Any]:
         datadict: MutableMapping[str, Any] = {}
-        self._clean()
-        ds = self.input
-        datadict.update(ds.attrs)
-        for key in ds.data_vars:
-            dims = ds[key].dims
+        datadict.update(data.attrs)
+        for key in data.data_vars:
+            dims = data[key].dims
             ttag: str | None = 'time' if 'time' in dims else None
             if ttag is None:
                 for dim in dims:
@@ -2774,31 +2850,53 @@ class torax_io(io):
                         rtag = str(dim)
                         break
             if ttag is not None and ttag in dims:
-                #time = ds[ttag].to_numpy().flatten()
+                #time = data[ttag].to_numpy().flatten()
                 if 'main_ion' in dims:
-                    for species in ds['main_ion'].to_numpy().flatten():
-                        da = ds[key].sel(main_ion=species).dropna(ttag)
+                    for species in data['main_ion'].to_numpy().flatten():
+                        da = data[key].sel(main_ion=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
-                            da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0)
+                            da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm').isel(rho_norm=0, drop=True)
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da.rename({ttag: 'time'})
+                            if json_compatible:
+                                datadict[f'{key}.{species}'] = (
+                                    datadict[f'{key}.{species}']['time'].to_numpy().flatten().tolist(),
+                                    datadict[f'{key}.{species}'].to_numpy().tolist(),
+                                )
                 elif 'impurity' in dims:
-                    for species in ds['impurity'].to_numpy().flatten():
-                        da = ds[key].sel(impurity=species).dropna(ttag)
+                    for species in data['impurity'].to_numpy().flatten():
+                        da = data[key].sel(impurity=species).dropna(ttag)
                         if rtag is not None and rtag in da.dims:
                             da = da.rename({rtag: 'rho_norm'}).dropna('rho_norm')
                         if da.size > 0:
                             datadict[f'{key}.{species}'] = da.rename({ttag: 'time'})
+                            if json_compatible:
+                                datadict[f'{key}.{species}'] = (
+                                    datadict[f'{key}.{species}']['time'].to_numpy().flatten().tolist(),
+                                    datadict[f'{key}.{species}']['rho_norm'].to_numpy().flatten().tolist(),
+                                    datadict[f'{key}.{species}'].to_numpy().tolist(),
+                                )
                         else:
                             datadict[f'{key}.{species}'] = None
                 elif rtag is not None and rtag in dims:
-                    da = ds[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
+                    da = data[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
                     if da.size > 0:
                         datadict[f'{key}'] = da.rename({ttag: 'time'})
+                        if json_compatible:
+                            datadict[f'{key}'] = (
+                                datadict[f'{key}']['time'].to_numpy().flatten().tolist(),
+                                datadict[f'{key}']['rho_norm'].to_numpy().flatten().tolist(),
+                                datadict[f'{key}'].to_numpy().tolist(),
+                            )
                 else:
-                    da = ds[key].dropna(ttag)
+                    da = data[key].dropna(ttag)
                     if da.size > 0:
                         datadict[f'{key}'] = da.rename({ttag: 'time'})
+                        if json_compatible:
+                            datadict[f'{key}'] = (
+                                datadict[f'{key}']['time'].to_numpy().flatten().tolist(),
+                                datadict[f'{key}'].to_numpy().tolist(),
+                            )
         core_models = datadict.pop('map_combined_core_models', {})
         pedestal_models = datadict.pop('map_combined_pedestal_models', {})
         if datadict.get('transport.model_name', '') == 'combined':
@@ -2866,6 +2964,201 @@ class torax_io(io):
         if 'pedestal.set_pedestal' not in datadict:
             datadict['pedestal.set_pedestal'] = False
         return self._unflatten(datadict)
+
+
+    def from_dict(
+        self,
+        json_dict: MutableMapping[str, Any],
+    ) -> xr.Dataset:
+        data = xr.Dataset()
+        pre_coords: MutableMapping[str, Any] = {}
+        data_vars: MutableMapping[str, Any] = {}
+        attrs: MutableMapping[str, Any] = {}
+        for key in self.basevars:
+            if key in ['sources']:
+                continue
+            if key not in json_dict:
+                continue
+            for field in json_dict[key]:
+                if key == 'plasma_composition' and field in ['main_ion', 'impurity']:
+                    species = []
+                    for key2 in json_dict[key][field]:
+                        if key2 == 'species':
+                            for k, v in json_dict[key][field][key2].items():
+                                species.append(f'{k}')
+                                ndim = len(v) - 1
+                                dims = [f'time_{field}_{k}']
+                                pre_coords[dims[0]] = np.asarray(v[0])
+                                if ndim > 1:
+                                    dims.append(f'rho_{field}_{k}')
+                                    pre_coords[dims[1]] = np.asarray(v[1])
+                                data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[-1]))
+                        elif isinstance(json_dict[key][field][key2], (tuple, list)):
+                            species.append(f'{key2}')
+                            ndim = len(json_dict[key][field][key2]) - 1
+                            dims = [f'time_{field}_{key2}']
+                            pre_coords[dims[0]] = np.asarray(json_dict[key][field][key2][0])
+                            if ndim > 1:
+                                dims.append(f'rho_{field}_{key2}')
+                                pre_coords[dims[1]] = np.asarray(json_dict[key][field][key2][1])
+                            data_vars[f'{key}.{field}.{key2}'] = (dims, np.asarray(json_dict[key][field][key2][-1]))
+                        else:
+                            attrs[f'{key}.{field}.{key2}'] = json_dict[key][field][key2]
+                if key == 'transport' and field in ['transport_models', 'pedestal_transport_models']:
+                    for i, settings in enumerate(json_dict[key][field]):
+                        for k, v in settings.items():
+                            if isinstance(v, (tuple, list)):
+                                ndim = len(v) - 1
+                                dims = [f'time_{key}_{k}']
+                                pre_coords[dims[0]] = np.asarray(v[0])
+                                if ndim > 1:
+                                    dims.append(f'rho_{key}_{k}')
+                                    pre_coords[dims[1]] = np.asarray(v[1])
+                                data_vars[f'{key}.{field}.{i:d}.{k}'] = (dims, np.asarray(v[-1]))
+                            else:
+                                attrs[f'{key}.{field}.{i:d}.{k}'] = v
+                elif isinstance(json_dict[key][field], dict):
+                    for k, v in json_dict[key][field].items():
+                        if isinstance(v, (tuple, list)):
+                            ndim = len(v) - 1
+                            dims = [f'time_{key}_{k}']
+                            pre_coords[dims[0]] = np.asarray(v[0])
+                            if ndim > 1:
+                                dims.append(f'rho_{key}_{k}')
+                                pre_coords[dims[1]] = np.asarray(v[1])
+                            data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[-1]))
+                        else:
+                            attrs[f'{key}.{field}.{k}'] = v
+                elif isinstance(json_dict[key][field], (tuple, list)):
+                    ndim = len(json_dict[key][field]) - 1
+                    dims = [f'time_{key}_{field}']
+                    pre_coords[dims[0]] = np.asarray(json_dict[key][field][0])
+                    if ndim > 1:
+                        dims.append(f'rho_{key}_{field}')
+                        pre_coords[dims[1]] = np.asarray(json_dict[key][field][1])
+                    data_vars[f'{key}.{field}'] = (dims, np.asarray(json_dict[key][field][-1]))
+                else:
+                    attrs[f'{key}.{field}'] = json_dict[key][field]
+        if 'sources' in json_dict:
+            key = 'sources'
+            for field in json_dict[key]:
+                for k, v in json_dict[key][field].items():
+                    if k == 'prescribed_values':
+                        if len(v) > 1:
+                            ndim_i = len(v[0]) - 1
+                            dims_i = [f'time_{field}_{k}_ion']
+                            pre_coords[dims_i[0]] = np.asarray(v[0][0])
+                            if ndim_i > 1:
+                                dims_i.append(f'rho_{field}_{k}_ion')
+                                pre_coords[dims_i[1]] = np.asarray(v[0][1])
+                            data_vars[f'{key}.{field}.{k}_ion'] = (dims_i, np.asarray(v[0][-1]))
+                            ndim_e = len(v[1]) - 1
+                            dims_e = [f'time_{field}_{k}_el']
+                            pre_coords[dims_e[0]] = np.asarray(v[1][0])
+                            if ndim_e > 1:
+                                dims_e.append(f'rho_{field}_{k}_el')
+                                pre_coords[dims_e[1]] = np.asarray(v[1][1])
+                            data_vars[f'{key}.{field}.{k}_el'] = (dims_e, np.asarray(v[1][-1]))
+                        else:
+                            ndim = len(v[0]) - 1
+                            dims = [f'time_{field}_{k}']
+                            pre_coords[dims[0]] = np.asarray(v[0][0])
+                            if ndim > 1:
+                                dims.append(f'rho_{field}_{k}')
+                                pre_coords[dims[1]] = np.asarray(v[0][1])
+                            data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[0][-1]))
+                    elif isinstance(v, (tuple, list)):
+                        ndim = len(v) - 1
+                        dims = [f'time_{field}_{k}']
+                        pre_coords[dims[0]] = np.asarray(v[0][0])
+                        if ndim > 1:
+                            dims.append(f'rho_{field}_{k}')
+                            pre_coords[dims[1]] = np.asarray(v[0][1])
+                        data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[0][-1]))
+                    else:
+                        attrs[f'{key}.{field}.{k}'] = v
+        coords: MutableMapping[str, Any] = {}
+        if pre_coords:
+            unique_time_coords: list[Any] = []
+            unique_time_coords_list: list[Any] = []
+            unique_rho_coords: list[Any] = []
+            unique_rho_coords_list: list[Any] = []
+            for c, v in pre_coords.items():
+                if c.startswith('time'):
+                    index = -1
+                    for i, vc in enumerate(unique_time_coords):
+                        if len(v) == len(vc) and np.all(np.isclose(v, vc)):
+                            index = i
+                            unique_time_coords_list[i].append(c)
+                    if index < 0:
+                        unique_time_coords.append(copy.deepcopy(v))
+                        unique_time_coords_list.append([c])
+                if c.startswith('rho'):
+                    index = -1
+                    for i, vc in enumerate(unique_rho_coords):
+                        if len(v) == len(vc) and np.all(np.isclose(v, vc)):
+                            index = i
+                            unique_rho_coords_list[i].append(c)
+                    if index < 0:
+                        unique_rho_coords.append(copy.deepcopy(v))
+                        unique_rho_coords_list.append([c])
+            base_time_index = 0
+            max_time_range = 0.0
+            max_time_resolution = 0
+            for i, vec in enumerate(unique_time_coords):
+                if (np.nanmax(vec) - np.nanmin(vec)) > max_time_range:
+                    max_time_range = float(np.nanmax(vec) - np.nanmin(vec))
+                    max_time_resoution = len(vec)
+                    base_time_index = i
+                elif np.isclose(np.nanmax(vec) - np.nanmin(vec), max_time_range) and len(vec) > max_time_resolution:
+                    max_time_range = float(np.nanmax(vec) - np.nanmin(vec))
+                    max_time_resoution = len(vec)
+                    base_time_index = i
+            base_rho_index = 0
+            max_rho_range = 0.0
+            max_rho_resolution = 0
+            for i, vec in enumerate(unique_rho_coords):
+                if (np.nanmax(vec) - np.nanmin(vec)) > max_rho_range:
+                    max_rho_range = float(np.nanmax(vec) - np.nanmin(vec))
+                    max_rho_resolution = len(vec)
+                    base_rho_index = i
+                elif np.isclose(np.nanmax(vec) - np.nanmin(vec), max_rho_range) and len(vec) > max_rho_resolution:
+                    max_rho_range = float(np.nanmax(vec) - np.nanmin(vec))
+                    max_rho_resoution = len(vec)
+                    base_rho_index = i
+            base_time = unique_time_coords.pop(base_time_index)
+            base_time_list = unique_time_coords_list.pop(base_time_index)
+            base_rho = unique_rho_coords.pop(base_rho_index)
+            base_rho_list = unique_rho_coords_list.pop(base_rho_index)
+            coords.update({'time': base_time, 'rho': base_rho})
+            for name in base_time_list:
+                for field in data_vars:
+                    data_vars[field] = (['time' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+            for name in base_rho_list:
+                for field in data_vars:
+                    data_vars[field] = (['rho' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+            for i, v in enumerate(unique_time_coords):
+                coords.update({f'time_{i+1:d}': v})
+                for name in unique_time_coords_list[i]:
+                    for field in data_vars:
+                        data_vars[field] = ([f'time_{i+1:d}' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+            for i, v in enumerate(unique_rho_coords):
+                coords.update({f'rho_{i+1:d}': v})
+                for name in unique_rho_coords_list[i]:
+                    for field in data_vars:
+                        data_vars[field] = ([f'rho_{i+1:d}' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+        if coords and (data_vars or attrs):
+            data = xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+            #self.input = data
+        return data
+
+
+    def to_config(
+        self,
+        json_compatible: bool = False,
+    ) -> MutableMapping[str, Any]:
+        self._clean()
+        return self.to_dict(self.input, json_compatible=json_compatible)
 
 
     @classmethod
