@@ -73,6 +73,7 @@ class torax_io(io):
             'geometry_type',
             'n_rho',
             'hires_factor',
+            'cocos',
         ],
         'pedestal': [
             'model_name',
@@ -192,14 +193,14 @@ class torax_io(io):
                 'D_e_max',
                 'V_e_min',
                 'V_e_max',
-            },
+            ],
             'conductivity': [
                 'model_name',
             ],
         },
         'mhd': {
-            'sawtooth': [
-                'crash_step_duration',
+            'sawtooth': {
+                'crash_step_duration': [],
                 'trigger_model': [
                     'model_name',
                     's_critical',
@@ -210,7 +211,7 @@ class torax_io(io):
                     'flattening_factor',
                     'mixing_radius_multiplier',
                 ],
-            ],
+            },
         },
         'sources': {
             'generic_heat': [
@@ -2917,6 +2918,191 @@ class torax_io(io):
         return self._unflatten(datadict)
 
 
+    def from_dict(
+        self,
+        json_dict: MutableMapping[str, Any],
+    ) -> None:
+        pre_coords: MutableMapping[str, Any] = {}
+        data_vars: MutableMapping[str, Any] = {}
+        attrs: MutableMapping[str, Any] = {}
+        for key in self.basevars:
+            if key in ['sources']:
+                continue
+            if key not in json_dict:
+                continue
+            for field in json_dict[key]:
+                if key == 'plasma_composition' and field in ['main_ion', 'impurity']:
+                    species = []
+                    for key2 in json_dict[key][field]:
+                        if key2 == 'species':
+                            for k, v in json_dict[key][field][key2].items():
+                                species.append(f'{k}')
+                                ndim = len(v) - 1
+                                dims = [f'time_{field}_{k}']
+                                pre_coords[dims[0]] = np.asarray(v[0])
+                                if ndim > 1:
+                                    dims.append(f'rho_{field}_{k}')
+                                    pre_coords[dims[1]] = np.asarray(v[1])
+                                data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[-1]))
+                        elif isinstance(json_dict[key][field][key2], (tuple, list)):
+                            species.append(f'{key2}')
+                            ndim = len(json_dict[key][field][key2]) - 1
+                            dims = [f'time_{field}_{key2}']
+                            pre_coords[dims[0]] = np.asarray(json_dict[key][field][key2][0])
+                            if ndim > 1:
+                                dims.append(f'rho_{field}_{key2}')
+                                pre_coords[dims[1]] = np.asarray(json_dict[key][field][key2][1])
+                            data_vars[f'{key}.{field}.{key2}'] = (dims, np.asarray(json_dict[key][field][key2][-1]))
+                        else:
+                            attrs[f'{key}.{field}.{key2}'] = json_dict[key][field][key2]
+                if key == 'transport' and field in ['transport_models', 'pedestal_transport_models']:
+                    for i, settings in enumerate(json_dict[key][field]):
+                        for k, v in settings.items():
+                            if isinstance(v, (tuple, list)):
+                                ndim = len(v) - 1
+                                dims = [f'time_{key}_{k}']
+                                pre_coords[dims[0]] = np.asarray(v[0])
+                                if ndim > 1:
+                                    dims.append(f'rho_{key}_{k}')
+                                    pre_coords[dims[1]] = np.asarray(v[1])
+                                data_vars[f'{key}.{field}.{i:d}.{k}'] = (dims, np.asarray(v[-1]))
+                            else:
+                                attrs[f'{key}.{field}.{i:d}.{k}'] = v
+                elif isinstance(json_dict[key][field], dict):
+                    for k, v in json_dict[key][field].items():
+                        if isinstance(v, (tuple, list)):
+                            ndim = len(v) - 1
+                            dims = [f'time_{key}_{k}']
+                            pre_coords[dims[0]] = np.asarray(v[0])
+                            if ndim > 1:
+                                dims.append(f'rho_{key}_{k}')
+                                pre_coords[dims[1]] = np.asarray(v[1])
+                            data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[-1]))
+                        else:
+                            attrs[f'{key}.{field}.{k}'] = v
+                elif isinstance(json_dict[key][field], (tuple, list)):
+                    ndim = len(json_dict[key][field]) - 1
+                    dims = [f'time_{key}_{field}']
+                    pre_coords[dims[0]] = np.asarray(json_dict[key][field][0])
+                    if ndim > 1:
+                        dims.append(f'rho_{key}_{field}')
+                        pre_coords[dims[1]] = np.asarray(json_dict[key][field][1])
+                    data_vars[f'{key}.{field}'] = (dims, np.asarray(json_dict[key][field][-1]))
+                else:
+                    attrs[f'{key}.{field}'] = json_dict[key][field]
+        if 'sources' in json_dict:
+            key = 'sources'
+            for field in json_dict[key]:
+                for k, v in json_dict[key][field].items():
+                    if k == 'prescribed_values':
+                        if len(v) > 1:
+                            ndim_i = len(v[0]) - 1
+                            dims_i = [f'time_{field}_{k}_ion']
+                            pre_coords[dims_i[0]] = np.asarray(v[0][0])
+                            if ndim_i > 1:
+                                dims_i.append(f'rho_{field}_{k}_ion')
+                                pre_coords[dims_i[1]] = np.asarray(v[0][1])
+                            data_vars[f'{key}.{field}.{k}_ion'] = (dims_i, np.asarray(v[0][-1]))
+                            ndim_e = len(v[1]) - 1
+                            dims_e = [f'time_{field}_{k}_el']
+                            pre_coords[dims_e[0]] = np.asarray(v[1][0])
+                            if ndim_e > 1:
+                                dims_e.append(f'rho_{field}_{k}_el')
+                                pre_coords[dims_e[1]] = np.asarray(v[1][1])
+                            data_vars[f'{key}.{field}.{k}_el'] = (dims_e, np.asarray(v[1][-1]))
+                        else:
+                            ndim = len(v[0]) - 1
+                            dims = [f'time_{field}_{k}']
+                            pre_coords[dims[0]] = np.asarray(v[0][0])
+                            if ndim > 1:
+                                dims.append(f'rho_{field}_{k}')
+                                pre_coords[dims[1]] = np.asarray(v[0][1])
+                            data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[0][-1]))
+                    elif isinstance(v, (tuple, list)):
+                        ndim = len(v) - 1
+                        dims = [f'time_{field}_{k}']
+                        pre_coords[dims[0]] = np.asarray(v[0][0])
+                        if ndim > 1:
+                            dims.append(f'rho_{field}_{k}')
+                            pre_coords[dims[1]] = np.asarray(v[0][1])
+                        data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[0][-1]))
+                    else:
+                        attrs[f'{key}.{field}.{k}'] = v
+        coords: MutableMapping[str, Any] = {}
+        if pre_coords:
+            unique_time_coords = []
+            unique_time_coords_list = []
+            unique_rho_coords = []
+            unique_rho_coords_list = []
+            for c, v in pre_coords.items():
+                if c.startswith('time'):
+                    index = -1
+                    for i, vc in enumerate(unique_time_coords):
+                        if len(v) == len(vc) and np.all(np.isclose(v, vc)):
+                            index = i
+                            unique_time_coords_list[i].append(c)
+                    if index < 0:
+                        unique_time_coords.append(copy.deepcopy(v))
+                        unique_time_coords_list.append([c])
+                if c.startswith('rho'):
+                    index = -1
+                    for i, vc in enumerate(unique_rho_coords):
+                        if len(v) == len(vc) and np.all(np.isclose(v, vc)):
+                            index = i
+                            unique_rho_coords_list[i].append(c)
+                    if index < 0:
+                        unique_rho_coords.append(copy.deepcopy(v))
+                        unique_rho_coords_list.append([c])
+            base_time_index = 0
+            max_time_range = 0.0
+            max_time_resolution = 0
+            for i, vec in enumerate(unique_time_coords):
+                if (np.nanmax(vec) - np.nanmin(vec)) > max_time_range:
+                    max_time_range = float(np.nanmax(vec) - np.nanmin(vec))
+                    max_time_resoution = len(vec)
+                    base_time_index = i
+                elif np.isclose(np.nanmax(vec) - np.nanmin(vec), max_time_range) and len(vec) > max_time_resolution:
+                    max_time_range = float(np.nanmax(vec) - np.nanmin(vec))
+                    max_time_resoution = len(vec)
+                    base_time_index = i
+            base_rho_index = 0
+            max_rho_range = 0.0
+            max_rho_resolution = 0
+            for i, vec in enumerate(unique_rho_coords):
+                if (np.nanmax(vec) - np.nanmin(vec)) > max_rho_range:
+                    max_rho_range = float(np.nanmax(vec) - np.nanmin(vec))
+                    max_rho_resolution = len(vec)
+                    base_rho_index = i
+                elif np.isclose(np.nanmax(vec) - np.nanmin(vec), max_rho_range) and len(vec) > max_rho_resolution:
+                    max_rho_range = float(np.nanmax(vec) - np.nanmin(vec))
+                    max_rho_resoution = len(vec)
+                    base_rho_index = i
+            base_time = unique_time_coords.pop(base_time_index)
+            base_time_list = unique_time_coords_list.pop(base_time_index)
+            base_rho = unique_rho_coords.pop(base_rho_index)
+            base_rho_list = unique_rho_coords_list.pop(base_rho_index)
+            coords.update({'time': base_time, 'rho': base_rho})
+            for name in base_time_list:
+                for field in data_vars:
+                    data_vars[field] = (['time' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+            for name in base_rho_list:
+                for field in data_vars:
+                    data_vars[field] = (['rho' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+            for i, v in enumerate(unique_time_coords):
+                coords.update({f'time_{i+1:d}': v})
+                for name in unique_time_coords_list[i]:
+                    for field in data_vars:
+                        data_vars[field] = ([f'time_{i+1:d}' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+            for i, v in enumerate(unique_rho_coords):
+                coords.update({f'rho_{i+1:d}': v})
+                for name in unique_rho_coords_list[i]:
+                    for field in data_vars:
+                        data_vars[field] = ([f'rho_{i+1:d}' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+        if coords and (data_vars or attrs):
+            data = xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+            self.input = data
+
+
     @classmethod
     def from_file(
         cls,
@@ -3444,113 +3630,14 @@ class torax_io(io):
 
 
     @classmethod
-    def from_dict(
+    def from_json(
         cls,
-        json_dict: MutableMapping[str, Any],
+        json_file: str | Path,
     ) -> Self:
         newobj = cls()
-        coords: MutableMapping[str, Any] = {}
-        data_vars: MutableMapping[str, Any] = {}
-        attrs: MutableMapping[str, Any] = {}
-        for key in newobj.basevars:
-            if key in ['sources']:
-                continue
-            if key not in json_dict:
-                continue
-            for field in json_dict[key]:
-                if key == 'plasma_composition' and field in ['main_ion', 'impurity']:
-                    if 'species' in json_dict[key][field]:
-                        species = []
-                        values = []
-                        for k in json_dict[key][field]:
-                            if k == 'species':
-                                for spec, val in json_dict[key][field][k].items():
-                                    species.append(f'{spec}')
-                                    values.append(np.asarray(val))
-                            else:
-                                attrs[f'{key}.{field}.{k}'] = json_dict[key][field][k]
-                    else:
-                        species = []
-                        values = []
-                        for spec, val in json_dict[key][field].items():
-                            species.append(f'{spec}')
-                            values.append(np.asarray(val))
-                        coords[f'{field}'] = np.asarray(species).flatten()
-                        data_vars[f'{key}.{field}'] = 
-                if key == 'transport' and field in ['transport_models', 'pedestal_transport_models']:
-                    for i, settings in enumerate(json_dict[key][field]):
-                        for k, v in settings.items():
-                            if isinstance(v, (tuple, list)):
-                                ndim = len(v) - 1
-                                dims = [f'time_{key}_{k}']
-                                coords[dims[0]] = np.asarray(v[0])
-                                if ndim > 1:
-                                    dims.append(f'rho_{key}_{k}')
-                                    coords[dims[1]] = np.asarray(v[1])
-                                data_vars[f'{key}.{field}.{i:d}.{k}'] = (dims, np.asarray(v[-1]))
-                            else:
-                                attrs[f'{key}.{field}.{i:d}.{k}'] = v
-                elif isinstance(json_dict[key][field], dict):
-                    for k, v in json_dict[key][field].items():
-                        if isinstance(v, (tuple, list)):
-                            ndim = len(v) - 1
-                            dims = [f'time_{key}_{k}']
-                            coords[dims[0]] = np.asarray(v[0])
-                            if ndim > 1:
-                                dims.append(f'rho_{key}_{k}')
-                                coords[dims[1]] = np.asarray(v[1])
-                            data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[-1]))
-                        else:
-                            attrs[f'{key}.{field}.{k}'] = v
-                elif isinstance(json_dict[key][field], (tuple, list)):
-                    ndim = len(json_dict[key][field]) - 1
-                    dims = [f'time_{key}_{field}']
-                    coords[dims[0]] = np.asarray(json_dict[key][field][0])
-                    if ndim > 1:
-                        dims.append(f'rho_{key}_{field}')
-                        coords[dims[1]] = np.asarray(json_dict[key][field][1])
-                    data_vars[f'{key}.{field}.{field}'] = (dims, np.asarray(json_dict[key][field][-1]))
-                else:
-                    attrs[f'{key}.{field}.{field}'] = json_dict[key][field]
-        if 'sources' in json_dict:
-            key = 'sources'
-            for field in json_dict[key]:
-                for k, v in json_dict[key][field].items():
-                    if k == 'prescribed_values':
-                        if len(v) > 1:
-                            ndim_i = len(v[0]) - 1
-                            dims_i = [f'time_{field}_{k}_ion']
-                            coords[dims_i[0]] = np.asarray(v[0][0])
-                            if ndim_i > 1:
-                                dims_i.append(f'rho_{field}_{k}_ion')
-                                coords[dims_i[1]] = np.asarray(v[0][1])
-                            data_vars[f'{key}.{field}.{k}_ion'] = (dims_i, np.asarray(v[0][-1]))
-                            ndim_e = len(v[1]) - 1
-                            dims_e = [f'time_{field}_{k}_el']
-                            coords[dims_e[0]] = np.asarray(v[1][0])
-                            if ndim_e > 1:
-                                dims_e.append(f'rho_{field}_{k}_el')
-                                coords[dims_e[1]] = np.asarray(v[1][1])
-                            data_vars[f'{key}.{field}.{k}_el'] = (dims_e, np.asarray(v[1][-1]))
-                        else:
-                            ndim = len(v[0]) - 1
-                            dims = [f'time_{field}_{k}']
-                            coords[dims[0]] = np.asarray(v[0][0])
-                            if ndim > 1:
-                                dims.append(f'rho_{field}_{k}')
-                                coords[dims[1]] = np.asarray(v[0][1])
-                            data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[0][-1]))
-                    elif isinstance(v, (tuple, list)):
-                        ndim = len(v) - 1
-                        dims = [f'time_{field}_{k}']
-                        coords[dims[0]] = np.asarray(v[0][0])
-                        if ndim > 1:
-                            dims.append(f'rho_{field}_{k}')
-                            coords[dims[1]] = np.asarray(v[0][1])
-                        data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[0][-1]))
-                    else:
-                        attrs[f'{key}.{field}.{k}'] = v
-        if data_vars or attrs:
-            data = xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
-            newobj.input = data
+        jpath = Path(json_file)
+        if jpath.is_file():
+            with open(jpath, 'r') as jf:
+                json_dict = json.load(jf)
+            newobj.from_dict(json_dict)
         return newobj
