@@ -754,7 +754,7 @@ class torax_io(io):
                 total = np.atleast_1d(data['plasma_composition.main_ion'].sum('main_ion').to_numpy())
                 data_vars['plasma_composition.main_ion'] = (['main_ion', 'time'], np.expand_dims(sfrac / (total - sfrac), axis=0))
             newdata = xr.Dataset(coords=coords, data_vars=data_vars)
-            self.input = xr.concat([data, newdata], dim='main_ion', data_vars='minimal', coords='different', join='outer')
+            self.input = xr.concat([data, newdata], dim='main_ion', data_vars='minimal', coords='different', join='outer', compat='equals')
             if 'plasma_composition.main_ion' in self.input:
                 val = self.input['plasma_composition.main_ion']
                 newvars: MutableMapping[str, Any] = {}
@@ -779,7 +779,7 @@ class torax_io(io):
                 ne = np.ones_like(data['profile_conditions.n_e'].to_numpy())
                 data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.expand_dims(sfrac * ne, axis=0))
             newdata = xr.Dataset(coords=coords, data_vars=data_vars)
-            self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer')
+            self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer', compat='equals')
 
 
     def set_constant_flat_effective_charge(
@@ -1010,7 +1010,7 @@ class torax_io(io):
                 data_vars: MutableMapping[str, Any] = {}
                 data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.expand_dims(np.full((len(time), len(rho)), np.nan), axis=0))
                 newdata = xr.Dataset(coords=coords, data_vars=data_vars)
-                self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer')
+                self.input = xr.concat([data, newdata], dim='impurity', data_vars='minimal', coords='different', join='outer', compat='equals')
                 newattrs['plasma_composition.impurity.impurity_mode'] = 'n_e_ratios_Z_eff'
         self.update_input_attrs(newattrs)
 
