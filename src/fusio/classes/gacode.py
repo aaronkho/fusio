@@ -38,6 +38,7 @@ class gacode_io(io):
         'bcentr',
         'current',
         'time',
+        'rho',
         'polflux',
         'q',
         'rmin',
@@ -139,6 +140,9 @@ class gacode_io(io):
         'qpar_beam': '1/m^3/s',
         'qpar_wall': '1/m^3/s',
         'qmom': 'N/m^2',
+    }
+    empty_units: Final[Mapping[str, str]] = {
+        'rho': '-',
     }
 
 
@@ -1549,13 +1553,19 @@ class gacode_io(io):
     ) -> MutableMapping[str, Any]:
         datadict: MutableMapping[str, Any] = {}
         data = self.input if side == 'input' else self.output
-        data = data.sel(n=item, drop=True)
+        ddata = data.sel(n=item, drop=True)
         for key in self.basevars:
-            if key in data:
+            if key in ddata:
                 tag = f'{key}'
                 if key in self.units:
                     tag += f'({self.units[key]})'
-                datadict[f'{tag}'] = data[f'{key}'].to_numpy()
+                elif key in self.empty_units:
+                    tag += f'({self.empty_units[key]})'
+                datadict[f'{tag}'] = ddata[f'{key}'].to_numpy()
+                if key in self.titles_singleInt:
+                    datadict[f'{tag}'] = np.asarray([datadict[f'{tag}']])
+                if key in self.titles_singleFloat and key not in ['mass', 'z']:
+                    datadict[f'{tag}'] = np.asarray([datadict[f'{tag}']])
         return datadict
 
 
