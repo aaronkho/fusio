@@ -1542,6 +1542,23 @@ class gacode_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
+    def to_dict(
+        self,
+        side: str = 'output',
+        item: int = 0,
+    ) -> MutableMapping[str, Any]:
+        datadict: MutableMapping[str, Any] = {}
+        data = self.input if side == 'input' else self.output
+        data = data.sel(n=item, drop=True)
+        for key in self.basevars:
+            if key in data:
+                tag = f'{key}'
+                if key in self.units:
+                    tag += f'({self.units[key]})'
+                datadict[f'{tag}'] = data[f'{key}'].to_numpy()
+        return datadict
+
+
     @classmethod
     def from_file(
         cls,
