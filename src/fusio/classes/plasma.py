@@ -1082,6 +1082,11 @@ class plasma_io(io):
             self.input['density_ratio_main'] = self.input['density_ratio_main'].isel(radius=0)
 
 
+    def swap(self):
+        # Works since gacode_io input structure is the same as its output structure
+        self.input, self.output = self.output, self.input
+
+
     @classmethod
     def from_file(
         cls,

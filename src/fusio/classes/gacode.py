@@ -143,6 +143,10 @@ class gacode_io(io):
     }
     empty_units: Final[Mapping[str, str]] = {
         'rho': '-',
+        'kappa': '-',
+        'delta': '-',
+        'zeta': '-',
+        'z_eff': '-',
     }
 
 
@@ -1495,7 +1499,7 @@ class gacode_io(io):
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
                     newlines.append(f'# {newtitle}\n')
-                    newlines.append(f'{wdata[title]:d}\n')
+                    newlines.append(' '.join([f'{int(val):d}' for val in np.atleast_1d(wdata[title].values)]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
             for title in self.titles_singleStr:
@@ -1561,12 +1565,19 @@ class gacode_io(io):
                     tag += f'({self.units[key]})'
                 elif key in self.empty_units:
                     tag += f'({self.empty_units[key]})'
+                elif key.startswith('shape_cos') or key.startswith('shape_sin'):
+                    tag += f'(-)'
                 datadict[f'{tag}'] = ddata[f'{key}'].to_numpy()
                 if key in self.titles_singleInt:
-                    datadict[f'{tag}'] = np.asarray([datadict[f'{tag}']])
+                    datadict[f'{tag}'] = np.atleast_1d(datadict[f'{tag}']).astype(int)
                 if key in self.titles_singleFloat and key not in ['mass', 'z']:
-                    datadict[f'{tag}'] = np.asarray([datadict[f'{tag}']])
+                    datadict[f'{tag}'] = np.atleast_1d([datadict[f'{tag}']])
         return datadict
+
+
+    def swap(self) -> None:
+        # Works since gacode_io input structure is the same as its output structure
+        self.input, self.output = self.output, self.input
 
 
     @classmethod
@@ -1719,15 +1730,17 @@ class gacode_io(io):
                     coords['rho'] = data['rho_norm'].sel(direction='toroidal', drop=True).mean('time').to_numpy().flatten()
                 elif 'magnetic_flux' in data:
                     coords['rho'] = ((data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)) ** 0.5).sel(direction='toroidal', drop=True).mean('time').to_numpy().flatten()
-                data_vars['nexp'] = (['n'], np.repeat(np.array([len(coords['rho'])]).astype(int), len(coords['n']), axis=0))
-                data_vars['shot'] = (['n'], np.repeat(np.array([0]).astype(int), len(coords['n']), axis=0))
+                data_vars['nexp'] = (['n'], np.repeat(np.array([len(coords['rho'])]), len(coords['n']), axis=0).astype(int))
+                data_vars['shot'] = (['n'], np.repeat(np.array([0]), len(coords['n']), axis=0).astype(int))
                 if 'ion' in data:
                     coords['name'] = data['ion'].to_numpy()
-                    data_vars['nion'] = (['n'], np.repeat(np.array([len(coords['name'])]).astype(int), len(coords['n']), axis=0))
+                    data_vars['nion'] = (['n'], np.repeat(np.array([len(coords['name'])]), len(coords['n']), axis=0).astype(int))
                     if 'type_i' in data:
                         data_vars['type'] = (['n', 'name'], np.where(data['type_i'].to_numpy() == 'thermal', '[therm]', '[fast]'))
                     if 'charge_i' in data:
                         data_vars['z'] = (['n', 'name'], data['charge_i'].mean('radius').to_numpy())
+                else:
+                    data_vars['nion'] = (['n'], np.repeat(np.array([0]), len(coords['n']), axis=0).astype(int))
                 if 'r_geometric' in data:
                     data_vars['rcentr'] = (['n'], data['r_geometric'].isel(radius=0, drop=True).to_numpy())
                 for key, nkey in direct_time_map.items():
