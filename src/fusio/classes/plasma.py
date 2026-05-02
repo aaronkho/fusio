@@ -222,10 +222,15 @@ class plasma_io(io):
 
     def _compute_derived_coordinates(
         self,
+        side: str = 'input',
     ) -> None:
         newvars: MutableMapping[str, Any] = {}
-        if self.has_input:
+        data = None
+        if side == 'output' and self.has_output:
+            data = self.output
+        elif self.has_input:
             data = self.input
+        if data is not None:
             r_minor_lcfs = data['r_minor'].interp(coords={'radius': 1.0}, kwargs={'fill_value': 'extrapolate'})
             r_geometric_lcfs = data['r_geometric'].interp(coords={'radius': 1.0}, kwargs={'fill_value': 'extrapolate'})
             z_geometric_lcfs = data['z_geometric'].interp(coords={'radius': 1.0}, kwargs={'fill_value': 'extrapolate'})
@@ -245,23 +250,33 @@ class plasma_io(io):
             newvars['magnetic_flux_norm'] = (['time', 'radius', 'direction'], (data['magnetic_flux'] / magnetic_flux_lcfs).to_numpy())
             newvars['rho'] = (['time', 'radius', 'direction'], ((data['magnetic_flux'] / (0.5 * data['field_axis'])) ** 0.5).to_numpy())
             newvars['rho_norm'] = (['time', 'radius', 'direction'], ((data['magnetic_flux'] / magnetic_flux_lcfs) ** 0.5).to_numpy())
-            contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
-            contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
+            #contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
+            #contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
+            contour_r = data['contour'].sel(grid='r')
+            contour_z = data['contour'].sel(grid='z')
             xs_area = trapezoid(contour_r, x=contour_z, axis=-1)
             vol = 2.0 * np.pi * data['r_geometric'].to_numpy() * xs_area
             volp = vectorized_numpy_derivative(data['r_minor'].to_numpy(), vol)
             newvars['cross_sectional_area'] = (['time', 'radius'], xs_area)
             newvars['volume'] = (['time', 'radius'], vol)
             newvars['dvolume_dr'] = (['time', 'radius'], volp)
-        self.update_input_data_vars(newvars)
+            if side == 'output':
+                self.update_output_data_vars(newvars)
+            else:
+                self.update_input_data_vars(newvars)
 
 
     def _compute_derived_reference_quantities(
         self,
+        side: str = 'input',
     ) -> None:
         newvars: MutableMapping[str, Any] = {}
-        if self.has_input:
+        data = None
+        if side == 'output' and self.has_output:
+            data = self.output
+        elif self.has_input:
             data = self.input
+        if data is not None:
             main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
             n_i_vol = vectorized_numpy_integration(
@@ -283,28 +298,44 @@ class plasma_io(io):
             newvars['gyroradius_ref_unit'] = (['time', 'radius'], ((data['temperature_e'] * self.constants['u_si'] * mass_ref / self.constants['e_si']) ** 0.5).to_numpy() / np.abs(field_unit))
             newvars['velocity_thermal_e'] = (['time', 'radius'], ((2.0 * self.constants['e_si'] * data['temperature_e'] / (self.constants['u_si'] * data['mass_e'])) ** 0.5).to_numpy())
             newvars['velocity_thermal_i'] = (['time', 'radius', 'ion'], ((2.0 * self.constants['e_si'] * data['temperature_i'] / (self.constants['u_si'] * data['mass_i'])) ** 0.5).to_numpy())
-            newvars['safety_factor'] = (['time', 'radius'], safety_factor)
+            if 'safety_factor' not in data:
+                newvars['safety_factor'] = (['time', 'radius'], safety_factor)
+            else:
+                safety_factor = data['safety_factor'].to_numpy()
             newvars['magnetic_shear'] = (['time', 'radius'], (data['r_minor'].to_numpy() / safety_factor) * vectorized_numpy_derivative(data['r_minor'].to_numpy(), safety_factor))
             #newvars['dqdr'] = (['n', 'rho'], vectorized_numpy_derivative(data['r_minor'].to_numpy(), data['q'].to_numpy()))
-        self.update_input_data_vars(newvars)
+            if side == 'output':
+                self.update_output_data_vars(newvars)
+            else:
+                self.update_input_data_vars(newvars)
 
 
     def _compute_derived_geometry(
         self,
+        side: str = 'input'
     ) -> None:
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
-        if self.has_input:
+        data = None
+        if side == 'output' and self.has_output:
+            data = self.output
+        elif self.has_input:
             data = self.input
+        if data is not None:
             n_coeffs = 7
-            contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
-            contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
-            mxh_r0 = (np.nanmax(contour_r, axis=-1) + np.nanmin(contour_r, axis=-1)) / 2.0
+            #contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
+            #contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
+            contour_r = data['contour'].sel(grid='r')
+            contour_z = data['contour'].sel(grid='z')
+            #mxh_r0 = (np.nanmax(contour_r, axis=-1) + np.nanmin(contour_r, axis=-1)) / 2.0
+            mxh_r0 = data['r_geometric'].to_numpy()
             mxh_dr0 = vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_r0)
-            mxh_z0 = (np.nanmax(contour_z, axis=-1) + np.nanmin(contour_z, axis=-1)) / 2.0
+            #mxh_z0 = (np.nanmax(contour_z, axis=-1) + np.nanmin(contour_z, axis=-1)) / 2.0
+            mxh_z0 = data['z_geometric'].to_numpy()
             mxh_dz0 = vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_z0)
             mxh_r = (np.nanmax(contour_r, axis=-1) - np.nanmin(contour_r, axis=-1)) / 2.0
             mxh_kappa = (np.nanmax(contour_z, axis=-1) - np.nanmin(contour_z, axis=-1)) / (2.0 * mxh_r)
+            mxh_kappa[..., 0] = 2.0 * mxh_kappa[..., 1] - mxh_kappa[..., 2]
             mxh_s_kappa = data['r_minor_norm'].to_numpy() / mxh_kappa * vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_kappa)
             r_norm = (contour_r - np.expand_dims(mxh_r0, axis=-1)) / np.expand_dims(mxh_r, axis=-1)
             r_norm = np.where(r_norm > 1.0, 1.0, np.where(r_norm < -1.0, -1.0, r_norm))
@@ -339,7 +370,7 @@ class plasma_io(io):
             mxh_s_delta = data['r_minor_norm'].to_numpy() * vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_delta)
             mxh_zeta = -mxh_sin[..., 2]
             mxh_s_zeta = data['r_minor_norm'].to_numpy() * vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_zeta)
-            newcoords['mxh_coefficient'] = np.arange(n_coeffs)
+            newcoords['mxh_coefficient'] = [i for i in range(n_coeffs)]
             newvars['mxh_r0'] = (['time', 'radius'], mxh_r0)
             newvars['mxh_dr0'] = (['time', 'radius'], np.where(np.isclose(mxh_dr0, 0.0), 0.0, mxh_dr0))
             newvars['mxh_z0'] = (['time', 'radius'], mxh_z0)
@@ -355,8 +386,8 @@ class plasma_io(io):
             newvars['mxh_s_sin'] = (['time', 'radius', 'mxh_coefficient'], np.where(np.isclose(mxh_s_sin, 0.0), 0.0, mxh_s_sin))
             newvars['mxh_cos'] = (['time', 'radius', 'mxh_coefficient'], mxh_cos)
             newvars['mxh_s_cos'] = (['time', 'radius', 'mxh_coefficient'], np.where(np.isclose(mxh_s_cos, 0.0), 0.0, mxh_s_cos))
-            newvars['mxh_contour_r'] = (['time', 'radius', 'angle_geometric'], contour_r)
-            newvars['mxh_contour_z'] = (['time', 'radius', 'angle_geometric'], contour_z)
+            #newvars['mxh_contour_r'] = (['time', 'radius', 'angle_geometric'], contour_r)
+            #newvars['mxh_contour_z'] = (['time', 'radius', 'angle_geometric'], contour_z)
 
             signb = 1.0
             n_theta = 1001
@@ -424,16 +455,26 @@ class plasma_io(io):
             newvars['field_inner'] = (['time', 'radius', 'direction'], b_inner * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
             newvars['field_outer'] = (['time', 'radius', 'direction'], b_outer * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
 
-        self.update_input_data_vars(newvars)
+            if side == 'output':
+                self.update_output_coords(newcoords)
+                self.update_output_data_vars(newvars)
+            else:
+                self.update_input_coords(newcoords)
+                self.update_input_data_vars(newvars)
 
 
     def _compute_extended_local_inputs(
-        self
+        self,
+        side: str = 'input',
     ) -> None:
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
-        if self.has_input:
+        data = None
+        if side == 'output' and self.has_output:
+            data = self.output
+        elif self.has_input:
             data = self.input
+        if data is not None:
             main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
             thermal_species_mask = data['type_i'].isin(['thermal']).to_numpy().flatten()
@@ -543,7 +584,10 @@ class plasma_io(io):
             newvars['grad_field_velocity_i_norm'] = (['time', 'radius', 'ion', 'field_direction'], grad_field_velocity_i * np.expand_dims(np.expand_dims((data['length_ref'] * data['velocity_sound_ref']).to_numpy(), axis=-1), axis=-1))
             newvars['exb_shearing_rate'] = (['time', 'radius'], exb_shearing_rate)
             newvars['exb_shearing_rate_norm'] = (['time', 'radius'], exb_shearing_rate * (data['length_ref'] / data['velocity_sound_ref']).to_numpy())
-            newvars['rotation_frequency_sonic'] = (['time', 'radius'], rotation_frequency_sonic)
+            if 'rotation_frequency_sonic' not in data:
+                newvars['rotation_frequency_sonic'] = (['time', 'radius'], rotation_frequency_sonic)
+            else:
+                rotation_frequency_sonic = data['rotation_frequency_sonic'].to_numpy()
             newvars['rotation_frequency_sonic_norm'] = (['time', 'radius'], rotation_frequency_sonic * (data['length_ref'] / data['velocity_sound_ref']).to_numpy())
             #newvars['alw0'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['r_minor'].to_numpy(), -np.log(data['omega0'].to_numpy())))
             newvars['grad_rotation_frequency_sonic'] = (['time', 'radius'], vectorized_numpy_derivative(data['r_minor'].to_numpy(), rotation_frequency_sonic))
@@ -563,16 +607,28 @@ class plasma_io(io):
             newvars['auxiliary_plus_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source=auxiliary_plus_sources).sum('source').to_numpy())
             newvars['fusion_heat_source'] = (['time', 'radius'], (data['heat_source_e'].sel(source='fusion') + data['heat_source_i'].sel(source='fusion').sum('ion')).to_numpy())
 
-        self.update_input_coords(newcoords)
-        self.update_input_data_vars(newvars)
+            if side == 'output':
+                self.update_output_coords(newcoords)
+                self.update_output_data_vars(newvars)
+            else:
+                self.update_input_coords(newcoords)
+                self.update_input_data_vars(newvars)
 
 
-    def _compute_integrated_quantities(self):
+    def _compute_integrated_quantities(
+        self,
+        side: str = 'input',
+    ) -> None:
 
         newvars: MutableMapping[str, Any] = {}
 
-        if self.has_input:
+        data = None
+        if side == 'output' and self.has_output:
+            data = self.output
+        elif self.has_input:
             data = self.input
+
+        if data is not None:
 
             line = vectorized_numpy_integration(np.ones_like(data['r_minor'].to_numpy()), data['r_minor'].to_numpy())
             vol = vectorized_numpy_integration(data['mxh_dvolume_dr'].to_numpy(), data['r_minor'].to_numpy())
@@ -847,11 +903,15 @@ class plasma_io(io):
             newvars['confinement_time_particle'] = (['time'], confinement_time_particle)
             newvars['confinement_time_ratio'] = (['time'], np.where(np.isfinite(confinement_time_energy), confinement_time_particle / confinement_time_energy, 0.0))
 
-        self.update_input_data_vars(newvars)
+            if side == 'output':
+                self.update_output_data_vars(newvars)
+            else:
+                self.update_input_data_vars(newvars)
 
 
     def _compute_scalings(
-        self
+        self,
+        side: str = 'input',
     ) -> None:
 
         data = self.input
@@ -981,18 +1041,45 @@ class plasma_io(io):
             # lpsol = (p_elfrac * 1.0e6 * data['p_sol'] * np.pi * data['rcentr'] * data['q95']).to_numpy()
             # newvars['temperature_e_upstream'] = (['n'], (3.5 * (lpsol / Aqpar) * lnC / k0e) ** (2.0 / 7.0))
 
-        self.update_input_data_vars(newvars)
+            if side == 'output':
+                self.update_output_data_vars(newvars)
+            else:
+                self.update_input_data_vars(newvars)
 
 
     def compute_derived_quantities(
         self,
+        side: str = 'input',
     ) -> None:
-        self._compute_derived_coordinates()
-        self._compute_derived_reference_quantities()
-        self._compute_derived_geometry()
-        self._compute_extended_local_inputs()
-        self._compute_integrated_quantities()
-        self._compute_scalings()
+        self._compute_derived_coordinates(side)
+        self._compute_derived_reference_quantities(side)
+        self._compute_derived_geometry(side)
+        self._compute_extended_local_inputs(side)
+        self._compute_integrated_quantities(side)
+        self._compute_scalings(side)
+
+
+    def remove_fast_ions(
+        self,
+        side: str = 'input',
+        enforce_quasineutrality: bool = True,
+    ) -> None:
+        if side == 'output' and self.has_output and 'type_i' in self.output:
+            thermal_mask = (self.output['type_i'] == 'thermal')
+            self.output = self.output.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
+        elif self.has_input and 'type_i' in self.input:
+            thermal_mask = (self.input['type_i'] == 'thermal')
+            self.input = self.input.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
+
+
+    def set_equal_normalized_density_gradients(
+        self,
+        side: str = 'input',
+    ) -> None:
+        if side == 'output' and self.has_output and 'density_e' in self.output:
+            self.output['density_e'] = self.output['density_ratio_main'].isel(radius=0)
+        elif self.has_input and 'density_ratio_main' in self.input:
+            self.input['density_ratio_main'] = self.input['density_ratio_main'].isel(radius=0)
 
 
     @classmethod
@@ -1028,13 +1115,12 @@ class plasma_io(io):
                 'rmin': 'r_minor',
                 'rmaj': 'r_geometric',
                 'zmag': 'z_geometric',
-                'ne': 'density_e',
-                'te': 'temperature_e',
-                'qei': 'heat_exchange_ei',
+                #'ne': 'density_e',
+                #'te': 'temperature_e',
             }
             direct_time_rho_ion_map = {
-                'ni': 'density_i',
-                'ti': 'temperature_i',
+                #'ni': 'density_i',
+                #'ti': 'temperature_i',
             }
             coords: MutableMapping[str, Any] = {}
             data_vars: MutableMapping[str, Any] = {}
@@ -1042,6 +1128,7 @@ class plasma_io(io):
             if 'n' in data and 'rho' in data:
                 coords['time'] = data['time'].to_numpy() if 'time' in data else np.arange(len(data['n']))
                 coords['radius'] = data['rho'].to_numpy()
+                attrs['radius'] = 'rho_tor_norm'
                 if 'name' in data:
                     coords['ion'] = data['name'].to_numpy()
                     mass_i = np.zeros((len(coords['ion']), ))
@@ -1068,15 +1155,35 @@ class plasma_io(io):
                 for key, nkey in direct_time_rho_ion_map.items():
                     if key in data and 'name' in data:
                         data_vars[nkey] = (['time', 'radius', 'ion'], data[key].to_numpy())
+                if 'ne' in data:
+                    data_vars['density_e'] = (['time', 'radius'], 1.0e19 * data['ne'].to_numpy())
+                if 'te' in data:
+                    data_vars['temperature_e'] = (['time', 'radius'], 1.0e3 * data['te'].to_numpy())
+                if 'ni' in data:
+                    data_vars['density_i'] = (['time', 'radius', 'ion'], 1.0e19 * data['ni'].to_numpy())
+                if 'ti' in data:
+                    data_vars['temperature_i'] = (['time', 'radius', 'ion'], 1.0e3 * data['ti'].to_numpy())
                 if 'name' in data and 'z' in data:
                     data_vars['charge_i'] = (['time', 'radius', 'ion'], np.repeat(np.expand_dims(data['z'].to_numpy(), axis=1), len(coords['radius']), axis=1))
                 flux = np.repeat(np.expand_dims(np.zeros((len(coords['time']), len(coords['radius']))), axis=-1), len(coords['direction']), axis=-1)
+                if 'rcentr' in data:
+                    attrs['rcentr'] = [r for r in data['rcentr'].to_numpy()]
                 if 'torflux' in data:
-                    flux[..., 0] = data['torflux'].to_numpy()
+                    flux[..., 0] = np.abs(data['torflux'].to_numpy())
                 elif 'q' in data and 'polflux' in data:
-                    flux[..., 0] = vectorized_numpy_integration(data['q'].to_numpy(), data['polflux'].to_numpy())
+                    sign = 1.0
+                    q = data['q'].to_numpy()
+                    polflux = data['polflux'].to_numpy()
+                    if np.any(polflux[..., -1] - polflux[..., 0]):
+                        sign = -1.0
+                        polflux = -polflux
+                    flux[..., 0] = sign * vectorized_numpy_integration(q, polflux)
                 if 'polflux' in data:
-                    flux[..., 1] = data['polflux'].to_numpy()
+                    sign = 1.0
+                    polflux = data['polflux'].to_numpy()
+                    if np.any(polflux[..., -1] - polflux[..., 0]):
+                        polflux = -polflux
+                    flux[..., 1] = polflux
                 data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
                 if 'q' in data:
                     data_vars['safety_factor'] = (['time', 'radius'], data['q'].to_numpy())
@@ -1087,6 +1194,8 @@ class plasma_io(io):
                     if 'vpol' in data:
                         velocity[..., 1] = data['vpol'].to_numpy()
                     data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], velocity)
+                if 'qei' in data:
+                    data_vars['heat_exchange_ei'] = (['time', 'radius'], 1.0e6 * data['qei'].to_numpy())
                 if 'heat_exchange_ei' not in data_vars:
                     data_vars['heat_exchange_ei'] = (['time', 'radius'], np.zeros((len(coords['time']), len(coords['radius']))))
                 heat_source_e = np.repeat(np.expand_dims(np.zeros((len(coords['time']), len(coords['radius']))), axis=-1), len(coords['source']), axis=-1)
@@ -1138,14 +1247,18 @@ class plasma_io(io):
                 data_vars['momentum_source_i'] = (['time', 'radius', 'ion', 'direction', 'source'], momentum_source_i)
                 current_source = np.repeat(np.expand_dims(np.zeros((len(coords['time']), len(coords['radius']))), axis=-1), len(coords['source']), axis=-1)
                 if 'johm' in data:
-                    current_source[..., 0] = data['johm'].to_numpy()
+                    current_source[..., 0] = 1.0e6 * data['johm'].to_numpy()
                 if 'jnb' in data:
-                    current_source[..., 1] = data['jnb'].to_numpy()
+                    current_source[..., 1] = 1.0e6 * data['jnb'].to_numpy()
                 if 'jrf' in data:
-                    current_source[..., 3] = data['jrf'].to_numpy()
+                    current_source[..., 3] = 1.0e6 * data['jrf'].to_numpy()
                 if 'jbs' in data:
-                    current_source[..., 9] = data['jbs'].to_numpy()
+                    current_source[..., 9] = 1.0e6 * data['jbs'].to_numpy()
                 data_vars['current_source'] = (['time', 'radius', 'source'], current_source)
+                if 'omega0' in data:
+                    data_vars['rotation_frequency_sonic'] = (['time', 'radius'], data['omega0'].to_numpy())
+                elif 'w0' in data:
+                    data_vars['rotation_frequency_sonic'] = (['time', 'radius'], data['w0'].to_numpy())
                 if 'rmaj' in data and 'zmag' in data and 'rmin' in data and 'kappa' in data:
                     r0 = data['rmaj'].to_numpy()
                     z0 = data['zmag'].to_numpy()
@@ -1188,8 +1301,11 @@ class plasma_io(io):
                         theta_r += np.expand_dims(sin_coeffs[i], axis=-1) * np.sin(i * theta_z) + np.expand_dims(cos_coeffs[i], axis=-1) * np.cos(i * theta_z)
                     r_contour = np.expand_dims(r0, axis=-1) + np.expand_dims(r, axis=-1) * np.cos(theta_r)
                     z_contour = np.expand_dims(z0, axis=-1) + np.expand_dims(r * kappa, axis=-1) * np.sin(theta_z)
-                    l_contour = np.sqrt((r_contour - np.expand_dims(r0, axis=-1)) ** 2 + (z_contour - np.expand_dims(z0, axis=-1)) ** 2)
-                    coords['angle_geometric'] = theta
-                    data_vars['contour'] = (['time', 'radius', 'angle_geometric'], l_contour)
+                    #l_contour = np.sqrt((r_contour - np.expand_dims(r0, axis=-1)) ** 2 + (z_contour - np.expand_dims(z0, axis=-1)) ** 2)
+                    #coords['angle_geometric'] = theta
+                    #data_vars['contour'] = (['time', 'radius', 'angle_geometric'], l_contour)
+                    coords['poloidal_index'] = [i for i in range(len(theta))]
+                    coords['grid'] = ['r', 'z']
+                    data_vars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], np.stack([r_contour, z_contour], axis=2))
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
