@@ -1059,17 +1059,216 @@ class plasma_io(io):
         self._compute_scalings(side)
 
 
+    def enforce_quasineutrality(
+        self,
+        use_main_ion: bool = False,
+        side: str = 'input',
+    ) -> None:
+        if side == 'output' and self.has_output and 'density_e' in self.output and 'charge_i' in self.output and 'density_i' in self.output:
+            data_vars: MutableMapping[str, Any] = {}
+            if use_main_ion and 'atomic_number_i' in self.output and 'type_i' in self.output:
+                main_species_mask = (np.isclose(self.output['atomic_number_i'].to_numpy(), 1.0) & (self.output['type_i'].isin(['thermal'])).to_numpy()).flatten()
+                main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
+                non_main_species = [i for i in range(len(main_species_mask)) if ~main_species_mask[i]]
+                density_main_old = self.output['density_i'].isel(ion=main_species)
+                density_main = self.output['density_e'] - (self.output['density_i'] * self.output['charge_i']).isel(ion=non_main_species).sum('ion')
+                density_main_new = density_main_old * density_main / density_main_old.sum('ion')
+                density_i = self.output['density_i']
+                for j, i in enumerate(main_species):
+                    density_i.loc[dict(ion=i)] = density_main_new.isel(ion=j).to_numpy()
+                data_vars['density_i'] = (['time', 'radius', 'ion'], density_i.to_numpy())
+            else:
+                density_e = (self.output['density_i'] * self.output['charge_i']).sum('ion')
+                data_vars['density_e'] = (['time', 'radius'], density_e.to_numpy())
+            self.update_input_data_vars(data_vars)
+        elif self.has_input and 'density_e' in self.input and 'charge_i' in self.input and 'density_i' in self.input:
+            data_vars: MutableMapping[str, Any] = {}
+            if use_main_ion and 'atomic_number_i' in self.input and 'type_i' in self.input:
+                main_species_mask = (np.isclose(self.input['atomic_number_i'].to_numpy(), 1.0) & (self.input['type_i'].isin(['thermal'])).to_numpy()).flatten()
+                main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
+                non_main_species = [i for i in range(len(main_species_mask)) if ~main_species_mask[i]]
+                density_main_old = self.input['density_i'].isel(ion=main_species)
+                density_main = self.input['density_e'] - (self.input['density_i'] * self.input['charge_i']).isel(ion=non_main_species).sum('ion')
+                density_main_new = density_main_old * density_main / density_main_old.sum('ion')
+                density_i = self.input['density_i']
+                for j, i in enumerate(main_species):
+                    density_i.loc[dict(ion=i)] = density_main_new.isel(ion=j).to_numpy()
+                data_vars['density_i'] = (['time', 'radius', 'ion'], density_i.to_numpy())
+            else:
+                density_e = (self.input['density_i'] * self.input['charge_i']).sum('ion')
+                data_vars['density_e'] = (['time', 'radius'], density_e.to_numpy())
+            self.update_input_data_vars(data_vars)
+
+
     def remove_fast_ions(
         self,
         side: str = 'input',
         enforce_quasineutrality: bool = True,
     ) -> None:
+        # Enforcing quasineutrality removes corresponding electron density, as opposed to adding to thermal ion density
         if side == 'output' and self.has_output and 'type_i' in self.output:
-            thermal_mask = (self.output['type_i'] == 'thermal')
+            thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
             self.output = self.output.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
+            if enforce_quasineutrality:
+                self.enforce_quasineutrality(side='output')
         elif self.has_input and 'type_i' in self.input:
-            thermal_mask = (self.input['type_i'] == 'thermal')
+            thermal_mask = (self.input['type_i'].isin(['thermal'])).to_numpy().flatten()
             self.input = self.input.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
+            if enforce_quasineutrality:
+                self.enforce_quasineutrality(side='input')
+
+
+    def lump_species(
+        self,
+        species: Sequence[str],
+        side: str = 'input',
+    ) -> None:
+        if side == 'output' and self.has_output and 'density_i' in self.output and 'mass_i' in self.output and 'charge_i' in self.output:
+            self._reset()
+            specs = [str(s) for s in self.output['ion'].to_numpy() if s in species]
+            old_species = [str(s) for s in self.output['ion'].to_numpy() if s not in specs]
+            zeff = self.output['effective_charge'] if 'effective_charge' in self.output else (self.output['density_i'] * (self.output['charge_i'] ** 2) / self.output['density_e']).sum('ion')
+            charge_i_lumped = zeff
+            density_i_lumped = self.output['density_e'] / charge_i_lumped
+            charge_i = np.expand_dims(charge_i_lumped.to_numpy(), axis=-1)
+            density_i = np.expand_dims(density_i_lumped.to_numpy(), axis=-1)
+            if len(old_species) > 0:
+                charge_i_lumped = (self.output['density_e'] * zeff - (self.output['density_i'] * self.output['charge_i'] * self.output['charge_i']).sel(ion=old_species).sum('ion')) / (self.output['density_e'] - (self.output['density_i'] * self.output['charge_i']).sel(ion=old_species).sum('ion'))
+                density_i_lumped = (self.output['density_e'] - (self.output['density_i'] * self.output['charge_i']).sel(ion=old_species).sum('ion')) / charge_i_lumped
+                charge_i = np.concat([self.output['charge_i'].sel(ion=old_species).to_numpy(), np.expand_dims(charge_i_lumped.to_numpy(), axis=-1)], axis=-1)
+                density_i = np.concat([(self.output['density_i'].sel(ion=old_species)).to_numpy(), np.expand_dims(density_i_lumped.to_numpy(), axis=-1)], axis=-1)
+            # mass_i_lumped = (self.output['density_i'] * self.output['mass_i'] / self.output['charge_i']).sel(ion=specs).sum('ion') / (density_i_lumped / charge_i_lumped)
+            # mass_i = np.expand_dims(mass_i_lumped.to_numpy(), axis=-1)
+            # if len(old_species) > 0:
+                # mass_i = np.concat([self.output['mass_i'].sel(ion=old_species).to_numpy(), np.expand_dims(mass_i_lumped.to_numpy(), axis=-1)], axis=-1)
+            new_species = define_ion_species(z=float(np.nanmax(charge_i_lumped.to_numpy())))
+            type_i = np.repeat(np.atleast_2d(['thermal']), len(self.output['time']), axis=0)
+            mass_i = np.repeat(np.atleast_2d([new_species[1]]), len(self.output['time']), axis=0)
+            atomic_number_i = np.repeat(np.atleast_2d([new_species[2]]), len(self.output['time']), axis=0)
+            if len(old_species) > 0:
+                type_i = np.concat([self.output['type_i'].sel(ion=old_species).to_numpy(), type_i], axis=-1)
+                mass_i = np.concat([self.output['mass_i'].sel(ion=old_species).to_numpy(), mass_i], axis=-1)
+                atomic_number_i = np.concat([self.output['atomic_number_i'].sel(ion=old_species).to_numpy(), atomic_number_i], axis=-1)
+            droplist = ['type_i', 'mass_i', 'atomic_number_i', 'charge_i', 'density_i']
+            coords = {'ion': old_species + [new_species[0]]}
+            data_vars = {
+                'type_i': (['time', 'ion'], type_i),
+                'mass_i': (['time', 'ion'], mass_i),
+                'atomic_number_i': (['time', 'ion'], atomic_number_i),
+                'charge_i': (['time', 'radius', 'ion'], charge_i),
+                'density_i': (['time', 'radius', 'ion'], density_i),
+            }
+            if 'temperature_i' in self.output:
+                temperature_i_lumped = (self.output['density_i'] * self.output['temperature_i']).sel(ion=specs).sum('ion') / density_i_lumped
+                temperature_i = np.expand_dims(temperature_i_lumped.to_numpy(), axis=-1)
+                if len(old_species) > 0:
+                    temperature_i = np.concat([self.output['temperature_i'].sel(ion=old_species).to_numpy(), np.expand_dims(temperature_i_lumped.to_numpy(), axis=-1)], axis=-1)
+                droplist.append('temperature_i')
+                data_vars['temperature_i'] = (['time', 'radius', 'ion'], temperature_i)
+            if 'velocity_i' in self.output:
+                velocity_i_lumped = (self.output['velocity_i'] * self.output['mass_i'] * self.output['density_i']).sel(ion=specs).sum('ion') / (new_species[1] * density_i_lumped)
+                velocity_i = np.expand_dims(velocity_i_lumped.to_numpy(), axis=2)
+                if len(old_species) > 0:
+                    velocity_i = np.concat([self.output['velocity_i'].sel(ion=old_species).to_numpy(), np.expand_dims(velocity_i_lumped.to_numpy(), axis=2)], axis=2)
+                droplist.append('velocity_i')
+                data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], velocity_i)
+            if 'heat_source_i' in self.output:
+                heat_source_i_lumped = (self.output['heat_source_i']).sel(ion=specs).sum('ion')
+                heat_source_i = np.expand_dims(heat_source_i_lumped.to_numpy(), axis=2)
+                if len(old_species) > 0:
+                    heat_source_i = np.concat([self.output['heat_source_i'].sel(ion=old_species).to_numpy(), np.expand_dims(heat_source_i_lumped.to_numpy(), axis=2)], axis=2)
+                droplist.append('heat_source_i')
+                data_vars['heat_source_i'] = (['time', 'radius', 'ion', 'source'], heat_source_i)
+            if 'particle_source_i' in self.output:
+                particle_source_i_lumped = (self.output['particle_source_i']).sel(ion=specs).sum('ion')
+                particle_source_i = np.expand_dims(particle_source_i_lumped.to_numpy(), axis=2)
+                if len(old_species) > 0:
+                    particle_source_i = np.concat([self.output['particle_source_i'].sel(ion=old_species).to_numpy(), np.expand_dims(particle_source_i_lumped.to_numpy(), axis=2)], axis=2)
+                droplist.append('particle_source_i')
+                data_vars['particle_source_i'] = (['time', 'radius', 'ion', 'source'], particle_source_i)
+            if 'momentum_source_i' in self.output:
+                momentum_source_i_lumped = (self.output['momentum_source_i']).sel(ion=specs).sum('ion')
+                momentum_source_i = np.expand_dims(momentum_source_i_lumped.to_numpy(), axis=2)
+                if len(old_species) > 0:
+                    momentum_source_i = np.concat([self.output['momentum_source_i'].sel(ion=old_species).to_numpy(), np.expand_dims(momentum_source_i_lumped.to_numpy(), axis=2)], axis=2)
+                droplist.append('momentum_source_i')
+                data_vars['momentum_source_i'] = (['time', 'radius', 'ion', 'direction', 'source'], momentum_source_i)
+            self.delete_output_data_vars(droplist)
+            self.update_output_coords(coords)
+            self.update_output_data_vars(data_vars)
+        elif self.has_input and 'density_i' in self.input and 'temperature_i' in self.input and 'mass_i' in self.input and 'charge_i' in self.input:
+            self._reset()
+            specs = [str(s) for s in self.input['ion'].to_numpy() if s in species]
+            old_species = [str(s) for s in self.input['ion'].to_numpy() if s not in specs]
+            zeff = self.input['effective_charge'] if 'effective_charge' in self.input else (self.input['density_i'] * (self.input['charge_i'] ** 2) / self.input['density_e']).sum('ion')
+            charge_i_lumped = zeff
+            density_i_lumped = self.input['density_e'] / charge_i_lumped
+            charge_i = np.expand_dims(charge_i_lumped.to_numpy(), axis=-1)
+            density_i = np.expand_dims(density_i_lumped.to_numpy(), axis=-1)
+            if len(old_species) > 0:
+                charge_i_lumped = (self.input['density_e'] * zeff - (self.input['density_i'] * self.input['charge_i'] * self.input['charge_i']).sel(ion=old_species).sum('ion')) / (self.input['density_e'] - (self.input['density_i'] * self.input['charge_i']).sel(ion=old_species).sum('ion'))
+                density_i_lumped = (self.input['density_e'] - (self.input['density_i'] * self.input['charge_i']).sel(ion=old_species).sum('ion')) / charge_i_lumped
+                charge_i = np.concat([self.input['charge_i'].sel(ion=old_species).to_numpy(), np.expand_dims(charge_i_lumped.to_numpy(), axis=-1)], axis=-1)
+                density_i = np.concat([(self.input['density_i'].sel(ion=old_species)).to_numpy(), np.expand_dims(density_i_lumped.to_numpy(), axis=-1)], axis=-1)
+            # mass_i_lumped = (self.input['density_i'] * self.input['mass_i'] / self.input['charge_i']).sel(ion=specs).sum('ion') / (density_i_lumped / charge_i_lumped)
+            # mass_i = np.expand_dims(mass_i_lumped.to_numpy(), axis=-1)
+            # if len(old_species) > 0:
+                # mass_i = np.concat([self.input['mass_i'].sel(ion=old_species).to_numpy(), np.expand_dims(mass_i_lumped.to_numpy(), axis=-1)], axis=-1)
+            new_species = define_ion_species(z=float(np.nanmax(charge_i_lumped.to_numpy())))
+            type_i = np.repeat(np.atleast_2d(['thermal']), len(self.input['time']), axis=0)
+            mass_i = np.repeat(np.atleast_2d([new_species[1]]), len(self.input['time']), axis=0)
+            atomic_number_i = np.repeat(np.atleast_2d([new_species[2]]), len(self.input['time']), axis=0)
+            if len(old_species) > 0:
+                type_i = np.concat([self.input['type_i'].sel(ion=old_species).to_numpy(), type_i], axis=-1)
+                mass_i = np.concat([self.input['mass_i'].sel(ion=old_species).to_numpy(), mass_i], axis=-1)
+                atomic_number_i = np.concat([self.input['atomic_number_i'].sel(ion=old_species).to_numpy(), atomic_number_i], axis=-1)
+            droplist = ['type_i', 'mass_i', 'atomic_number_i', 'charge_i', 'density_i']
+            coords = {'ion': old_species + [new_species[0]]}
+            data_vars = {
+                'type_i': (['time', 'ion'], type_i),
+                'mass_i': (['time', 'ion'], mass_i),
+                'atomic_number_i': (['time', 'ion'], atomic_number_i),
+                'charge_i': (['time', 'radius', 'ion'], charge_i),
+                'density_i': (['time', 'radius', 'ion'], density_i),
+            }
+            if 'temperature_i' in self.input:
+                temperature_i_lumped = (self.input['density_i'] * self.input['temperature_i']).sel(ion=specs).sum('ion') / density_i_lumped
+                temperature_i = np.expand_dims(temperature_i_lumped.to_numpy(), axis=-1)
+                if len(old_species) > 0:
+                    temperature_i = np.concat([self.input['temperature_i'].sel(ion=old_species).to_numpy(), np.expand_dims(temperature_i_lumped.to_numpy(), axis=-1)], axis=-1)
+                droplist.append('temperature_i')
+                data_vars['temperature_i'] = (['time', 'radius', 'ion'], temperature_i)
+            if 'velocity_i' in self.input:
+                velocity_i_lumped = (self.input['velocity_i'] * self.input['mass_i'] * self.input['density_i']).sel(ion=specs).sum('ion') / (new_species[1] * density_i_lumped)
+                velocity_i = np.expand_dims(velocity_i_lumped.to_numpy(), axis=-1)
+                if len(old_species) > 0:
+                    velocity_i = np.concat([self.input['velocity_i'].sel(ion=old_species).to_numpy(), np.expand_dims(velocity_i_lumped.to_numpy(), axis=-1)], axis=-1)
+                droplist.append('velocity_i')
+                data_vars['velocity_i'] = (['time', 'radius', 'ion'], velocity_i)
+            if 'heat_source_i' in self.input:
+                heat_source_i_lumped = (self.input['heat_source_i']).sel(ion=specs).sum('ion')
+                heat_source_i = np.expand_dims(heat_source_i_lumped.to_numpy(), axis=2)
+                if len(old_species) > 0:
+                    heat_source_i = np.concat([self.input['heat_source_i'].sel(ion=old_species).to_numpy(), np.expand_dims(heat_source_i_lumped.to_numpy(), axis=2)], axis=2)
+                droplist.append('heat_source_i')
+                data_vars['heat_source_i'] = (['time', 'radius', 'ion', 'source'], heat_source_i)
+            if 'particle_source_i' in self.input:
+                particle_source_i_lumped = (self.input['particle_source_i']).sel(ion=specs).sum('ion')
+                particle_source_i = np.expand_dims(particle_source_i_lumped.to_numpy(), axis=2)
+                if len(old_species) > 0:
+                    particle_source_i = np.concat([self.input['particle_source_i'].sel(ion=old_species).to_numpy(), np.expand_dims(particle_source_i_lumped.to_numpy(), axis=2)], axis=2)
+                droplist.append('particle_source_i')
+                data_vars['particle_source_i'] = (['time', 'radius', 'ion', 'source'], particle_source_i)
+            if 'momentum_source_i' in self.input:
+                momentum_source_i_lumped = (self.input['momentum_source_i']).sel(ion=specs).sum('ion')
+                momentum_source_i = np.expand_dims(momentum_source_i_lumped.to_numpy(), axis=2)
+                if len(old_species) > 0:
+                    momentum_source_i = np.concat([self.input['momentum_source_i'].sel(ion=old_species).to_numpy(), np.expand_dims(momentum_source_i_lumped.to_numpy(), axis=2)], axis=2)
+                droplist.append('momentum_source_i')
+                data_vars['momentum_source_i'] = (['time', 'radius', 'ion', 'direction', 'source'], momentum_source_i)
+            self.delete_input_data_vars(droplist)
+            self.update_input_coords(coords)
+            self.update_input_data_vars(data_vars)
 
 
     def set_equal_normalized_density_gradients(
@@ -1179,14 +1378,14 @@ class plasma_io(io):
                     sign = 1.0
                     q = data['q'].to_numpy()
                     polflux = data['polflux'].to_numpy()
-                    if np.any(polflux[..., -1] - polflux[..., 0]):
+                    if np.any((polflux[..., -1] - polflux[..., 0]) < 0.0):
                         sign = -1.0
                         polflux = -polflux
                     flux[..., 0] = sign * vectorized_numpy_integration(q, polflux)
                 if 'polflux' in data:
                     sign = 1.0
                     polflux = data['polflux'].to_numpy()
-                    if np.any(polflux[..., -1] - polflux[..., 0]):
+                    if np.any((polflux[..., -1] - polflux[..., 0]) < 0.0):
                         polflux = -polflux
                     flux[..., 1] = polflux
                 data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)

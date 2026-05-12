@@ -143,6 +143,7 @@ class gacode_io(io):
     }
     empty_units: Final[Mapping[str, str]] = {
         'rho': '-',
+        'q': '-',
         'kappa': '-',
         'delta': '-',
         'zeta': '-',
@@ -1572,6 +1573,8 @@ class gacode_io(io):
                     datadict[f'{tag}'] = np.atleast_1d(datadict[f'{tag}']).astype(int)
                 if key in self.titles_singleFloat and key not in ['mass', 'z']:
                     datadict[f'{tag}'] = np.atleast_1d([datadict[f'{tag}']])
+        if 'omega0(rad/s)' in datadict and 'w0(rad/s)' not in datadict:
+            datadict['w0(rad/s)'] = copy.deepcopy(datadict['omega0(rad/s)'])
         return datadict
 
 
