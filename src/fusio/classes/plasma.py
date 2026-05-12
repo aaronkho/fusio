@@ -19,6 +19,9 @@ from ..utils.math_tools import (
 )
 from ..utils.eqdsk_tools import (
     read_eqdsk,
+    trace_contour_with_megpy,
+    convert_mxh_to_contour_megpy,
+    convert_contour_to_mxh_megpy,
 )
 
 logger = logging.getLogger('fusio')
@@ -45,6 +48,7 @@ class plasma_io(io):
         'density_e',
         'temperature_e',
         'velocity_i',
+        'rotation_frequency_sonic',
         'heat_source_e',
         'particle_source_e',
         'heat_source_i',
@@ -218,6 +222,148 @@ class plasma_io(io):
         else:
             logger.error(f'Invalid variable names given to {self.format} interpolate function! Aborting interpolation...')
             return np.array([np.nan]) * v
+
+
+    def _reset(
+        self,
+    ) -> None:
+        extra_coords = [
+            'mxh_coefficient',
+            'field_direction',
+        ]
+        drop_from_input = [var for var in self.input.data_vars if var not in self.basevars]
+        self.delete_input_data_vars(drop_from_input)
+        drop_from_output = [var for var in self.output.data_vars if var not in self.basevars]
+        self.delete_output_data_vars(drop_from_output)
+
+
+    def add_geometry_from_eqdsk(
+        self,
+        path: str | Path,
+        time: float | None = None,
+        side: str = 'input',
+        trace_last: bool = True,
+        add_field: bool = True,
+        add_current: bool = True,
+    ) -> None:
+        """Trace flux surfaces from an EQDSK file and add MXH shape data.
+
+        .. warning::
+
+           This method uses ``data['polflux']`` as **contour levels** to
+           trace flux surfaces on the EQDSK 2-D ψ grid.  Therefore
+           ``polflux`` must be stored in the **same units** as the EQDSK
+           grid at the time this method is called:
+
+           * COCOS 11-18 (eBp=1): EQDSK ψ is in **Wb** – store Wb.
+           * COCOS  1-10 (eBp=0): EQDSK ψ is in **Wb/rad** – store Wb/rad.
+
+           If GACODE internally uses Wb/rad (the standard GACODE
+           convention), convert ``polflux`` back to Wb/rad **after**
+           calling this method and before computing derived geometry
+           quantities.
+
+        It also interpolates ``fpol`` from the EQDSK onto the stored
+        ``polflux`` grid, so the same unit-matching requirement applies
+        to the fpol interpolation.
+
+        Args:
+            path: Path to the EQDSK file.
+            side: ``'input'`` or ``'output'`` dataset to populate.
+            overwrite: If ``True``, overwrite existing shape data.
+        """
+        data = self.input if side == 'input' else self.output
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        if isinstance(path, (str, Path)) and 'magnetic_flux' in data:
+            t = data['time'].sel(time=time, method='nearest').to_numpy().item(0) if isinstance(time, (float, int)) else data['time'].isel(time=0).to_numpy().item(0)
+            eqdsk_data = read_eqdsk(path)
+            time_index = list(data['time'].values).index(t)
+            # rho = np.sqrt(data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)).sel(direction='toroidal', drop=True).isel(time=time_index, drop=True)
+            # if data.attrs.get('radius', '') == 'rho_tor_norm':
+            #     rho = data['radius'].to_numpy()
+            psip = data['magnetic_flux'].sel(direction='poloidal', drop=True).isel(time=time_index, drop=True)
+            psivec = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
+            rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
+            zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
+            if np.isclose(eqdsk_data['psi'][0, 0], eqdsk_data['psi'][-1, -1]) and np.isclose(eqdsk_data['psi'][0, -1], eqdsk_data['psi'][-1, 0]):
+                if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[-1] < eqdsk_data['psi'][0, 0]:
+                    psivec[-1] = eqdsk_data['psi'][0, 0] + 1.0e-6
+                elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[-1] > eqdsk_data['psi'][0, 0]:
+                    psivec[-1] = eqdsk_data['psi'][0, 0] - 1.0e-6
+            if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[0] >= eqdsk_data['simagx']:
+                psivec[0] = eqdsk_data['simagx'] - 1.0e-6
+            elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[0] <= eqdsk_data['simagx']:
+                psivec[0] = eqdsk_data['simagx'] + 1.0e-6
+            sign = 1.0
+            qpsi = eqdsk_data['qpsi']
+            polflux = copy.deepcopy(psivec)
+            if np.any((polflux[..., -1] - polflux[..., 0]) < 0.0):
+                sign = -1.0
+                polflux = -polflux
+            torflux = sign * vectorized_numpy_integration(qpsi, polflux)
+            psit = np.interp(psip, polflux, torflux)
+            flux = data['magnetic_flux']
+            flux.loc[dict(time=t, direction='poloidal')] = psip
+            flux.loc[dict(time=t, direction='toroidal')] = psit
+            newvars['magnetic_flux'] = (['time', 'radius', 'direction'], flux.to_numpy())
+            if 'safety_factor' in data:
+                safety_factor = data['safety_factor']
+                q = np.interp(psip, polflux, qpsi)
+                safety_factor.loc[dict(time=t)] = q
+                newvars['safety_factor'] = (['time', 'radius'], safety_factor.to_numpy())
+            if add_field:
+                baxis = data['field_axis']
+                baxis.loc[dict(time=t)] = eqdsk_data['bcentr']
+                newvars['field_axis'] = (['time'], baxis.to_numpy())
+            if add_current:
+                cur = data['current']
+                cur.loc[dict(time=t)] = eqdsk_data['cpasma']
+                newvars['current'] = (['time'], cur.to_numpy())
+            #rmesh, zmesh = np.meshgrid(rvec, zvec)
+            fs = [{
+                'r': np.asarray([eqdsk_data['rmagx']]),
+                'z': np.asarray([eqdsk_data['zmagx']]),
+                'r0': eqdsk_data['rmagx'],
+                'z0': eqdsk_data['zmagx'],
+                'rmin': 0.0,
+            }]
+            for i, psi in enumerate(psip.to_numpy()[1:]):
+                fs.append(trace_contour_with_megpy(rvec, zvec, eqdsk_data['psi'], psi, eqdsk_data['rmagx'], eqdsk_data['zmagx']))
+            if not trace_last:
+                fs[-1]['r'] = np.atleast_2d(eqdsk_data['rbdry']).T
+                fs[-1]['z'] = np.atleast_2d(eqdsk_data['zbdry']).T
+            grid = [str(g) for g in data['grid'].to_numpy()] if 'grid' in data else ['r', 'z']
+            poloidal_index = list(data['poloidal_index'].to_numpy()) if 'poloidal_index' in data else [i for i in range(501)]
+            theta = np.linspace(0.0, 2.0 * np.pi, len(poloidal_index))
+            if 'poloidal_index' not in data:
+                newcoords['poloidal_index'] = poloidal_index
+            if 'grid' not in data:
+                newcoords['grid'] = grid
+            contour = data['contour'] if 'contour' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']), 2, len(theta))), coords={'time': data['time'], 'radius': data['radius'], 'grid': grid, 'poloidal_index': poloidal_index})
+            rmag = data['r_geometric'] if 'r_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
+            zmag = data['z_geometric'] if 'z_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
+            rmin = data['r_minor'] if 'r_minor' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
+            for i, con in enumerate(fs):
+                r = data['radius'].isel(radius=i).to_numpy().item(0)
+                c_con = con['r'] - con['r0'] + 1.0j * con['z'] - 1.0j * con['z0']
+                r_con = np.interp(theta, np.angle(c_con), con['r'] - con['r0']) + con['r0']
+                z_con = np.interp(theta, np.angle(c_con), con['z'] - con['z0']) + con['z0']
+                contour.loc[dict(time=t, radius=r)] = np.concatenate([np.atleast_2d(r_con), np.atleast_2d(z_con)], axis=0)
+                rmag.loc[dict(time=t, radius=r)] = con['r0']
+                zmag.loc[dict(time=t, radius=r)] = con['z0']
+                rmin.loc[dict(time=t, radius=r)] = con['rmin']
+            newvars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], contour.to_numpy())
+            newvars['r_geometric'] = (['time', 'radius'], rmag.to_numpy())
+            newvars['z_geometric'] = (['time', 'radius'], zmag.to_numpy())
+            newvars['r_minor'] = (['time', 'radius'], rmin.to_numpy())
+        if newvars:
+            if side == 'input':
+                self.update_input_coords(newcoords)
+                self.update_input_data_vars(newvars)
+            else:
+                self.update_output_coords(newcoords)
+                self.update_output_data_vars(newvars)
 
 
     def _compute_derived_coordinates(
@@ -1513,3 +1659,15 @@ class plasma_io(io):
                     data_vars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], np.stack([r_contour, z_contour], axis=2))
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
+
+
+    def plot(
+        self,
+    ) -> None:
+        plt = None
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print(f'No package called "matplotlib" was found, plot was not generated!')
+        if plt is not None:
+            pass

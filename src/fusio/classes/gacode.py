@@ -16,6 +16,8 @@ from ..utils.eqdsk_tools import (
     read_eqdsk,
     trace_flux_surfaces,
     calculate_mxh_coefficients,
+    convert_mxh_to_contour_megpy,
+    convert_contour_to_mxh_megpy,
 )
 
 logger = logging.getLogger('fusio')
