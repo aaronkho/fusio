@@ -1676,7 +1676,7 @@ class plasma_io(io):
                 mapper = cm.ScalarMappable(norm=norm, cmap='plasma')
                 for r in lvec:
                     rindex = list(data['radius'].to_numpy()).index(data['radius'].sel(radius=r, method='nearest').to_numpy().item(0))
-                    pc = mapper.to_rgba([r]) if rindex < (len(data['radius']) - 1) else 'r'
+                    pc = mapper.to_rgba(r) if rindex < (len(data['radius']) - 1) else 'r'
                     ax['eq'].plot(data['contour'].isel(radius=rindex, drop=True).sel(grid='r', drop=True).to_numpy(), data['contour'].isel(radius=rindex, drop=True).sel(grid='z', drop=True).to_numpy(), c=pc)
             if time is not None:
                 ax['eq'].set_title(r'$t=' + f'{time:.3f}' + r'$ s')
