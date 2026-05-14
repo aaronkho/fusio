@@ -419,9 +419,9 @@ def convert_contour_to_mxh_megpy(rc: NDArray, zc: NDArray): #, r0: float, z0: fl
     kappa = shape_vector[3]
     cos_coeffs = [shape_vector[4]]
     sin_coeffs = [0.0]
-    for i in range((len(shape) - 5) // 2):
-        cos_coeffs.append(shape[2 * i + 5])
-        cos_coeffs.append(shape[2 * i + 6])
+    for i in range((len(shape_vector) - 5) // 2):
+        cos_coeffs.append(shape_vector[2 * i + 5])
+        cos_coeffs.append(shape_vector[2 * i + 6])
     return rzero, zzero, r, kappa, cos_coeffs, sin_coeffs
 
 
