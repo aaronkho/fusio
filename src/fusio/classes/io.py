@@ -4,6 +4,7 @@ import copy
 import logging
 from pathlib import Path
 from typing import Any      # Available in Python 3.5+
+from typing import Optional # Available in Python 3.6+
 from typing import Final    # Available in Python 3.8+
 Self: Any
 if __python_version_object__ > Version("3.11"):
