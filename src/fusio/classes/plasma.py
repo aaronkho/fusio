@@ -2,7 +2,7 @@ import copy
 import logging
 import types
 from pathlib import Path
-from .io import Any, Final, Self
+from .io import Any, Final, Self, Optional
 from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, Iterable
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
