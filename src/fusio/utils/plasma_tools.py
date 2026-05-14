@@ -92,7 +92,7 @@ def define_ion_species(z=None, a=None, short_name=None, long_name=None, user_mas
     sn = None
     ln = None
     if isinstance(z, number_types) and int(np.rint(z)) >= -1:
-        tz = int(np.rint(z))
+        tz = int(np.ceil(z))
     if isinstance(a, number_types) and int(np.rint(a)) > 0:
         ta = int(np.rint(a))
     if isinstance(short_name, string_types) and short_name in specieslist:

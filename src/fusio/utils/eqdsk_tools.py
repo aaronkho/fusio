@@ -8,6 +8,8 @@ import numpy as np
 from scipy.integrate import quad  # type: ignore[import-untyped]
 import contourpy
 from shapely import Point, Polygon  # type: ignore[import-untyped]
+from megpy import contour as contour_tracer  # type: ignore[import-untyped]
+from megpy.fluxsurface import FluxSurface  # type: ignore[import-untyped]
 
 logger = logging.getLogger('fusio')
 
@@ -392,4 +394,55 @@ def write_eqdsk(data: MutableMapping[str, Any], path: str | Path) -> None:
             ff.write(dstr)
 
         print(f'Output EQDSK file saved as {geqdsk_path}!')
+
+
+def convert_mxh_to_contour_megpy(r0: float, z0: float, r: float, kappa: float, cos_coeffs: NDArray, sin_coeffs: NDArray):
+    shape_vector = [r0, z0, r, kappa]
+    for i, (c, s) in enumerate(zip(cos_coeffs, sin_coeffs)):
+        if i == 0:
+            shape_vector.append(c)
+        else:
+            shape_vector.extend([c, s])
+    rc, zc, theta = FluxSurface().mxh(shape_vector)
+    return rc, zc, theta
+
+
+def convert_contour_to_mxh_megpy(rc: NDArray, zc: NDArray): #, r0: float, z0: float):
+    fs = FluxSurface()
+    fs.from_RZ(rc, zc)
+    fs.n_harmonics = 6
+    fs.to_mxh(optimize=True)
+    shape_vector = fs.shape
+    rzero = shape_vector[0]
+    zzero = shape_vector[1]
+    r = shape_vector[2]
+    kappa = shape_vector[3]
+    cos_coeffs = [shape_vector[4]]
+    sin_coeffs = [0.0]
+    for i in range((len(shape) - 5) // 2):
+        cos_coeffs.append(shape[2 * i + 5])
+        cos_coeffs.append(shape[2 * i + 6])
+    return rzero, zzero, r, kappa, cos_coeffs, sin_coeffs
+
+
+def trace_contour_with_megpy(rvec: NDArray, zvec: NDArray, psi: NDArray, level: float, rcheck: float, zcheck: float, boundary: bool = False):
+    contour_out = {}
+    check = [float(rcheck), float(zcheck)]
+    loops = contour_tracer(
+        rvec,
+        zvec,
+        psi,
+        level=level,
+        kind='s',
+        ref_point=np.array(check),
+        x_point=boundary
+    )
+    if len(loops['contours']) > 0:
+        loop = np.array(loops['contours'][0]).T
+        contour_out['r'] = np.concatenate([loop[:, 0].flatten(), np.array([loop[0, 0]])], axis=0)
+        contour_out['z'] = np.concatenate([loop[:, 1].flatten(), np.array([loop[0, 1]])], axis=0)
+        contour_out['r0'] = loops['X0']
+        contour_out['z0'] = loops['Y0']
+        contour_out['rmin'] = loops['r']
+    return contour_out
 
