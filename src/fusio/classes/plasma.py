@@ -1646,6 +1646,9 @@ class plasma_io(io):
 
     def plot(
         self,
+        savepath: str | Path,
+        time: float | None = None,
+        side: str = 'input',
     ) -> None:
         plt = None
         try:
@@ -1653,4 +1656,66 @@ class plasma_io(io):
         except ImportError:
             print(f'No package called "matplotlib" was found, plot was not generated!')
         if plt is not None:
-            pass
+            import matplotlib
+            matplotlib.rc('font', size=24)
+            data = self.input if side == 'input' else self.output
+            t = data['time'].sel(time=time, method='nearest').to_numpy().item(0) if isinstance(time, (float, int)) else data['time'].isel(time=0).to_numpy().item(0)
+            data = data.sel(time=t, method='nearest', drop=True)
+            import matplotlib.cm as cm
+            from matplotlib.colors import Normalize
+            layout = [
+                ['eq', 't', 'n'],
+                ['eq', 'psi', 'q'],
+            ]
+            fig, ax = plt.subplot_mosaic(layout, figsize=(28, 12))
+            lvec = np.array([0.01, 0.04, 0.09, 0.15, 0.22, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0]) #, 0.99, 0.999, 1.0, 1.02, 1.05, 1.1, 1.2])
+            #for ii, local_data in enumerate(data):
+            if 'radius' in data and 'grid' in data and 'contour' in data:
+                rhovec = data['radius'].to_numpy().flatten()
+                norm = Normalize(vmin=np.nanmin(rhovec), vmax=np.nanmax(rhovec), clip=True)
+                mapper = cm.ScalarMappable(norm=norm, cmap='plasma')
+                for r in lvec:
+                    rindex = list(data['radius'].to_numpy()).index(data['radius'].sel(radius=r, method='nearest').to_numpy().item(0))
+                    pc = mapper.to_rgba([r]) if rindex < (len(data['radius']) - 1) else 'r'
+                    ax['eq'].plot(data['contour'].isel(radius=rindex, drop=True).sel(grid='r', drop=True).to_numpy(), data['contour'].isel(radius=rindex, drop=True).sel(grid='z', drop=True).to_numpy(), c=pc)
+            if time is not None:
+                ax['eq'].set_title(r'$t=' + f'{time:.3f}' + r'$ s')
+            ax['eq'].set_xlabel(r'$R$ [m]')
+            ax['eq'].set_ylabel(r'$Z$ [m]')
+            main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
+            main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
+            #ax['long'].legend(loc='upper right', fontsize=12)
+            tel = r'$T_{e}$'
+            til = r'$T_{i}$'
+            nel = r'$n_{e}$'
+            nil = r'$n_{i}$'
+            #jtl = r'$j_{\text{tot}}$'
+            #jol = r'$j_{\text{ohm}}$'
+            #jbl = r'$j_{\text{bs}}$'
+            fpl = r'$\psi_{\text{pol}}$'
+            ftl = r'$\psi_{\text{tor}}$'
+            ql = r'$q$'
+            ax['t'].plot(data['radius'].to_numpy(), 1.0e-3 * data['temperature_e'].to_numpy(), ls='-', lw=2, c='b', label=tel)
+            if len(main_species) > 0:
+                ax['t'].plot(data['radius'].to_numpy(), 1.0e-3 * data['temperature_i'].isel(ion=main_species).mean('ion').to_numpy(), ls='-', lw=2, c='r', label=til)
+            ax['n'].plot(data['radius'].to_numpy(), 1.0e-20 * data['density_e'].to_numpy(), ls='-', lw=2, c='b', label=nel)
+            if len(main_species) > 0:
+                ax['n'].plot(data['radius'].to_numpy(), 1.0e-20 * data['density_i'].isel(ion=main_species).sum('ion').to_numpy(), ls='-', lw=2, c='r', label=nil)
+            ax['psi'].plot(data['radius'].to_numpy(), data['magnetic_flux'].sel(direction='poloidal', drop=True).to_numpy(), ls='-', lw=2, c='g', label=fpl)
+            ax['psi'].plot(data['radius'].to_numpy(), data['magnetic_flux'].sel(direction='toroidal', drop=True).to_numpy(), ls='-', lw=2, c='darkorange', label=ftl)
+            if 'safety_factor' in data:
+                ax['q'].plot(data['radius'].to_numpy(), data['safety_factor'].to_numpy(), ls='-', lw=2, c='m', label=ql)
+            ax['t'].set_xlabel(r'$\rho_{\text{tor}}$ [-]')
+            ax['t'].set_ylabel(r'$T$ [keV]')
+            ax['t'].legend(loc='best', fontsize=16)
+            ax['n'].set_xlabel(r'$\rho_{\text{tor}}$ [-]')
+            ax['n'].set_ylabel(r'$n$ [${10}^{20}$ m$^{-3}$]')
+            ax['n'].legend(loc='best', fontsize=16)
+            ax['psi'].set_xlabel(r'$\rho_{\text{tor}}$ [-]')
+            ax['psi'].set_ylabel(r'$\psi$ [Wb / rad]')
+            ax['psi'].legend(loc='best', fontsize=16)
+            ax['q'].set_xlabel(r'$\rho_{\text{tor}}$ [-]')
+            ax['q'].set_ylabel(r'$q$ [-]')
+            fig.tight_layout()
+            fig.savefig(savepath)
+            plt.close(fig)
