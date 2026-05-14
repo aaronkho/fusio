@@ -1,5 +1,6 @@
 import copy
 import logging
+import types
 from pathlib import Path
 from .io import Any, Final, Self
 from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, Iterable
@@ -454,8 +455,8 @@ class plasma_io(io):
             n_coeffs = 7
             #contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
             #contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
-            contour_r = data['contour'].sel(grid='r')
-            contour_z = data['contour'].sel(grid='z')
+            contour_r = data['contour'].sel(grid='r').to_numpy()
+            contour_z = data['contour'].sel(grid='z').to_numpy()
             #mxh_r0 = (np.nanmax(contour_r, axis=-1) + np.nanmin(contour_r, axis=-1)) / 2.0
             mxh_r0 = data['r_geometric'].to_numpy()
             mxh_dr0 = vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_r0)
@@ -1193,8 +1194,8 @@ class plasma_io(io):
         use_main_ion: bool = False,
         side: str = 'input',
     ) -> None:
+        data_vars: MutableMapping[str, Any] = {}
         if side == 'output' and self.has_output and 'density_e' in self.output and 'charge_i' in self.output and 'density_i' in self.output:
-            data_vars: MutableMapping[str, Any] = {}
             if use_main_ion and 'atomic_number_i' in self.output and 'type_i' in self.output:
                 main_species_mask = (np.isclose(self.output['atomic_number_i'].to_numpy(), 1.0) & (self.output['type_i'].isin(['thermal'])).to_numpy()).flatten()
                 main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
@@ -1209,9 +1210,8 @@ class plasma_io(io):
             else:
                 density_e = (self.output['density_i'] * self.output['charge_i']).sum('ion')
                 data_vars['density_e'] = (['time', 'radius'], density_e.to_numpy())
-            self.update_input_data_vars(data_vars)
+            self.update_output_data_vars(data_vars)
         elif self.has_input and 'density_e' in self.input and 'charge_i' in self.input and 'density_i' in self.input:
-            data_vars: MutableMapping[str, Any] = {}
             if use_main_ion and 'atomic_number_i' in self.input and 'type_i' in self.input:
                 main_species_mask = (np.isclose(self.input['atomic_number_i'].to_numpy(), 1.0) & (self.input['type_i'].isin(['thermal'])).to_numpy()).flatten()
                 main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
@@ -1451,7 +1451,7 @@ class plasma_io(io):
                 #'ne': 'density_e',
                 #'te': 'temperature_e',
             }
-            direct_time_rho_ion_map = {
+            direct_time_rho_ion_map: MutableMapping[str, Any] = {
                 #'ni': 'density_i',
                 #'ti': 'temperature_i',
             }
@@ -1650,7 +1650,7 @@ class plasma_io(io):
         time: float | None = None,
         side: str = 'input',
     ) -> None:
-        plt = None
+        plt: Optional[types.ModuleType] = None
         try:
             import matplotlib.pyplot as plt
         except ImportError:

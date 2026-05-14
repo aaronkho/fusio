@@ -1710,7 +1710,7 @@ class gacode_io(io):
                 #'temperature_e': 'te',
                 #'heat_exchange_ei': 'qei',
             }
-            direct_time_rho_ion_map = {
+            direct_time_rho_ion_map: MutableMapping[str, Any] = {
                 #'density_i': 'ni',
                 #'temperature_i': 'ti',
             }
