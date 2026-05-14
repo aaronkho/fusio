@@ -19,6 +19,7 @@ from ..utils.math_tools import (
 )
 from ..utils.eqdsk_tools import (
     read_eqdsk,
+    define_cocos_converter,
     trace_contour_with_megpy,
     convert_mxh_to_contour_megpy,
     convert_contour_to_mxh_megpy,
@@ -183,23 +184,6 @@ class plasma_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
-    def add_geometry_from_eqdsk(
-        self,
-        path: str | Path,
-        side: str = 'input',
-        overwrite: bool = False,
-    ) -> None:
-        data = self.input if side == 'input' else self.output
-        if isinstance(path, (str, Path)) and 'polflux' in data:
-            eqdsk_data = read_eqdsk(path)
-            newvars: MutableMapping[str, Any] = {}
-            if newvars:
-                if side == 'input':
-                    self.update_input_data_vars(newvars)
-                else:
-                    self.update_output_data_vars(newvars)
-
-
     def interpolate(
         self,
         v: float | NDArray,
@@ -246,32 +230,13 @@ class plasma_io(io):
         add_field: bool = True,
         add_current: bool = True,
     ) -> None:
-        """Trace flux surfaces from an EQDSK file and add MXH shape data.
-
-        .. warning::
-
-           This method uses ``data['polflux']`` as **contour levels** to
-           trace flux surfaces on the EQDSK 2-D ψ grid.  Therefore
-           ``polflux`` must be stored in the **same units** as the EQDSK
-           grid at the time this method is called:
-
-           * COCOS 11-18 (eBp=1): EQDSK ψ is in **Wb** – store Wb.
-           * COCOS  1-10 (eBp=0): EQDSK ψ is in **Wb/rad** – store Wb/rad.
-
-           If GACODE internally uses Wb/rad (the standard GACODE
-           convention), convert ``polflux`` back to Wb/rad **after**
-           calling this method and before computing derived geometry
-           quantities.
-
-        It also interpolates ``fpol`` from the EQDSK onto the stored
-        ``polflux`` grid, so the same unit-matching requirement applies
-        to the fpol interpolation.
+        '''Trace flux surfaces from an EQDSK file and add MXH shape data.
 
         Args:
             path: Path to the EQDSK file.
             side: ``'input'`` or ``'output'`` dataset to populate.
             overwrite: If ``True``, overwrite existing shape data.
-        """
+        '''
         data = self.input if side == 'input' else self.output
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
@@ -283,6 +248,7 @@ class plasma_io(io):
             # if data.attrs.get('radius', '') == 'rho_tor_norm':
             #     rho = data['radius'].to_numpy()
             psip = data['magnetic_flux'].sel(direction='poloidal', drop=True).isel(time=time_index, drop=True)
+            psip = (eqdsk_data['sibdry'] - eqdsk_data['simagx']) * (psip - psip.isel(radius=0)) / (psip.isel(radius=-1) - psip.isel(radius=0)) + eqdsk_data['simagx']
             psivec = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
             rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
             zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
@@ -298,7 +264,7 @@ class plasma_io(io):
             sign = 1.0
             qpsi = eqdsk_data['qpsi']
             polflux = copy.deepcopy(psivec)
-            if np.any((polflux[..., -1] - polflux[..., 0]) < 0.0):
+            if (polflux[-1] - polflux[0]) < 0.0:
                 sign = -1.0
                 polflux = -polflux
             torflux = sign * vectorized_numpy_integration(qpsi, polflux)
@@ -331,8 +297,20 @@ class plasma_io(io):
             for i, psi in enumerate(psip.to_numpy()[1:]):
                 fs.append(trace_contour_with_megpy(rvec, zvec, eqdsk_data['psi'], psi, eqdsk_data['rmagx'], eqdsk_data['zmagx']))
             if not trace_last:
-                fs[-1]['r'] = np.atleast_2d(eqdsk_data['rbdry']).T
-                fs[-1]['z'] = np.atleast_2d(eqdsk_data['zbdry']).T
+                rb = eqdsk_data['rbdry']
+                zb = eqdsk_data['zbdry']
+                if rb[-1] == rb[0] and zb[-1] == zb[0]:
+                    rb = rb[:-1]
+                    zb = zb[:-1]
+                ab = np.angle(rb - fs[-1]['r0'] + 1.0j * zb - 1.0j * fs[-1]['z0'])
+                ab[ab < 0.0] += 2.0 * np.pi
+                imin = list(ab).index(np.nanmin(ab))
+                rb = np.roll(rb, -imin)
+                zb = np.roll(zb, -imin)
+                rb = np.concatenate([rb, np.asarray([rb[0]])])
+                zb = np.concatenate([zb, np.asarray([zb[0]])])
+                fs[-1]['r'] = rb
+                fs[-1]['z'] = zb
             grid = [str(g) for g in data['grid'].to_numpy()] if 'grid' in data else ['r', 'z']
             poloidal_index = list(data['poloidal_index'].to_numpy()) if 'poloidal_index' in data else [i for i in range(501)]
             theta = np.linspace(0.0, 2.0 * np.pi, len(poloidal_index))
@@ -341,21 +319,26 @@ class plasma_io(io):
             if 'grid' not in data:
                 newcoords['grid'] = grid
             contour = data['contour'] if 'contour' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']), 2, len(theta))), coords={'time': data['time'], 'radius': data['radius'], 'grid': grid, 'poloidal_index': poloidal_index})
-            rmag = data['r_geometric'] if 'r_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
-            zmag = data['z_geometric'] if 'z_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
+            rgeo = data['r_geometric'] if 'r_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
+            zgeo = data['z_geometric'] if 'z_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
             rmin = data['r_minor'] if 'r_minor' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
             for i, con in enumerate(fs):
                 r = data['radius'].isel(radius=i).to_numpy().item(0)
-                c_con = con['r'] - con['r0'] + 1.0j * con['z'] - 1.0j * con['z0']
-                r_con = np.interp(theta, np.angle(c_con), con['r'] - con['r0']) + con['r0']
-                z_con = np.interp(theta, np.angle(c_con), con['z'] - con['z0']) + con['z0']
+                a_con = np.angle(con['r'] - con['r0'] + 1.0j * con['z'] - 1.0j * con['z0'])
+                a_con[a_con < 0.0] += 2.0 * np.pi
+                if a_con[-1] == a_con[0]:
+                    a_con[-1] += 2.0 * np.pi
+                r_con = np.interp(theta[:-1], a_con, con['r'] - con['r0']) + con['r0']
+                z_con = np.interp(theta[:-1], a_con, con['z'] - con['z0']) + con['z0']
+                r_con = np.concatenate([r_con, np.asarray([r_con[0]])])
+                z_con = np.concatenate([z_con, np.asarray([z_con[0]])])
                 contour.loc[dict(time=t, radius=r)] = np.concatenate([np.atleast_2d(r_con), np.atleast_2d(z_con)], axis=0)
-                rmag.loc[dict(time=t, radius=r)] = con['r0']
-                zmag.loc[dict(time=t, radius=r)] = con['z0']
+                rgeo.loc[dict(time=t, radius=r)] = con['r0']
+                zgeo.loc[dict(time=t, radius=r)] = con['z0']
                 rmin.loc[dict(time=t, radius=r)] = con['rmin']
             newvars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], contour.to_numpy())
-            newvars['r_geometric'] = (['time', 'radius'], rmag.to_numpy())
-            newvars['z_geometric'] = (['time', 'radius'], zmag.to_numpy())
+            newvars['r_geometric'] = (['time', 'radius'], rgeo.to_numpy())
+            newvars['z_geometric'] = (['time', 'radius'], zgeo.to_numpy())
             newvars['r_minor'] = (['time', 'radius'], rmin.to_numpy())
         if newvars:
             if side == 'input':

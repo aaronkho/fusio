@@ -407,8 +407,9 @@ def convert_mxh_to_contour_megpy(r0: float, z0: float, r: float, kappa: float, c
     return rc, zc, theta
 
 
-def convert_contour_to_mxh_megpy(rc: NDArray, zc: NDArray, r0: float, z0: float):
-    fs = FluxSurface().from_RZ(rc, zc, r0, z0)
+def convert_contour_to_mxh_megpy(rc: NDArray, zc: NDArray): #, r0: float, z0: float):
+    fs = FluxSurface()
+    fs.from_RZ(rc, zc)
     fs.n_harmonics = 6
     fs.to_mxh(optimize=True)
     shape_vector = fs.shape

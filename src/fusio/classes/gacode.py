@@ -1787,17 +1787,68 @@ class gacode_io(io):
                     e_si =  1.60218e-19
                     #data_vars['ptot'] = (['n', 'rho'], e_si * (data['temperature_e'] * data['density_e'] + (data['temperature_i'] * data['density_i']).isel(ion=thermal_species).sum('ion')).to_numpy())
                     data_vars['ptot'] = (['n', 'rho'], e_si * (data['temperature_e'] * data['density_e'] + (data['temperature_i'] * data['density_i']).sum('ion')).to_numpy())
-                if 'mxh_kappa' in data:
+                if kwargs.get('optimize_shape', False) and 'contour' in data:
+                    mxh_rmag = []
+                    mxh_zmag = []
+                    mxh_rmin = []
+                    mxh_kappa = []
+                    mxh_delta = []
+                    mxh_zeta = []
+                    mxh_cos = []
+                    mxh_sin = []
+                    for j, tt in enumerate(data['time'].to_numpy()):
+                        mxh_radius_rmag = []
+                        mxh_radius_zmag = []
+                        mxh_radius_rmin = []
+                        mxh_radius_kappa = []
+                        mxh_radius_delta = []
+                        mxh_radius_zeta = []
+                        mxh_radius_cos = []
+                        mxh_radius_sin = []
+                        for i, rr in enumerate(data['radius'].to_numpy()):
+                            r0, z0, rmin, kappa, cos_coeffs, sin_coeffs = convert_contour_to_mxh_megpy(
+                                data['contour'].sel(time=tt, radius=rr, method='nearest', drop=True).sel(grid='r', drop=True).to_numpy(),
+                                data['contour'].sel(time=tt, radius=rr, method='nearest', drop=True).sel(grid='z', drop=True).to_numpy(),
+                                #data['r_geometric'].sel(time=tt, radius=rr, method='nearest', drop=True).to_numpy().item(0),
+                                #data['z_geometric'].sel(time=tt, radius=rr, method='nearest', drop=True).to_numpy().item(0),
+                            )
+                            mxh_radius_rmag.append(r0)
+                            mxh_radius_zmag.append(z0)
+                            mxh_radius_rmin.append(rmin)
+                            mxh_radius_kappa.append(kappa)
+                            mxh_radius_delta.append(np.sin(sin_coeffs[1]))
+                            mxh_radius_zeta.append(-sin_coeffs[2])
+                            mxh_radius_cos.append(cos_coeffs)
+                            mxh_radius_sin.append(sin_coeffs[3:])
+                        mxh_rmag.append(np.asarray(mxh_radius_rmag))
+                        mxh_zmag.append(np.asarray(mxh_radius_zmag))
+                        mxh_rmin.append(np.asarray(mxh_radius_rmin))
+                        mxh_kappa.append(np.asarray(mxh_radius_kappa))
+                        mxh_delta.append(np.asarray(mxh_radius_delta))
+                        mxh_zeta.append(np.asarray(mxh_radius_zeta))
+                        mxh_cos.append(np.asarray(mxh_radius_cos))
+                        mxh_sin.append(np.asarray(mxh_radius_sin))
+                    data_vars['rmag'] = (['n', 'rho'], np.asarray(mxh_rmag))
+                    data_vars['zmag'] = (['n', 'rho'], np.asarray(mxh_zmag))
+                    data_vars['rmin'] = (['n', 'rho'], np.asarray(mxh_rmin))
+                    data_vars['kappa'] = (['n', 'rho'], np.asarray(mxh_kappa))
+                    data_vars['delta'] = (['n', 'rho'], np.asarray(mxh_delta))
+                    data_vars['zeta'] = (['n', 'rho'], np.asarray(mxh_zeta))
+                    for c in range(np.asarray(mxh_cos).shape[-1]):
+                        data_vars[f'shape_cos{c:d}'] = (['n', 'rho'], np.asarray(mxh_cos)[..., c])
+                    for c in range(np.asarray(mxh_sin).shape[-1]):
+                        data_vars[f'shape_sin{c+3:d}'] = (['n', 'rho'], np.asarray(mxh_sin)[..., c])
+                if 'kappa' not in data_vars and 'mxh_kappa' in data:
                     data_vars['kappa'] = (['n', 'rho'], data['mxh_kappa'].to_numpy())
-                if 'mxh_delta' in data:
+                if 'delta' not in data_vars and 'mxh_delta' in data:
                     data_vars['delta'] = (['n', 'rho'], data['mxh_delta'].to_numpy())
-                if 'mxh_zeta' in data:
+                if 'zeta' not in data_vars and 'mxh_zeta' in data:
                     data_vars['zeta'] = (['n', 'rho'], data['mxh_zeta'].to_numpy())
-                if 'mxh_coefficient' in data and 'mxh_cos' in data:
+                if 'shape_cos0' not in data_vars and 'mxh_coefficient' in data and 'mxh_cos' in data:
                     for c in data['mxh_coefficient']:
                         if c >= 0:
                             data_vars[f'shape_cos{c:d}'] = (['n', 'rho'], data['mxh_cos'].sel(mxh_coefficient=c).to_numpy())
-                if 'mxh_coefficient' in data and 'mxh_sin' in data:
+                if 'shape_sin3' not in data_vars and 'mxh_coefficient' in data and 'mxh_sin' in data:
                     for c in data['mxh_coefficient']:
                         if c >= 3:
                             data_vars[f'shape_sin{c:d}'] = (['n', 'rho'], data['mxh_sin'].sel(mxh_coefficient=c).to_numpy())
