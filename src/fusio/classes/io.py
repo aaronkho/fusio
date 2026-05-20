@@ -150,22 +150,21 @@ class io():
             load_path = Path(path)
             if load_path.exists():
                 tree = xr.open_datatree(path)
-                root = tree.get('root')
-                if isinstance(root, xr.DataTree):
-                    fmt = root.to_dataset().attrs.get('class', 'unknown')
+                if isinstance(tree, xr.DataTree):
+                    fmt = tree.to_dataset().attrs.get('class', 'unknown')
                     try:
                         mod = importlib.import_module(f'fusio.classes.{fmt}')
                     except:
                         raise NotImplementedError(f'File contains data for {fmt} but this format is not yet implemented.')
                     newcls = getattr(mod, f'{fmt}_io')
                     newobj = newcls()
-                    newobj.input = tree.get('input')
-                    newobj.output = tree.get('output')
+                    newobj.input = tree.get('input').to_dataset()
+                    newobj.output = tree.get('output').to_dataset()
                     return newobj
                 else:
-                    logger.warning('Requested load path, {load_path}, contains data which is incompatible with fusio! Returning empty base class...')
+                    logger.warning(f'Requested load path, {load_path}, contains data which is incompatible with fusio! Returning empty base class...')
             else:
-                logger.warning('Requested load path, {load_path}, does not exist! Returning empty base class...')
+                logger.warning(f'Requested load path, {load_path}, does not exist! Returning empty base class...')
         else:
-            logger.warning('Invalid path argument given to load function! Returning empty base class...')
+            logger.warning(f'Invalid path argument given to load function! Returning empty base class...')
         return cls()
