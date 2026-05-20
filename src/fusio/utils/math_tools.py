@@ -31,7 +31,7 @@ def vectorized_numpy_integration(
     y: NDArray,
     x: NDArray,
 ) -> NDArray:
-    return cumulative_simpson(y, x=x, initial=0.0)
+    return cumulative_simpson(y, x=x, axis=-1, initial=0.0)
 
 def vectorized_numpy_interpolation(
     v: float | NDArray,
