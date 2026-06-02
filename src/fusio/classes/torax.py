@@ -1018,7 +1018,7 @@ class torax_io(io):
     def add_geometry(
         self,
         geotype: str,
-        geofiles: str | Mapping[str, str],
+        geofiles: str | Mapping[str, str] | None = None,
         geodir: str | None = None,
         **kwargs: MutableMapping[str, Any],
     ) -> None:
@@ -1026,9 +1026,7 @@ class torax_io(io):
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
         newattrs['profile_conditions.initial_psi_mode'] = 'geometry'
-        newattrs['geometry.cocos'] = kwargs.get('cocos', 2)
-        #newattrs['geometry.hires_factor'] = 4
-        newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
+        newattrs['geometry.hires_factor'] = 4
         newattrs['geometry.geometry_type'] = f'{geotype}'
         if geodir is not None:
             newattrs['geometry.geometry_directory'] = f'{geodir}'
@@ -1042,10 +1040,20 @@ class torax_io(io):
                     geotime['n_surfaces'] = kwargs.get('n_surfaces', 251)
                     geotime['last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
                 geoconfig[time] = geotime
-            newattrs['geometry.geometry_configs'] = geoconfig
-        else:
-            newattrs['geometry.geometry_file'] = f'{geofiles}'
             if geotype == 'eqdsk':
+                newattrs['geometry.geometry_configs'] = geoconfig
+                newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
+                newattrs['geometry.cocos'] = kwargs.get('cocos', 2)
+        else:
+            if geotype == 'circular':
+                newattrs['geometry.R_major'] = kwargs.get('R_major', 6.2)
+                newattrs['geometry.a_minor'] = kwargs.get('a_minor', 2.0)
+                newattrs['geometry.B_0'] = kwargs.get('B_0', 5.3)
+                newattrs['geometry.elongation_LCFS'] = kwargs.get('elongation_LCFS', 1.72)
+            if geotype == 'eqdsk':
+                newattrs['geometry.geometry_file'] = f'{geofiles}'
+                newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
+                newattrs['geometry.cocos'] = kwargs.get('cocos', 2)
                 newattrs['geometry.n_surfaces'] = kwargs.get('n_surfaces', 251)
                 newattrs['geometry.last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
         self.update_input_attrs(newattrs)
