@@ -1274,6 +1274,28 @@ class torax_io(io):
 
     def add_internal_boundary(
         self,
+        variable: str,
+        rho: float,
+    ) -> None:
+        data = self.input
+        bc = np.array([])
+        if variable == 'n_e':
+            bc = data['profile_conditions.n_e'].interp(rho=rho).to_numpy().flatten()
+        if variable == 'T_e':
+            bc = data['profile_conditions.T_e'].interp(rho=rho).to_numpy().flatten()
+        if variable == 'T_i':
+            bc = data['profile_conditions.T_i'].interp(rho=rho).to_numpy().flatten()
+        if len(bc) > 0:
+            newcoords: MutableMapping[str, Any] = {}
+            newcoords['rho_bc'] = np.array([rho])
+            self.update_input_coords(newcoords)
+            newvars: MutableMapping[str, Any] = {}
+            newvars[f'profile_conditions.internal_boundary_conditions.{variable}'] = (['time', 'rho_bc'], np.expand_dims(bc, axis=-1))
+            self.update_input_data_vars(newvars)
+
+
+    def add_internal_boundary_with_pedestal(
+        self,
         rho: float,
     ) -> None:
         data = self.input
