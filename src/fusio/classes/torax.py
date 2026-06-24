@@ -3104,6 +3104,11 @@ class torax_io(io):
                                 datadict[f'{key}']['rho_norm'].to_numpy().flatten().tolist(),
                                 datadict[f'{key}'].to_numpy().tolist(),
                             )
+                        if key.startswith('profile_conditions.internal_boundary_conditions'):
+                            datadict[f'{key}'] = {
+                                time: {rho: val for rho in datadict[f'{key}']['rho_norm'].to_numpy().flatten()}
+                                for time, val in zip(datadict[f'{key}']['time'].to_numpy().flatten(), datadict[f'{key}']['rho_norm'].to_numpy().flatten())
+                            }
                 else:
                     da = data[key].dropna(ttag)
                     if da.size > 0:
@@ -3233,6 +3238,20 @@ class torax_io(io):
                                 data_vars[f'{key}.{field}.{i:d}.{k}'] = (dims, np.asarray(v[-1]))
                             else:
                                 attrs[f'{key}.{field}.{i:d}.{k}'] = v
+                elif key == 'profile_conditions' and field in ['internal_boundary_conditions']:
+                    for i, variable in enumerate(json_dict[key][field]):
+                        rho_bc = 1.0
+                        time_bc = []
+                        val_bc = []
+                        for k, v in json_dict[key][field][variable].items():
+                            time_bc.append(k)
+                            for rho, val in v.items():
+                                rho_bc = rho
+                                val_bc.append(val)
+                        dims = [f'time_{field}_{variable}', f'rho_{field}_{variable}']
+                        pre_coords[f'time_{field}_{variable}'] = np.asarray(time_bc)
+                        pre_coords[f'rho_{field}_{variable}'] = np.asarray([rho_bc])
+                        data_vars[f'{key}.{field}.{variable}'] = (dims, np.expand_dims(np.asarray(val_bc), axis=-1))
                 elif isinstance(json_dict[key][field], dict):
                     for k, v in json_dict[key][field].items():
                         if isinstance(v, (tuple, list)):
