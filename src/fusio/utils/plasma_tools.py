@@ -820,7 +820,7 @@ def calc_ne_from_nustar_nrl(nustar, zeff, q, rmin, rmaj, te):
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
     warnings.resetwarnings()
-    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy().flatten()
     ne = ensure_type_match(ne_sol.reshape(te_arr.shape), te)
     #logger.debug(f'<{calc_ne_from_nustar_nrl.__name__}>: data')
     #logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
@@ -978,7 +978,7 @@ def calc_ne_from_nustar_nrl_alpha_and_ap(nustar, alpha, ap, zeff, q, btot, rmin,
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
     warnings.resetwarnings()
-    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy().flatten()
     ne = ensure_type_match(ne_sol.reshape(cst_arr.shape), nustar)
     #logger.debug(f'<{calc_ne_from_nustar_nrl_alpha_and_ap.__name__}>: data')
     #logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'ne': ne}))
@@ -1011,7 +1011,7 @@ def calc_te_from_nustar_nrl_alpha_and_ap(nustar, alpha, ap, zeff, q, btot, rmin,
         )
         sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
     warnings.resetwarnings()
-    te_sol = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
+    te_sol = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy().flatten()
     te = ensure_type_match(te_sol.reshape(cst_arr.shape), nustar)
     #logger.debug(f'<{calc_te_from_nustar_nrl_alpha_and_ap.__name__}>: data')
     #logger.debug(pd.DataFrame(data={'nustar': nustar, 'alpha': alpha, 'ap': ap, 'te': te}))
@@ -1197,7 +1197,7 @@ def calc_ne_from_nueenorm(nueenorm, te, aref, lref, ze=1.0):
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
     warnings.resetwarnings()
-    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy().flatten()
     ne = ensure_type_match(ne_sol.reshape(cst_arr.shape), nueenorm)
     #logger.debug(f'<{calc_ne_from_nueenorm.__name__}>: data')
     #logger.debug(pd.DataFrame(data={'nueenorm': nueenorm, 'te': te, 'ne': ne}))
@@ -1245,7 +1245,7 @@ def calc_ne_from_nustar(nustar, zeff, q, rmin, rmaj, te):
         )
         sol_ne20.loc[retry] = rootdata.loc[retry].apply(func_ne20_v2, axis=1)
     warnings.resetwarnings()
-    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy()
+    ne_sol = sol_ne20.apply(lambda sol: 1.0e20 * sol.root).to_numpy().flatten()
     ne = ensure_type_match(ne_sol.reshape(te_arr.shape), nustar)
     #logger.debug(f'<{calc_ne_from_nustar.__name__}>: data')
     #logger.debug(pd.DataFrame(data={'nustar': nustar, 'te': te, 'ne': ne}))
@@ -1279,7 +1279,7 @@ def calc_te_from_nustar(nustar, zeff, q, rmin, rmaj, ne):
         )
         sol_te3.loc[retry] = rootdata.loc[retry].apply(func_te3_v2, axis=1)
     warnings.resetwarnings()
-    te_sol = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy()
+    te_sol = sol_te3.apply(lambda sol: 1.0e3 * sol.root).to_numpy().flatten()
     te = ensure_type_match(te_sol.reshape(ne_arr.shape), nustar)
     #logger.debug(f'<{calc_te_from_nustar.__name__}>: data')
     #logger.debug(pd.DataFrame(data={'nustar': nustar, 'ne': ne, 'te': te}))
@@ -1294,15 +1294,20 @@ def calc_zeff_from_nustar(nustar, q, rmin, rmaj, ne, te):
     return zeff
 
 def calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa, cos, sin, s_cos, s_sin):
+    # Vectors are (n_theta, *n_extras)
     n_theta = 1001
     theta = np.linspace(-np.pi, np.pi, n_theta)
+    #if not isinstance(kappa, float):
+    #    for d in range(kappa.ndim):
+    #        theta = np.expand_dims(theta, axis=-1)
+    a = copy.deepcopy(theta)
     if not isinstance(kappa, float):
         for d in range(kappa.ndim):
-            theta = np.expand_dims(theta, axis=-1)
-    a = copy.deepcopy(theta)
+            a = np.repeat(np.expand_dims(a, axis=-1), kappa.shape[d], axis=-1)
     a_t = np.ones_like(a)
     a_tt = np.zeros_like(a)
     a_r = np.zeros_like(a)
+    # Assumes coefficient inputs have same dimension as geometry inputs
     for i in range(len(cos)):
         if i < len(sin):
             s = np.array([sin[i]]) if isinstance(sin[i], float) else sin[i]

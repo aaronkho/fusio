@@ -3104,7 +3104,7 @@ class torax_io(io):
                                 datadict[f'{key}']['rho_norm'].to_numpy().flatten().tolist(),
                                 datadict[f'{key}'].to_numpy().tolist(),
                             )
-                        if key.startswith('profile_conditions.internal_boundary_conditions'):
+                        if str(key).startswith('profile_conditions.internal_boundary_conditions'):
                             datadict[f'{key}'] = {
                                 time: {rho: val for rho in datadict[f'{key}']['rho_norm'].to_numpy().flatten()}
                                 for time, val in zip(datadict[f'{key}']['time'].to_numpy().flatten(), datadict[f'{key}']['rho_norm'].to_numpy().flatten())
