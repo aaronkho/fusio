@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 import datetime
-from scipy.integrate import cumulative_simpson, trapezoid  # type: ignore[import-untyped]
+from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
 from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (

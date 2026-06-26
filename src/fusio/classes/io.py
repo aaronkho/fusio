@@ -1,6 +1,5 @@
 from .. import Version, __python_version_object__
 import importlib
-import copy
 import logging
 from pathlib import Path
 from typing import Any      # Available in Python 3.5+
@@ -12,6 +11,7 @@ if __python_version_object__ > Version("3.11"):
 else:
     from typing_extensions import Self
 from collections.abc import Mapping, Sequence, Iterable
+import numpy as np
 import xarray as xr
 
 logger = logging.getLogger('fusio')
@@ -108,6 +108,30 @@ class io():
     def delete_output_attrs(self, data: Iterable) -> None:
         for key in data:
             self._tree['output'].attrs.pop(key, None)
+
+    def _get_input(self, key: str, dims: Optional[Sequence[str]] = None, default: Any = 0.0) -> xr.DataArray:
+        da = xr.DataArray()
+        if key in self._tree['input'].to_dataset().coords:
+            da = self._tree['input'].to_dataset()[key]
+        elif key in self._tree['input'].to_dataset().data_vars:
+            da = self._tree['input'].to_dataset()[key]
+        else:
+            coords = {k: self._tree['input'].to_dataset().coords[k].to_numpy() for k, v in dims.items() if k in self._tree['input'].to_dataset().coords} if isinstance(dims, dict) else {}
+            value = np.full(tuple([coords[dim].size for dim in coords]), default)
+            da = xr.DataArray(value, coords=coords)
+        return da
+
+    def _get_output(self, key: str, dims: Optional[Sequence[str]] = None, default: Any = 0.0) -> xr.DataArray:
+        da = xr.DataArray()
+        if key in self._tree['output'].to_dataset().coords:
+            da = self._tree['output'].to_dataset()[key]
+        elif key in self._tree['output'].to_dataset().data_vars:
+            da = self._tree['output'].to_dataset()[key]
+        else:
+            coords = {k: self._tree['output'].to_dataset().coords[k].to_numpy() for k, v in dims.items() if k in self._tree['output'].to_dataset().coords} if isinstance(dims, dict) else {}
+            value = np.full(tuple([coords[dim].size for dim in coords]), default)
+            da = xr.DataArray(value, coords=coords)
+        return da
 
     # These functions always assume data is placed on input side of target format
 
