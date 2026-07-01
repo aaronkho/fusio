@@ -1919,14 +1919,14 @@ class gacode_io(io):
                     coords['rho'] = data.coords['rho_norm'].to_numpy().flatten()
                     data_vars['nexp'] = (['n'], np.array([len(coords['rho'])] * len(coords['n'])).astype(int))
                 if 'psi' in data:
-                    data_vars['polflux'] = (['n', 'rho'], data['psi'].to_numpy())
+                    data_vars['polflux'] = (['n', 'rho'], data['psi'].to_numpy() / (2.0 * np.pi))
                 if 'r_mid' in data:
                     data_vars['rmin'] = (['n', 'rho'], data['r_mid'].to_numpy())
                 data_vars['shot'] = (['n'], np.atleast_1d([0] * len(coords['n'])))
                 data_vars['masse'] = (['n'], np.atleast_1d([5.4488748e-04] * len(coords['n'])))
                 data_vars['ze'] = (['n'], np.atleast_1d([-1.0] * len(coords['n'])))
                 if 'Phi_b' in data:
-                    data_vars['torfluxa'] = (['n'], data['Phi_b'].to_numpy().flatten())
+                    data_vars['torfluxa'] = (['n'], data['Phi_b'].to_numpy().flatten() / (2.0 * np.pi))
                 #if 'R_major' in data:
                 #    data_vars['rcentr'] = (['n'], data['R_major'].to_numpy().flatten())
                 if 'R_out' in data:
