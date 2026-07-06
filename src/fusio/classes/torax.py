@@ -1639,8 +1639,10 @@ class torax_io(io):
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'tglf'
         newattrs[f'{prefix}.n_processes'] = int(n_processes)
+        newattrs[f'{prefix}.n_cores_per_process'] = 2
         newattrs[f'{prefix}.DV_effective'] = True
         newattrs[f'{prefix}.An_min'] = 0.01
+        newattrs[f'{prefix}.use_legacy_torax_defaults'] = False
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -1663,9 +1665,10 @@ class torax_io(io):
             models = data.attrs.get('map_combined_core_models', [])
             for n in range(len(models)):
                 if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'tglf':
-                    newattrs['TORAX_TGLF_EXEC_PATH'] = f'{path}'  # Is this still necessary?
+                    prefix = f'transport.transport_models.{n:d}'
+                    newattrs[f'{prefix}.tglf_exec_path'] = f'{path}'
         elif data.attrs.get('transport.model_name', '') == 'tglf':
-            newattrs['TORAX_TGLF_EXEC_PATH'] = f'{path}'  # Is this still necessary?
+            newattrs[f'transport.tglf_exec_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
 
