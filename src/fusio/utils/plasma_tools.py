@@ -1501,11 +1501,7 @@ def calc_zeff_from_nustar(nustar, q, rmin, rmaj, ne, te):
     return zeff
 
 def calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa, cos, sin, s_cos, s_sin):
-<<<<<<< HEAD
-    # Vectors are (n_theta, *n_extras)
-=======
     """Evaluate (R, Z, arc length element, |grad r|) on a flux surface described by MXH coefficients."""
->>>>>>> 9b9821d (Added docstrings to plasma_tools)
     n_theta = 1001
     theta = np.linspace(-np.pi, np.pi, n_theta)
     #if not isinstance(kappa, float):
