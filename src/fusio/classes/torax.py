@@ -2197,6 +2197,27 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def add_linliu_ecrh_source(
+        self,
+        mu: float,
+        sigma: float,
+        total: float,
+        efficiency: float = 0.2,
+    ) -> None:
+        data = self.input
+        time = data.get('time', xr.DataArray()).to_numpy().flatten()
+        #ptot = total if isinstance(total, np.ndarray) else np.zeros_like(time) + total
+        newvars: MutableMapping[str, Any] = {}
+        newvars['sources.ecrh.gaussian_location'] = (['time'], np.zeros_like(time) + mu)
+        newvars['sources.ecrh.gaussian_width'] = (['time'], np.zeros_like(time) + sigma)
+        newvars['sources.ecrh.P_total'] = (['time'], np.zeros_like(time) + total)
+        newvars['sources.ecrh.current_drive_efficiency'] = (['time', 'rho'], np.repeat(np.expand_dims(np.zeros_like(time) + efficiency, axis=-1), len(data['rho']), axis=-1))
+        self.update_input_data_vars(newvars)
+        newattrs: MutableMapping[str, Any] = {}
+        newattrs['sources.ecrh.mode'] = 'MODEL_BASED'
+        self.update_input_attrs(newattrs)
+
+
     def reset_generic_heat_source(
         self,
     ) -> None:
@@ -2338,6 +2359,7 @@ class torax_io(io):
         neweheat = np.interp(newrho, rho, eheat)
         newiheat = np.interp(newrho, rho, iheat)
         newattrs: MutableMapping[str, Any] = {}
+        newattrs['use_generic_heat'] = True
         newattrs['sources.generic_heat.mode'] = 'PRESCRIBED'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
@@ -2357,6 +2379,7 @@ class torax_io(io):
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newparticle = np.interp(newrho, rho, particle)
         newattrs: MutableMapping[str, Any] = {}
+        newattrs['use_generic_particle'] = True
         newattrs['sources.generic_particle.mode'] = 'PRESCRIBED'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
@@ -2375,6 +2398,7 @@ class torax_io(io):
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newcurrent = np.interp(newrho, rho, current)
         newattrs: MutableMapping[str, Any] = {}
+        newattrs['use_generic_current'] = True
         newattrs['sources.generic_current.mode'] = 'PRESCRIBED'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
@@ -3144,6 +3168,8 @@ class torax_io(io):
             'sources.bremsstrahlung',
             'sources.impurity_radiation',
             'sources.cyclotron_radiation',
+            'sources.icrh',
+            'sources.ecrh',
             'sources.generic_heat',
             'sources.generic_particle',
             'sources.generic_current',
@@ -3156,6 +3182,9 @@ class torax_io(io):
                 if srctag in ['sources.generic_heat']:
                     datadict.pop(f'{srctag}.prescribed_values_el', None)
                     datadict.pop(f'{srctag}.prescribed_values_ion', None)
+                if srctag in ['sources.ecrh']:
+                    datadict.pop(f'{srctag}.prescribed_values_el', None)
+                    datadict.pop(f'{srctag}.prescribed_values_j', None)
         if (
             datadict.get('sources.generic_heat.mode', 'MODEL_BASED') == 'PRESCRIBED' and
             'sources.generic_heat.prescribed_values_el' in datadict and

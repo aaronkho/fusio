@@ -216,6 +216,8 @@ class gacode_io(io):
         path: str | Path,
         side: str = 'input',
         overwrite: bool = False,
+        use_normalized_psi: bool = True,
+        boundary_offset: float = 0.0,
     ) -> None:
         """Trace flux surfaces from an EQDSK file and add MXH shape data.
 
@@ -242,11 +244,19 @@ class gacode_io(io):
             path: Path to the EQDSK file.
             side: ``'input'`` or ``'output'`` dataset to populate.
             overwrite: If ``True``, overwrite existing shape data.
+            boundary_offset: Fraction of the psi span to pull the traced
+                boundary level in from the exact separatrix (``sibdry``).
         """
         data = self.input if side == 'input' else self.output
         if isinstance(path, (str, Path)) and 'polflux' in data:
             eqdsk_data = read_eqdsk(path)
-            mxh_data = self._calculate_geometry_from_eqdsk(eqdsk_data, data.isel(n=0)['polflux'].to_numpy().flatten())
+            psivec = data.isel(n=0)['polflux'].to_numpy().flatten()
+            if use_normalized_psi:
+                psivec = np.abs((psivec - psivec[0]) / (psivec[-1] - psivec[0]))
+                eqdsk_data['psi'] = np.abs((eqdsk_data['psi'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
+                eqdsk_data['simagx'] = np.abs((eqdsk_data['simagx'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
+                eqdsk_data['sibdry'] = np.abs((eqdsk_data['sibdry'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
+            mxh_data = self._calculate_geometry_from_eqdsk(eqdsk_data, psivec, boundary_offset=boundary_offset)
             newvars = {}
             if overwrite or np.abs(data.get('rmaj', np.array([0.0]))).sum() == 0.0:
                 newvars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmaj']), axis=0))
@@ -301,6 +311,7 @@ class gacode_io(io):
         eqdsk_data: MutableMapping[str, Any],
         psivec: ArrayLike,
         trace_last: bool = True,
+        boundary_offset: float = 0.0,
     ) -> MutableMapping[str, list[int | float]]:
         mxh_data: dict[str, list[int| float]] = {
             'rmaj': [],
@@ -336,6 +347,8 @@ class gacode_io(io):
             elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[0] <= eqdsk_data['simagx']:
                 faxis = True
                 psivec[0] = eqdsk_data['simagx'] + 1.0e-6
+            if boundary_offset > 0.0 and trace_last:
+                psivec[-1] = eqdsk_data['sibdry'] - boundary_offset * (eqdsk_data['sibdry'] - eqdsk_data['simagx'])
             rmesh, zmesh = np.meshgrid(rvec, zvec)
             axis = [eqdsk_data['rmagx'], eqdsk_data['zmagx']]
             fs = trace_flux_surfaces(rmesh, zmesh, eqdsk_data['psi'], psivec, axis=axis)

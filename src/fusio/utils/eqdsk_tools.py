@@ -152,7 +152,8 @@ def trace_flux_surfaces(r: NDArray, z: NDArray, psi: NDArray, levels: NDArray, a
     for level in levels:
         vertices = cg_psi.create_contour(level)
         for i in range(len(vertices)):
-            if vertices[i] is not None:
+            # Fragments with fewer than 4 points cannot form a valid polygon
+            if vertices[i] is not None and len(vertices[i]) >= 4:
                 polygon = Polygon(np.array(vertices[i]))
                 if polygon.contains(check):
                     contours[float(level)] = vertices[i].copy()
