@@ -216,6 +216,7 @@ class gacode_io(io):
         path: str | Path,
         side: str = 'input',
         overwrite: bool = False,
+        use_normalized_psi: bool = True,
     ) -> None:
         """Trace flux surfaces from an EQDSK file and add MXH shape data.
 
@@ -246,7 +247,13 @@ class gacode_io(io):
         data = self.input if side == 'input' else self.output
         if isinstance(path, (str, Path)) and 'polflux' in data:
             eqdsk_data = read_eqdsk(path)
-            mxh_data = self._calculate_geometry_from_eqdsk(eqdsk_data, data.isel(n=0)['polflux'].to_numpy().flatten())
+            psivec = data.isel(n=0)['polflux'].to_numpy().flatten()
+            if use_normalized_psi:
+                psivec = np.abs((psivec - psivec[0]) / (psivec[-1] - psivec[0]))
+                eqdsk_data['psi'] = np.abs((eqdsk_data['psi'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
+                eqdsk_data['simagx'] = np.abs((eqdsk_data['simagx'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
+                eqdsk_data['sibdry'] = np.abs((eqdsk_data['sibdry'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
+            mxh_data = self._calculate_geometry_from_eqdsk(eqdsk_data, psivec)
             newvars = {}
             if overwrite or np.abs(data.get('rmaj', np.array([0.0]))).sum() == 0.0:
                 newvars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmaj']), axis=0))
