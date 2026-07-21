@@ -2536,6 +2536,7 @@ class torax_io(io):
         time: float | Sequence[float] | NDArray | None = None,
         rho: float | Sequence[float] | NDArray | None = None,
         full_impurities: bool = False,
+        lump_impurities: bool = False,
         use_cell_grid: bool = False,
     ) -> xr.Dataset:
         #TODO: Use plasma_tools utility functions
@@ -2619,6 +2620,36 @@ class torax_io(io):
                         data_vars[f'Ti{nion:d}'] = (['time', 'rho'], prof.to_numpy())  # keV
                         data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
                     nion += 1
+            elif lump_impurities and 'impurity_symbol' in data and 'n_impurity_species' in data and 'Z_impurity_species' in data:
+                symbols = data['impurity_symbol'].to_numpy()
+                masses = []
+                for symbol in symbols:
+                    sname = symbol if 'He' not in symbol else 'He'
+                    sn, sa, sz = define_ion_species(short_name=sname)
+                    if symbol == 'He3':
+                        sa = 3.0
+                    masses.append(sa)
+                mass_da = xr.DataArray(np.array(masses, dtype=float), dims=['impurity_symbol'], coords={'impurity_symbol': symbols})
+                dens = data['n_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+                zs = data['Z_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+                # Density-weighted average mass and charge across the individual impurity species present
+                n_total = dens.sum('impurity_symbol')
+                z_avg = (dens * zs).sum('impurity_symbol') / n_total
+                a_avg = (dens * mass_da).sum('impurity_symbol') / n_total
+                data_vars[f'Ai{nion:d}'] = (['time', 'rho'], a_avg.to_numpy())
+                data_vars[f'Zi{nion:d}'] = (['time', 'rho'], z_avg.to_numpy())
+                denom = data['n_e'].interp({'rho_norm': coords['rho']})
+                norm = -1.0 * data['R_major']
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                data_vars[f'ni{nion:d}'] = (['time', 'rho'], (n_total / denom).to_numpy())
+                data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (norm * n_total.differentiate('rho_norm') / n_total / drdrho).to_numpy())
+                if 'T_i' in data:
+                    norm = -1.0 * data['R_major']
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                    prof = data['T_i'].interp({'rho_norm': coords['rho']})
+                    data_vars[f'Ti{nion:d}'] = (['time', 'rho'], prof.to_numpy())  # keV
+                    data_vars[f'Ati{nion:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                nion += 1
             else:
                 if 'A_impurity' in data:
                     data_vars[f'Ai{nion:d}'] = (['time', 'rho'], np.repeat(np.expand_dims(data['A_impurity'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
@@ -2664,6 +2695,7 @@ class torax_io(io):
         time: float | Sequence[float] | NDArray | None = None,
         rho: float | Sequence[float] | NDArray | None = None,
         full_impurities: bool = False,
+        lump_impurities: bool = False,
         use_cell_grid: bool = False,
     ) -> xr.Dataset:
         #TODO: Use plasma_tools utility functions
@@ -2753,6 +2785,38 @@ class torax_io(io):
                         data_vars[f'TAUS_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
                         data_vars[f'RLTS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
                         data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
+            elif lump_impurities and 'impurity_symbol' in data and 'n_impurity_species' in data and 'Z_impurity_species' in data:
+                ns += 1
+                symbols = data['impurity_symbol'].to_numpy()
+                masses = []
+                for symbol in symbols:
+                    sname = symbol if 'He' not in symbol else 'He'
+                    sn, sa, sz = define_ion_species(short_name=sname)
+                    if symbol == 'He3':
+                        sa = 3.0
+                    masses.append(sa)
+                mass_da = xr.DataArray(np.array(masses, dtype=float), dims=['impurity_symbol'], coords={'impurity_symbol': symbols})
+                dens = data['n_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+                zs = data['Z_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+                # Density-weighted average mass and charge across the individual impurity species present
+                n_total = dens.sum('impurity_symbol')
+                z_avg = (dens * zs).sum('impurity_symbol') / n_total
+                a_avg = (dens * mass_da).sum('impurity_symbol') / n_total
+                data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], (a_avg * c['u'] / c['md']).to_numpy())
+                data_vars[f'ZS_{ns:d}'] = (['time', 'rho'], z_avg.to_numpy())
+                denom = data['n_e'].interp({'rho_norm': coords['rho']})
+                norm = -1.0 * data['a_minor']
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (n_total / denom).to_numpy())
+                data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (norm * n_total.differentiate('rho_norm') / n_total / drdrho).to_numpy())
+                data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * n_total.to_numpy())
+                if 'T_i' in data:
+                    norm = -1.0 * data['a_minor']
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                    prof = data['T_i'].interp({'rho_norm': coords['rho']})
+                    data_vars[f'TAUS_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                    data_vars[f'RLTS_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                    data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             else:
                 if 'A_impurity' in data:
                     ns += 1
@@ -2843,6 +2907,7 @@ class torax_io(io):
         time: float | Sequence[float] | NDArray | None = None,
         rho: float | Sequence[float] | NDArray | None = None,
         full_impurities: bool = False,
+        lump_impurities: bool = False,
         use_cell_grid: bool = False,
     ) -> xr.Dataset:
         #TODO: Use plasma_tools utility functions
@@ -2919,6 +2984,40 @@ class torax_io(io):
                         data_vars[f'DLNTDR_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
                         data_vars[f'SDLNTDR_{ns:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
                         data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
+            elif lump_impurities and 'impurity_symbol' in data and 'n_impurity_species' in data and 'Z_impurity_species' in data:
+                ns += 1
+                symbols = data['impurity_symbol'].to_numpy()
+                masses = []
+                for symbol in symbols:
+                    sname = symbol if 'He' not in symbol else 'He'
+                    sn, sa, sz = define_ion_species(short_name=sname)
+                    if symbol == 'He3':
+                        sa = 3.0
+                    masses.append(sa)
+                mass_da = xr.DataArray(np.array(masses, dtype=float), dims=['impurity_symbol'], coords={'impurity_symbol': symbols})
+                dens = data['n_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+                zs = data['Z_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+                # Density-weighted average mass and charge across the individual impurity species present
+                n_total = dens.sum('impurity_symbol')
+                z_avg = (dens * zs).sum('impurity_symbol') / n_total
+                a_avg = (dens * mass_da).sum('impurity_symbol') / n_total
+                data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], (a_avg * c['u'] / c['md']).to_numpy())
+                data_vars[f'Z_{ns:d}'] = (['time', 'rho'], z_avg.to_numpy())
+                denom = data['n_e'].interp({'rho_norm': coords['rho']})
+                norm = -1.0 * data['a_minor']
+                drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                data_vars[f'DENS_{ns:d}'] = (['time', 'rho'], (n_total / denom).to_numpy())
+                data_vars[f'DLNNDR_{ns:d}'] = (['time', 'rho'], (norm * n_total.differentiate('rho_norm') / n_total / drdrho).to_numpy())
+                data_vars[f'SDLNNDR_{ns:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+                data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * n_total.to_numpy())
+                if 'T_i' in data:
+                    norm = -1.0 * data['a_minor']
+                    drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                    prof = data['T_i'].interp({'rho_norm': coords['rho']})
+                    data_vars[f'TEMP_{ns:d}'] = (['time', 'rho'], (data['T_i'] / data['T_e']).interp({'rho_norm': coords['rho']}).to_numpy())
+                    data_vars[f'DLNTDR_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                    data_vars[f'SDLNTDR_{ns:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
+                    data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             else:
                 if 'A_impurity' in data:
                     ns += 1
