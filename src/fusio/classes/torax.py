@@ -2632,17 +2632,20 @@ class torax_io(io):
                 mass_da = xr.DataArray(np.array(masses, dtype=float), dims=['impurity_symbol'], coords={'impurity_symbol': symbols})
                 dens = data['n_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
                 zs = data['Z_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
-                # Density-weighted average mass and charge across the individual impurity species present
-                n_total = dens.sum('impurity_symbol')
-                z_avg = (dens * zs).sum('impurity_symbol') / n_total
-                a_avg = (dens * mass_da).sum('impurity_symbol') / n_total
+                # Lumped Z/density solved to satisfy quasineutrality and Zeff exactly; mass uses the same charge-density weights as Z_lump.
+                s1 = (dens * zs).sum('impurity_symbol')
+                s2 = (dens * zs ** 2).sum('impurity_symbol')
+                z_avg = s2 / s1
+                n_lump = (s1 ** 2) / s2
+                w1 = (dens * zs) / s1
+                a_avg = (w1 * mass_da).sum('impurity_symbol')
                 data_vars[f'Ai{nion:d}'] = (['time', 'rho'], a_avg.to_numpy())
                 data_vars[f'Zi{nion:d}'] = (['time', 'rho'], z_avg.to_numpy())
                 denom = data['n_e'].interp({'rho_norm': coords['rho']})
                 norm = -1.0 * data['R_major']
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
-                data_vars[f'ni{nion:d}'] = (['time', 'rho'], (n_total / denom).to_numpy())
-                data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (norm * n_total.differentiate('rho_norm') / n_total / drdrho).to_numpy())
+                data_vars[f'ni{nion:d}'] = (['time', 'rho'], (n_lump / denom).to_numpy())
+                data_vars[f'Ani{nion:d}'] = (['time', 'rho'], (norm * n_lump.differentiate('rho_norm') / n_lump / drdrho).to_numpy())
                 if 'T_i' in data:
                     norm = -1.0 * data['R_major']
                     drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
@@ -2798,18 +2801,21 @@ class torax_io(io):
                 mass_da = xr.DataArray(np.array(masses, dtype=float), dims=['impurity_symbol'], coords={'impurity_symbol': symbols})
                 dens = data['n_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
                 zs = data['Z_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
-                # Density-weighted average mass and charge across the individual impurity species present
-                n_total = dens.sum('impurity_symbol')
-                z_avg = (dens * zs).sum('impurity_symbol') / n_total
-                a_avg = (dens * mass_da).sum('impurity_symbol') / n_total
+                # Lumped Z/density solved to satisfy quasineutrality and Zeff exactly; mass uses the same charge-density weights as Z_lump.
+                s1 = (dens * zs).sum('impurity_symbol')
+                s2 = (dens * zs ** 2).sum('impurity_symbol')
+                z_avg = s2 / s1
+                n_lump = (s1 ** 2) / s2
+                w1 = (dens * zs) / s1
+                a_avg = (w1 * mass_da).sum('impurity_symbol')
                 data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], (a_avg * c['u'] / c['md']).to_numpy())
                 data_vars[f'ZS_{ns:d}'] = (['time', 'rho'], z_avg.to_numpy())
                 denom = data['n_e'].interp({'rho_norm': coords['rho']})
                 norm = -1.0 * data['a_minor']
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
-                data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (n_total / denom).to_numpy())
-                data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (norm * n_total.differentiate('rho_norm') / n_total / drdrho).to_numpy())
-                data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * n_total.to_numpy())
+                data_vars[f'AS_{ns:d}'] = (['time', 'rho'], (n_lump / denom).to_numpy())
+                data_vars[f'RLNS_{ns:d}'] = (['time', 'rho'], (norm * n_lump.differentiate('rho_norm') / n_lump / drdrho).to_numpy())
+                data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * n_lump.to_numpy())
                 if 'T_i' in data:
                     norm = -1.0 * data['a_minor']
                     drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
@@ -2997,19 +3003,22 @@ class torax_io(io):
                 mass_da = xr.DataArray(np.array(masses, dtype=float), dims=['impurity_symbol'], coords={'impurity_symbol': symbols})
                 dens = data['n_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
                 zs = data['Z_impurity_species'].interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
-                # Density-weighted average mass and charge across the individual impurity species present
-                n_total = dens.sum('impurity_symbol')
-                z_avg = (dens * zs).sum('impurity_symbol') / n_total
-                a_avg = (dens * mass_da).sum('impurity_symbol') / n_total
+                # Lumped Z/density solved to satisfy quasineutrality and Zeff exactly; mass uses the same charge-density weights as Z_lump.
+                s1 = (dens * zs).sum('impurity_symbol')
+                s2 = (dens * zs ** 2).sum('impurity_symbol')
+                z_avg = s2 / s1
+                n_lump = (s1 ** 2) / s2
+                w1 = (dens * zs) / s1
+                a_avg = (w1 * mass_da).sum('impurity_symbol')
                 data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], (a_avg * c['u'] / c['md']).to_numpy())
                 data_vars[f'Z_{ns:d}'] = (['time', 'rho'], z_avg.to_numpy())
                 denom = data['n_e'].interp({'rho_norm': coords['rho']})
                 norm = -1.0 * data['a_minor']
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
-                data_vars[f'DENS_{ns:d}'] = (['time', 'rho'], (n_total / denom).to_numpy())
-                data_vars[f'DLNNDR_{ns:d}'] = (['time', 'rho'], (norm * n_total.differentiate('rho_norm') / n_total / drdrho).to_numpy())
+                data_vars[f'DENS_{ns:d}'] = (['time', 'rho'], (n_lump / denom).to_numpy())
+                data_vars[f'DLNNDR_{ns:d}'] = (['time', 'rho'], (norm * n_lump.differentiate('rho_norm') / n_lump / drdrho).to_numpy())
                 data_vars[f'SDLNNDR_{ns:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
-                data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * n_total.to_numpy())
+                data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * n_lump.to_numpy())
                 if 'T_i' in data:
                     norm = -1.0 * data['a_minor']
                     drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
