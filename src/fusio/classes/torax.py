@@ -2560,7 +2560,8 @@ class torax_io(io):
                 psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True)).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
-                bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
+                if np.isclose(bunit['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
+                    bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
                 attrs['b_unit'] = bunit.to_numpy()
                 attrs['b_zero'] = np.repeat(np.expand_dims(data['B_0'].to_numpy(), axis=-1), len(coords['rho']), axis=-1)
                 data_vars[r'#Bunit_by_Bo'] = (['time', 'rho'], (bunit / data['B_0']).to_numpy())
@@ -2864,10 +2865,12 @@ class torax_io(io):
                 psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True)).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
-                bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
+                if np.isclose(bunit['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
+                    bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
                 pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prho = q * (2.0 * c['mu'] / (8.0 * np.pi)) * (data['a_minor'] / roa) * pprime / (bunit ** 2) / drdrho
-                prho.loc[dict(rho_norm=0)] = 0.0
+                if np.isclose(prho['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
+                    prho.loc[dict(rho_norm=0)] = 0.0
                 data_vars['P_PRIME_LOC'] = (['time', 'rho'], prho.fillna(0.0).to_numpy())
                 data_vars[r'#BUNIT_BY_BREF'] = (['time', 'rho'], (bunit / data['B_0']).to_numpy())
                 attrs['b_unit'] = bunit.to_numpy()
@@ -2880,7 +2883,8 @@ class torax_io(io):
                 psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True)).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
-                bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
+                if np.isclose(bunit['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
+                    bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
                 rhos = c['md'] * csoa * data['a_minor'] / (c['e'] * bunit)
                 data_vars['BETAE'] = (['time', 'rho'], (2.0 * c['mu'] * c['e'] * ne * te / (bunit ** 2)).to_numpy())
                 cl = 74.2 - 0.5 * np.log(ne) + np.log(c['e'] * te)
@@ -3088,10 +3092,12 @@ class torax_io(io):
                 psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True)).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
-                bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
+                if np.isclose(bunit['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
+                    bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
                 pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prho = q * (2.0 * c['mu'] / (8.0 * np.pi)) * (data['a_minor'] / roa) * pprime / (bunit ** 2) / drdrho
-                prho.loc[dict(rho_norm=0)] = 0.0
+                if np.isclose(prho['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
+                    prho.loc[dict(rho_norm=0)] = 0.0
                 data_vars[r'#P_PRIME'] = (['time', 'rho'], prho.fillna(0.0).to_numpy())
                 data_vars[r'#BUNIT_BY_BREF'] = (['time', 'rho'], (bunit / data['B_0']).to_numpy())
                 attrs['b_unit'] = bunit.to_numpy()
@@ -3104,7 +3110,8 @@ class torax_io(io):
                 psi = (data['psi_norm'] * (data['psi'].isel(rho_norm=-1, drop=True) - data['psi'].isel(rho_norm=0, drop=True)) + data['psi'].isel(rho_norm=0, drop=True)).interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
-                bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
+                if np.isclose(bunit['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
+                    bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
                 rhos = c['md'] * csoa * data['a_minor'] / (c['e'] * bunit)
                 data_vars['BETAE_UNIT'] = (['time', 'rho'], (2.0 * c['mu'] * c['e'] * ne * te / (bunit ** 2)).to_numpy())
                 cl = 74.2 - 0.5 * np.log(ne) + np.log(c['e'] * te)
