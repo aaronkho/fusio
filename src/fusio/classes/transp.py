@@ -392,6 +392,13 @@ class transp_io(io):
         'trminv': ('', 'minor version number of TRANSP release'),
         'run': ('', 'run number'),
     }
+    ufile_axis_tags: Final[Mapping[int, tuple[str, ...]]] = {
+        1: ('X0',),
+        2: ('X0', 'X1'),
+        3: ('X', 'Y', 'Z'),
+    }
+    ufile_values_per_line: Final[int] = 6
+    ufile_tiny: Final[float] = 1.0e-30
 
 
 
@@ -505,8 +512,7 @@ class transp_io(io):
                     data_vars[k] = (new_dims, val, {'units': self.geom_moment_vars[k][0], 'description': self.geom_moment_vars[k][1]})
                     if dtag not in coords:
                         coords[dtag] = ([dtag], np.arange(max_asym_length), {'units': self.dim_vars[dtag][0], 'description': self.dim_vars[dtag][1]})
-                # data = xr.Dataset(data_vars=data_vars, coords=coords)
-                data = temp_data
+                data = xr.Dataset(data_vars=data_vars, coords=coords)
         return data
 
 
@@ -531,8 +537,106 @@ class transp_io(io):
         self,
         path: str | Path
     ) -> xr.Dataset:
-        raise NotImplementedError('TRANSP U-FILE read not yet implemented!')
-    
+        # General dim=1/2/3 ASCII U-FILE parser. U-FILE format is self-describing
+        data = xr.Dataset()
+        if isinstance(path, (str, Path)):
+            ipath = Path(path)
+            if ipath.exists():
+                with open(ipath, 'r') as f:
+                    lines = f.readlines()
+
+                cont = 3
+                while 'INDEPENDENT VARIABLE' not in lines[cont]:
+                    cont += 1
+                pos_end = 0
+                while 'END-OF-DATA' not in lines[pos_end] and 'index_filename' not in lines[pos_end]:
+                    pos_end += 1
+
+                dim = 1
+                if 'INDEPENDENT VARIABLE' in lines[cont + 1]:
+                    dim = 2
+                    if 'INDEPENDENT VARIABLE' in lines[cont + 2]:
+                        dim = 3
+                label_lines = [lines[cont + i] for i in range(dim)]
+                dep_label_line = lines[cont + dim]
+                npts_start = cont + 2 + dim
+                npts = [int(lines[npts_start + i].split()[0]) for i in range(dim)]
+                data_start = npts_start + dim
+
+                numbers: list[float] = []
+                for line in lines[data_start:pos_end]:
+                    numbers.extend(self._extract_ufile_numbers(line))
+                axes = []
+                consumed = 0
+                for n in npts:
+                    axes.append(np.array(numbers[consumed:consumed + n]))
+                    consumed += n
+                nz = int(np.prod(npts))
+                zflat = np.array(numbers[consumed:consumed + nz])
+                # UFILE flat order is fastest-first-axis-last; reshaping with the axes reversed then transposing puts it back into (X[,Y[,Q]]) order.
+                zvals = zflat.reshape(tuple(reversed(npts))).transpose()
+
+                coord_names = [self._ufile_axis_name(line) for line in label_lines]
+                coords = {}
+                for name, arr, line in zip(coord_names, axes, label_lines):
+                    label, units = self._parse_ufile_label(line)
+                    coords[name] = ([name], arr, {'units': units, 'description': label})
+
+                dep_label, dep_units = self._parse_ufile_label(dep_label_line)
+                dep_name = self._slugify_ufile_label(dep_label)
+                data_vars = {dep_name: (coord_names, zvals, {'units': dep_units, 'description': dep_label})}
+                data = xr.Dataset(data_vars=data_vars, coords=coords)
+        return data
+
+
+    def _parse_ufile_label(
+        self,
+        line: str,
+    ) -> tuple[str, str]:
+        # U-FILE labels are label, then units, then the ";-...LABEL-" tag)
+        text = line.split(';')[0].strip()
+        parts = re.split(r'\s{2,}', text) if text else []
+        label = parts[0].strip() if parts else ''
+        units = parts[1].strip() if len(parts) > 1 else ''
+        return label, units
+
+
+    def _ufile_axis_name(
+        self,
+        line: str,
+    ) -> str:
+        label, _ = self._parse_ufile_label(line)
+        low = label.lower()
+        if 'time' in low:
+            return 'time'
+        if 'rho' in low:
+            return 'rho'
+        if 'channel' in low:
+            return 'channel'
+        if 'poloidal' in low or 'theta' in low:
+            return 'theta'
+        if 'limiter' in low or low.startswith('r of'):
+            return 'r'
+        return self._slugify_ufile_label(label)
+
+
+    def _slugify_ufile_label(
+        self,
+        label: str,
+    ) -> str:
+        slug = re.sub(r'[^0-9a-zA-Z]+', '_', label.strip().lower()).strip('_')
+        return slug or 'value'
+
+
+    def _extract_ufile_numbers(
+        self,
+        line: str,
+    ) -> list[float]:
+        if 'nan' in line.lower():
+            logger.warning(f'NaN found in {self.format} U-FILE data line, replacing with 0.0...')
+        clean = re.sub(r'(?i)nan', '0.000000e+00', line)
+        return [float(tok) for tok in re.findall(r'[-+]?\d+\.\d+[eE][-+]?\d+', clean)]
+
 
     def _write_transp_ufile_file(
         self,
@@ -540,7 +644,75 @@ class transp_io(io):
         data: xr.Dataset | xr.DataArray,
         overwrite: bool = False
     ) -> None:
-        raise NotImplementedError('TRANSP U-FILE write not yet implemented!')
+        # Inverse of _read_transp_ufile_file: one U-FILE holds exactly one dependent variable, so a Dataset with more than one data_var is ambiguous for a single output path
+        if isinstance(path, (str, Path)) and isinstance(data, (xr.Dataset, xr.DataArray)):
+            opath = Path(path)
+            if not opath.exists() or overwrite:
+                da = data
+                if isinstance(data, xr.Dataset):
+                    varnames = list(data.data_vars)
+                    if len(varnames) == 0:
+                        logger.error(f'Empty dataset passed to {self.format} U-FILE write function! Aborting write...')
+                        return
+                    if len(varnames) > 1:
+                        logger.warning(
+                            f'{len(varnames)} variables in dataset passed to {self.format} U-FILE write function, '
+                            f'which writes one variable per file -- writing only {varnames[0]!r}...'
+                        )
+                    da = data[varnames[0]]
+
+                dims = list(da.dims)
+                dim = len(dims)
+                if dim < 1 or dim > 3:
+                    logger.error(f'{self.format} U-FILE write only supports 1-3 independent variables, got {dim}! Aborting write...')
+                    return
+                tags = self.ufile_axis_tags[dim]
+
+                dep_label = str(da.attrs.get('description') or da.name or 'value')
+                dep_units = str(da.attrs.get('units') or '')
+
+                with open(opath, 'w') as f:
+                    f.write(f" 123456None {dim} 0 6              ;-SHOT #- F(X) DATA WRITEUF fusio\n")
+                    f.write("                               ;-SHOT DATE-  UFILES ASCII FILE SYSTEM\n")
+                    f.write("   0                           ;-NUMBER OF ASSOCIATED SCALAR QUANTITIES-\n")
+                    for dname, tag in zip(dims, tags):
+                        clabel = str(da.coords[dname].attrs.get('description') or dname)
+                        cunits = str(da.coords[dname].attrs.get('units') or '')
+                        f.write(f" {clabel:<20}{cunits:<10};-INDEPENDENT VARIABLE LABEL: {tag}-\n")
+                    f.write(f" {dep_label:<20}{dep_units:<10};-DEPENDENT VARIABLE LABEL-\n")
+                    f.write(" 0                             ;-PROC CODE- 0:RAW 1:AVG 2:SM 3:AVG+SM\n")
+                    for dname, tag in zip(dims, tags):
+                        f.write(f"{str(da.sizes[dname]).rjust(11)}                    ;-# OF {tag} PTS-\n")
+                    for dname in dims:
+                        self._write_ufile_values(f, da.coords[dname].to_numpy())
+                    # Inverse of the read: transpose then C-order flatten puts X fastest-varying again.
+                    self._write_ufile_values(f, da.to_numpy().transpose().reshape(-1, order='C'))
+                    f.write(" ;----END-OF-DATA-----------------COMMENTS:-----------;")
+                logger.info(f'Saved {self.format} data into {opath.resolve()}')
+            else:
+                logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
+        else:
+            logger.error(f'Invalid path/data argument given to {self.format} U-FILE write function! Aborting write...')
+
+
+    def _write_ufile_values(
+        self,
+        f: Any,
+        values: NDArray,
+    ) -> None:
+        values = np.asarray(values, dtype=float).reshape(-1)
+        for start in range(0, len(values), self.ufile_values_per_line):
+            chunk = values[start:start + self.ufile_values_per_line]
+            f.write("".join(self._format_ufile_value(v) for v in chunk) + "\n")
+
+
+    def _format_ufile_value(
+        self,
+        v: float,
+    ) -> str:
+        if not np.isfinite(v) or abs(v) < self.ufile_tiny:
+            v = 0.0
+        return f"{v:.6e}".rjust(13)
 
 
     @classmethod
