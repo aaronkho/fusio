@@ -454,7 +454,16 @@ class plasma_io(io):
             #contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
             contour_r = data['contour'].sel(grid='r')
             contour_z = data['contour'].sel(grid='z')
-            arc_length = trapezoid((data['contour'].differentiate('angle_geometric') ** 2 + data['contour'] ** 2).to_numpy() ** 0.5, x=data['angle_geometric'].to_numpy(), axis=-1)
+            dr = (contour_r - data['r_geometric']).to_numpy()
+            dz = (contour_z - data['z_geometric']).to_numpy()
+            theta = np.unwrap(np.arctan2(dz, dr), axis=-1)
+            degenerate = np.all(np.isclose(dr, 0.0) & np.isclose(dz, 0.0), axis=-1)
+            if np.any(degenerate):  # Fill with uniformly spaced vector for magnetic axis
+                fallback = np.linspace(0.0, 2.0 * np.pi, theta.shape[-1])
+                theta = np.where(degenerate[..., None], fallback, theta)
+            drdtheta = vectorized_numpy_derivative(theta, contour_r.to_numpy())
+            dzdtheta = vectorized_numpy_derivative(theta, contour_z.to_numpy())
+            arc_length = trapezoid((drdtheta ** 2 + dzdtheta ** 2) ** 0.5, x=theta, axis=-1)
             surf_area = 2.0 * np.pi * data['r_geometric'].to_numpy() * arc_length
             xs_area = trapezoid(contour_r, x=contour_z, axis=-1)
             vol = 2.0 * np.pi * data['r_geometric'].to_numpy() * xs_area
@@ -546,15 +555,6 @@ class plasma_io(io):
             z_norm = (contour_z - np.expand_dims(mxh_z0, axis=-1)) / np.expand_dims(mxh_kappa * mxh_r, axis=-1)
             z_norm = np.where(z_norm > 1.0, 1.0, np.where(z_norm < -1.0, -1.0, z_norm))
 
-            # Poloidal angle reconstruction (mirrors megpy.utils.arccos2pi/arcsin2pi, vectorized
-            # across leading (time, radius) batch dimensions). The angle's branch boundaries are
-            # located from the array's own argmin/argmax (i.e. the actual R/Z extrema of the
-            # contour), not from a pointwise sign check on the *other* coordinate -- for
-            # realistically shaped (non-elliptical) flux surfaces the Z-extremum generally does
-            # not occur exactly at r_norm == 0 (nor the R-extremum at z_norm == 0), so a pointwise
-            # branch condition can flip branches before the angle actually finishes climbing to
-            # its extremum, producing a locally non-monotonic angle that corrupts the Fourier fit
-            # below (np.interp requires a sorted x).
             def _arccos2pi(x):
                 idx = np.arange(x.shape[-1])
                 idxm1 = np.argmin(x, axis=-1)
@@ -643,13 +643,7 @@ class plasma_io(io):
             #l_r = z_l * z_r + r_l * r_r
             #nsin = (r_r * r_t + z_r * z_t) / l_t
             c = 2.0 * np.pi * np.sum(l_t[:-1, ...] / (r[:-1, ...] * grad_r[:-1, ...]), axis=0)
-            # c_vol carries an extra factor of r in the summand relative to c: c is the
-            # flux-surface-averaging normalization used for f/F(psi) (safety-factor
-            # consistency), while c_vol is the actual poloidal-plane-to-toroidal-volume
-            # element (the extra r accounts for the 2*pi*R toroidal circumference picked up
-            # when converting a poloidal-plane area element into a volume element). Mirrors
-            # gacode_io's volp_miller (see gacode.py's c_vol), which was fixed there but never
-            # propagated to this (plasma_io) implementation.
+            # c_vol carries an extra factor of r in the sum relative to c
             c_vol = 2.0 * np.pi * np.sum(r[:-1, ...] ** 2 * l_t[:-1, ...] / (r[:-1, ...] * grad_r[:-1, ...]), axis=0)
             f = 2.0 * np.pi * data['r_minor'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
             f[..., 0] = 2.0 * f[..., 1] - f[..., 2]
@@ -1312,11 +1306,6 @@ class plasma_io(io):
         use_main_ion: bool = False,
         side: str = 'input',
     ) -> None:
-        # Note: the use_main_ion branches use positional (.to_numpy()-based) indexing to write
-        # the corrected species back, not xarray's label-based .loc[] -- the 'ion' coordinate
-        # holds species-name labels (e.g. 'D'/'T'/'W'), not integer positions, so a bare integer
-        # index would otherwise be looked up as a (generally nonexistent) label rather than a
-        # position (see equalize_thermal_ion_temperatures()/scale_thermal_ion_densities()).
         data_vars: MutableMapping[str, Any] = {}
         if side == 'output' and self.has_output and 'density_e' in self.output and 'charge_i' in self.output and 'density_i' in self.output:
             if use_main_ion and 'atomic_number_i' in self.output and 'type_i' in self.output:
@@ -1360,7 +1349,6 @@ class plasma_io(io):
     ) -> None:
         # Enforcing quasineutrality removes corresponding electron density, as opposed to adding
         # to thermal ion density -- unless use_main_ion is set, which does the latter instead
-        # (forwarded straight to enforce_quasineutrality's own use_main_ion argument).
         if side == 'output' and self.has_output and 'type_i' in self.output:
             thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
             self.output = self.output.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
@@ -1387,10 +1375,6 @@ class plasma_io(io):
         thermal species need to be kept in lockstep with it rather than left
         stale. ref_ion's own profile is left untouched.
         '''
-        # Note: uses positional (.to_numpy()-based) indexing throughout, not xarray's
-        # label-based .loc[] -- the 'ion' coordinate holds species-name labels (e.g.
-        # 'D'/'T'/'W'), not integer positions, so a bare integer ref_ion/index would
-        # otherwise be looked up as a (generally nonexistent) label rather than a position.
         data_vars: MutableMapping[str, Any] = {}
         if side == 'output' and self.has_output and 'type_i' in self.output and 'temperature_i' in self.output:
             thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
@@ -1427,8 +1411,6 @@ class plasma_io(io):
         density is itself being independently predicted/written elsewhere,
         and whose value should not also be perturbed by this scaling).
         '''
-        # See equalize_thermal_ion_temperatures() for why this uses positional numpy
-        # indexing rather than xarray's label-based .loc[].
         exclude = set(exclude_ion_indices) if exclude_ion_indices is not None else set()
         scale_factor = np.asarray(scale_factor)
         data_vars: MutableMapping[str, Any] = {}
