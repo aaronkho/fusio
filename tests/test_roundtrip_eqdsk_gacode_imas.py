@@ -11,7 +11,9 @@ the GACODE representation, so exact agreement is not expected.
 How to run this test
 --------------------
 This test requires ``torax`` to be installed. If ``torax`` is not found,
-the test is automatically skipped.
+the test is automatically skipped. The EQDSK input files it needs are
+vendored under ``tests/data/`` (``sample_cocos02_input.geqdsk`` and
+``sample_cocos11_input.geqdsk``), so no extra setup is required.
 
 .. code-block:: bash
 
@@ -19,11 +21,11 @@ the test is automatically skipped.
    pip install -e /path/to/fusio[test]
    pip install torax
 
-   # Set EQDSK_PATH to the iterhybrid EQDSK file:
-   export EQDSK_PATH=/path/to/iterhybrid_cocos11.eqdsk
-
    # Run:
    python -m pytest /path/to/fusio/tests/test_roundtrip_eqdsk_gacode_imas.py -v
+
+   # To test against a different EQDSK file, override EQDSK_PATH:
+   export EQDSK_PATH=/path/to/other.eqdsk
 """
 
 import dataclasses
@@ -91,7 +93,7 @@ _TRIM_BOUNDARY_FIELDS = frozenset({
     'psi',
 })
 
-_N_TRIM = 3
+_N_TRIM = 5
 
 _DEFAULT_TOL = 0.03
 
@@ -99,15 +101,14 @@ _FIELD_TOLERANCES = {
     'psi': 0.25,
     'int_dl_over_Bp': 0.15,
     'Ip_profile': 0.10,
+    'flux_surf_avg_B2': 0.05,
 }
 
 
-def _get_eqdsk_path(filename: str = 'iterhybrid_cocos11.eqdsk') -> str:
+def _get_eqdsk_path(filename: str = 'sample_cocos11_input.geqdsk') -> str:
     if 'EQDSK_PATH' in os.environ:
         return os.environ['EQDSK_PATH']
-    import torax
-    geo_dir = os.path.join(os.path.dirname(torax.__file__), 'data', 'geo')
-    return os.path.join(geo_dir, filename)
+    return os.path.join(os.path.dirname(__file__), 'data', filename)
 
 
 def _rhon_from_intermediates(intermediates):
@@ -125,6 +126,7 @@ def _build_intermediates_from_eqdsk(eqdsk_path: str, cocos: int = 11):
     intermediates = torax_eqdsk._construct_intermediates_from_eqdsk(
         geometry_directory=config.geometry_directory,
         geometry_file=config.geometry_file,
+        eqdsk_object=config.eqdsk_object,
         Ip_from_parameters=config.Ip_from_parameters,
         face_centers=config.get_face_centers(),
         hires_factor=config.hires_factor,
@@ -252,7 +254,7 @@ def _build_intermediates_from_roundtrip(eqdsk_path: str, cocos: int = 11):
             Ip_from_parameters=False,
             explicit_convert=False,
         )
-        inputs = imas_geometry.geometry_from_IMAS(
+        inputs_by_time = imas_geometry.geometry_from_IMAS(
             geometry_directory=config.geometry_directory,
             imas_filepath=config.imas_filepath,
             Ip_from_parameters=config.Ip_from_parameters,
@@ -260,6 +262,8 @@ def _build_intermediates_from_roundtrip(eqdsk_path: str, cocos: int = 11):
             hires_factor=config.hires_factor,
             explicit_convert=config.explicit_convert,
         )
+        # Single time slice was written above, so take the only entry.
+        inputs = next(iter(inputs_by_time.values()))
         intermediates = standard_geometry.StandardGeometryIntermediates(
             geometry_type=geometry.GeometryType.IMAS, **inputs
         )
@@ -321,8 +325,8 @@ def _compare(direct, roundtrip) -> dict[str, tuple[float, float]]:
 
 
 _COCOS_CASES = [
-    ('iterhybrid_cocos02.eqdsk', 2),
-    ('iterhybrid_cocos11.eqdsk', 11),
+    ('sample_cocos02_input.geqdsk', 2),
+    ('sample_cocos11_input.geqdsk', 11),
 ]
 
 

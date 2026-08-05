@@ -259,9 +259,12 @@ class gacode_io(io):
             psivec = data.isel(n=0)['polflux'].to_numpy().flatten()
             if use_normalized_psi:
                 psivec = np.abs((psivec - psivec[0]) / (psivec[-1] - psivec[0]))
-                eqdsk_data['psi'] = np.abs((eqdsk_data['psi'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
-                eqdsk_data['simagx'] = np.abs((eqdsk_data['simagx'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
-                eqdsk_data['sibdry'] = np.abs((eqdsk_data['sibdry'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
+                psi_axis = eqdsk_data['simagx']
+                psi_boundary = eqdsk_data['sibdry']
+                psi_span = psi_boundary - psi_axis
+                eqdsk_data['psi'] = np.abs((eqdsk_data['psi'] - psi_axis) / psi_span)
+                eqdsk_data['simagx'] = np.abs((psi_axis - psi_axis) / psi_span)
+                eqdsk_data['sibdry'] = np.abs((psi_boundary - psi_axis) / psi_span)
             mxh_data = self._calculate_geometry_from_eqdsk(eqdsk_data, psivec, boundary_offset=boundary_offset)
             newvars = {}
             if overwrite or np.abs(data.get('rmaj', np.array([0.0]))).sum() == 0.0:
