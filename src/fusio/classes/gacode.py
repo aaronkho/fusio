@@ -257,6 +257,8 @@ class gacode_io(io):
         if isinstance(path, (str, Path)) and 'polflux' in data:
             eqdsk_data = read_eqdsk(path)
             psivec = data.isel(n=0)['polflux'].to_numpy().flatten()
+            simagx_orig = eqdsk_data['simagx']
+            sibdry_orig = eqdsk_data['sibdry']
             if use_normalized_psi:
                 psivec = np.abs((psivec - psivec[0]) / (psivec[-1] - psivec[0]))
                 psi_axis = eqdsk_data['simagx']
@@ -302,7 +304,7 @@ class gacode_io(io):
             if overwrite or np.abs(data.get('shape_cos6', np.array([0.0]))).sum() == 0.0:
                 newvars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
             if 'fpol' in eqdsk_data:
-                psi_eqdsk = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
+                psi_eqdsk = np.linspace(simagx_orig, sibdry_orig, eqdsk_data['nr'])
                 polflux_gacode = data.isel(n=0)['polflux'].to_numpy().flatten()
                 sort_idx = np.argsort(psi_eqdsk)
                 fpol_interp = np.interp(polflux_gacode, psi_eqdsk[sort_idx], eqdsk_data['fpol'][sort_idx])
