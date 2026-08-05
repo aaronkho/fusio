@@ -185,6 +185,46 @@ class plasma_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
+    def to_dict(
+        self,
+        side: str = 'output',
+        item: int = -1,
+    ) -> MutableMapping[str, Any]:
+        '''Flatten this object's native (SI-unit) fields into a plain dict.
+
+        Unlike gacode_io.to_dict(), this keeps plasma_io's own variable names,
+        units, and source/direction/ion resolution as-is -- no GACODE-convention
+        renaming, unit conversion, or source flattening. Callers that need a
+        GACODE-native dict should go through to("gacode").to_dict() instead.
+
+        Intended as a preprocessing step so downstream consumers (e.g. MITIM's
+        powerstate construction) can read plasma_io's derived-quantity pipeline
+        via simple dict indexing and apply their own sign/normalization
+        conventions where those differ from plasma_io's, rather than requiring
+        plasma_io itself to know about a consumer's conventions.
+
+        Does not call compute_derived_quantities() -- run that first if the
+        derived fields are needed in the result.
+
+        Args:
+            side: 'input' or 'output' dataset to flatten.
+            item: Index along the 'time' dimension to select (default -1, the
+                most recent time point, matching from_plasma()'s default
+                window). Ignored if the dataset has no 'time' dimension.
+
+        Returns:
+            A dict keyed by plasma_io's native variable names (both data
+            variables and coordinates), each mapped to its numpy array with
+            the 'time' dimension dropped.
+        '''
+        datadict: MutableMapping[str, Any] = {}
+        data = self.input if side == 'input' else self.output
+        ddata = data.isel(time=item, drop=True) if 'time' in data.dims else data
+        for key in ddata.variables:
+            datadict[f'{key}'] = ddata[f'{key}'].to_numpy()
+        return datadict
+
+
     def interpolate(
         self,
         v: float | NDArray,
@@ -419,6 +459,7 @@ class plasma_io(io):
             xs_area = trapezoid(contour_r, x=contour_z, axis=-1)
             vol = 2.0 * np.pi * data['r_geometric'].to_numpy() * xs_area
             volp = vectorized_numpy_derivative(data['r_minor'].to_numpy(), vol)
+            volp = np.where(np.isclose(data['r_minor'].to_numpy(), 0.0), 1.0e-8, volp)
             newvars['surface_area'] = (['time', 'radius'], surf_area)
             newvars['cross_sectional_area'] = (['time', 'radius'], xs_area)
             newvars['volume'] = (['time', 'radius'], vol)
@@ -449,7 +490,7 @@ class plasma_io(io):
             mass_ave = np.sum((data['mass_i'].isel(ion=main_species).to_numpy() * n_i_vol[..., -1] / np.expand_dims(np.sum(n_i_vol[..., -1], axis=1), axis=1)), axis=-1)
             mass_ref = data.get('mass_ref', xr.zeros_like(data['time']) + 2.0)
             length_ref = data.get('length_ref', xr.zeros_like(data['time']) + data['r_minor_lcfs'])
-            field_unit = vectorized_numpy_derivative(0.5 * data['r_minor'].to_numpy() ** 2, data['magnetic_flux'].sel(direction='toroidal').to_numpy() / (2.0 * np.pi))
+            field_unit = vectorized_numpy_derivative(0.5 * data['r_minor'].to_numpy() ** 2, data['magnetic_flux'].sel(direction='toroidal').to_numpy())
             safety_factor = vectorized_numpy_derivative(data['magnetic_flux'].sel(direction='toroidal').to_numpy(), data['magnetic_flux'].sel(direction='poloidal').to_numpy())
             safety_factor[..., 0] = 2.0 * safety_factor[..., 1] - safety_factor[..., 2]
             newvars['mass_ref'] = (['time'], mass_ref.to_numpy())
@@ -504,10 +545,34 @@ class plasma_io(io):
             r_norm = np.where(r_norm > 1.0, 1.0, np.where(r_norm < -1.0, -1.0, r_norm))
             z_norm = (contour_z - np.expand_dims(mxh_z0, axis=-1)) / np.expand_dims(mxh_kappa * mxh_r, axis=-1)
             z_norm = np.where(z_norm > 1.0, 1.0, np.where(z_norm < -1.0, -1.0, z_norm))
-            angle_r_norm = np.where(z_norm[..., :-1] < 0.0, 2.0 * np.pi - np.arccos(r_norm[..., :-1]), np.arccos(r_norm[..., :-1]))
+
+            # Poloidal angle reconstruction (mirrors megpy.utils.arccos2pi/arcsin2pi, vectorized
+            # across leading (time, radius) batch dimensions). The angle's branch boundaries are
+            # located from the array's own argmin/argmax (i.e. the actual R/Z extrema of the
+            # contour), not from a pointwise sign check on the *other* coordinate -- for
+            # realistically shaped (non-elliptical) flux surfaces the Z-extremum generally does
+            # not occur exactly at r_norm == 0 (nor the R-extremum at z_norm == 0), so a pointwise
+            # branch condition can flip branches before the angle actually finishes climbing to
+            # its extremum, producing a locally non-monotonic angle that corrupts the Fourier fit
+            # below (np.interp requires a sorted x).
+            def _arccos2pi(x):
+                idx = np.arange(x.shape[-1])
+                idxm1 = np.argmin(x, axis=-1)
+                theta = np.arccos(x)
+                return np.where(idx >= idxm1[..., None], 2.0 * np.pi - np.arccos(x), theta)
+
+            def _arcsin2pi(x):
+                idx = np.arange(x.shape[-1])
+                idx1 = np.argmax(x, axis=-1)
+                x_after_idx1 = np.where(idx >= idx1[..., None], x, np.inf)
+                idxm1 = np.argmin(x_after_idx1, axis=-1)
+                theta = np.arcsin(x)
+                theta = np.where((idx >= idx1[..., None]) & (idx < idxm1[..., None]), np.pi - np.arcsin(x), theta)
+                return np.where(idx >= idxm1[..., None], np.arcsin(x) + 2.0 * np.pi, theta)
+
+            angle_r_norm = _arccos2pi(r_norm[..., :-1])
             angle_r_norm = np.concatenate([angle_r_norm, np.expand_dims(angle_r_norm[..., 0], axis=-1) + 2.0 * np.pi], axis=-1)
-            angle_z_norm = np.where(r_norm[..., :-1] < 0.0, np.pi - np.arcsin(z_norm[..., :-1]), np.arcsin(z_norm[..., :-1]))
-            angle_z_norm = np.where(angle_z_norm < 0.0, 2.0 * np.pi + angle_z_norm, angle_z_norm)
+            angle_z_norm = _arcsin2pi(z_norm[..., :-1])
             angle_z_norm = np.concatenate([angle_z_norm, np.expand_dims(angle_z_norm[..., 0], axis=-1) + 2.0 * np.pi], axis=-1)
             mxh_sin = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
             mxh_cos = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
@@ -578,6 +643,14 @@ class plasma_io(io):
             #l_r = z_l * z_r + r_l * r_r
             #nsin = (r_r * r_t + z_r * z_t) / l_t
             c = 2.0 * np.pi * np.sum(l_t[:-1, ...] / (r[:-1, ...] * grad_r[:-1, ...]), axis=0)
+            # c_vol carries an extra factor of r in the summand relative to c: c is the
+            # flux-surface-averaging normalization used for f/F(psi) (safety-factor
+            # consistency), while c_vol is the actual poloidal-plane-to-toroidal-volume
+            # element (the extra r accounts for the 2*pi*R toroidal circumference picked up
+            # when converting a poloidal-plane area element into a volume element). Mirrors
+            # gacode_io's volp_miller (see gacode.py's c_vol), which was fixed there but never
+            # propagated to this (plasma_io) implementation.
+            c_vol = 2.0 * np.pi * np.sum(r[:-1, ...] ** 2 * l_t[:-1, ...] / (r[:-1, ...] * grad_r[:-1, ...]), axis=0)
             f = 2.0 * np.pi * data['r_minor'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
             f[..., 0] = 2.0 * f[..., 1] - f[..., 2]
             bt = np.expand_dims(f, axis=0) / r
@@ -590,7 +663,7 @@ class plasma_io(io):
             r_v = np.expand_dims((data['r_minor'] * data['r_geometric']).to_numpy(), axis=0)
             g_t = r * b * l_t / (np.where(np.isclose(r_v, 0.0), 1.0, r_v) * grad_r)
             g_t[..., 0] = 2.0 * g_t[..., 1] - g_t[..., 2]
-            newvars['mxh_dvolume_dr'] = (['time', 'radius'], 2.0 * np.pi * np.where(np.isfinite(c), c, 0.0) / float(n_theta - 1))
+            newvars['mxh_dvolume_dr'] = (['time', 'radius'], 2.0 * np.pi * np.where(np.isfinite(c_vol), c_vol, 0.0) / float(n_theta - 1))
             newvars['mxh_surface_area'] = (['time', 'radius'], 2.0 * np.pi * np.sum(l_t[:-1, ...] * r[:-1, ...], axis=0) * 2.0 * np.pi / float(n_theta - 1))
             #newvars['mxh_bt'] = (['n', 'rho'], bt[i1] + (bt[i2] - bt[i1]) * ztheta)
             denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1, ...] / b[:-1, ...], axis=0)
@@ -768,6 +841,8 @@ class plasma_io(io):
             newvars['auxiliary_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source=auxiliary_sources).sum('source').to_numpy())
             newvars['auxiliary_plus_heat_source_e'] = (['time', 'radius'], data['heat_source_e'].sel(source=auxiliary_plus_sources).sum('source').to_numpy())
             newvars['auxiliary_plus_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source=auxiliary_plus_sources).sum('source').to_numpy())
+            newvars['fusion_heat_source_e'] = (['time', 'radius'], data['heat_source_e'].sel(source='fusion', drop=True).to_numpy())
+            newvars['fusion_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source='fusion', drop=True).to_numpy())
             newvars['fusion_heat_source'] = (['time', 'radius'], (data['heat_source_e'].sel(source='fusion') + data['heat_source_i'].sel(source='fusion').sum('ion')).to_numpy())
 
             if side == 'output':
@@ -794,7 +869,7 @@ class plasma_io(io):
         if data is not None:
 
             line = vectorized_numpy_integration(np.ones_like(data['r_minor'].to_numpy()), data['r_minor'].to_numpy())
-            vol = vectorized_numpy_integration(data['mxh_dvolume_dr'].to_numpy(), data['r_minor'].to_numpy())
+            vol = vectorized_numpy_integration(data['dvolume_dr'].to_numpy(), data['r_minor'].to_numpy())
             newvars['line_average'] = (['time', 'radius'], line)
             newvars['volume_average'] = (['time', 'radius'], vol)
 
@@ -809,24 +884,24 @@ class plasma_io(io):
             newvars['concentration_i_line_average'] = (['time', 'ion'], density_i_line[..., -1] / np.expand_dims(np.sum(density_i_line, axis=1), axis=1)[..., -1])
 
             heat_source_e_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['heat_source_e'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1)
             ), axes=(0, 2, 1))
             heat_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
+                np.transpose((data['heat_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
                 np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 3, 1, 2))
             particle_source_e_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['particle_source_e'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['particle_source_e'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1)
             ), axes=(0, 2, 1))
             particle_source_e_conv_vol = 1.5 * self.constants['e_si'] * np.expand_dims(data['temperature_e'].to_numpy(), axis=-1) * particle_source_e_vol  # MW
             particle_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['particle_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
+                np.transpose((data['particle_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
                 np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 3, 1, 2))
             momentum_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['momentum_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 4, 1)),
+                np.transpose((data['momentum_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 3, 4, 1)),
                 np.repeat(np.expand_dims(np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['direction']), axis=1), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 4, 1, 2, 3))
             newvars['heat_source_e_vol'] = (['time', 'radius', 'source'], heat_source_e_vol)
@@ -852,47 +927,55 @@ class plasma_io(io):
             #newvars["qratio_surf"] = qi / np.where(qe == 0.0, 1e-10, qe)  # to avoid division by zero
 
             ohmic_heat_source_vol = vectorized_numpy_integration(
-                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ohmic', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ohmic', drop=True) * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             wave_heat_source_vol = vectorized_numpy_integration(
-                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source=['electron_cyclotron', 'ion_cyclotron']).sum('source') * data['mxh_dvolume_dr']).to_numpy(),
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source=['electron_cyclotron', 'ion_cyclotron']).sum('source') * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             beam_heat_source_vol = vectorized_numpy_integration(
-                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='neutral_beam', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='neutral_beam', drop=True) * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             ionization_heat_source_vol = vectorized_numpy_integration(
-                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ionization', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ionization', drop=True) * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             radiation_heat_source_vol = vectorized_numpy_integration(
-                (data['radiation_heat_source'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['radiation_heat_source'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             auxiliary_heat_source_e_vol = vectorized_numpy_integration(
-                (data['auxiliary_heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['auxiliary_heat_source_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             auxiliary_heat_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['auxiliary_heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['auxiliary_heat_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 2, 1))
             auxiliary_plus_heat_source_e_vol = vectorized_numpy_integration(
-                (data['auxiliary_plus_heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['auxiliary_plus_heat_source_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             auxiliary_plus_heat_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['auxiliary_plus_heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['auxiliary_plus_heat_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 2, 1))
             fusion_heat_source_vol = vectorized_numpy_integration(
-                (data['fusion_heat_source'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['fusion_heat_source'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
+            fusion_heat_source_e_vol = vectorized_numpy_integration(
+                (data['fusion_heat_source_e'] * data['dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            fusion_heat_source_i_vol = np.transpose(vectorized_numpy_integration(
+                np.transpose((data['fusion_heat_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
+            ), axes=(0, 2, 1))
             heat_exchange_ei_vol = vectorized_numpy_integration(
-                (data['heat_exchange_ei'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['heat_exchange_ei'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             newvars['ohmic_heat_source_vol'] = (['time', 'radius'], ohmic_heat_source_vol)
@@ -905,6 +988,8 @@ class plasma_io(io):
             newvars['auxiliary_plus_heat_source_e_vol'] = (['time', 'radius'], auxiliary_plus_heat_source_e_vol)
             newvars['auxiliary_plus_heat_source_i_vol'] = (['time', 'radius', 'ion'], auxiliary_plus_heat_source_i_vol)
             newvars['fusion_heat_source_vol'] = (['time', 'radius'], fusion_heat_source_vol)
+            newvars['fusion_heat_source_e_vol'] = (['time', 'radius'], fusion_heat_source_e_vol)
+            newvars['fusion_heat_source_i_vol'] = (['time', 'radius', 'ion'], fusion_heat_source_i_vol)
             newvars['heat_exchange_ei_vol'] = (['time', 'radius'], heat_exchange_ei_vol)
 
             heating_source_vol = ohmic_heat_source_vol + wave_heat_source_vol + beam_heat_source_vol + ionization_heat_source_vol + fusion_heat_source_vol
@@ -916,47 +1001,47 @@ class plasma_io(io):
             newvars['fusion_gain'] = (['time'], ((5.0 * fusion_heat_source_vol)[..., -1] / (ohmic_heat_source_vol + wave_heat_source_vol + beam_heat_source_vol + ionization_heat_source_vol)[..., -1]))
 
             density_e_vol = vectorized_numpy_integration(
-                (data['density_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['density_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             temperature_e_vol = vectorized_numpy_integration(
-                (data['temperature_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['temperature_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             pressure_e_vol = vectorized_numpy_integration(
-                (data['pressure_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['pressure_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             energy_e_vol = vectorized_numpy_integration(
-                (1.5 * data['pressure_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (1.5 * data['pressure_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             density_i_vol = vectorized_numpy_integration(
-                np.transpose((data['density_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['density_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
             temperature_i_vol = vectorized_numpy_integration(
-                np.transpose((data['temperature_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['temperature_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
             pressure_i_vol = vectorized_numpy_integration(
-                np.transpose((data['pressure_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['pressure_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
             energy_i_vol = vectorized_numpy_integration(
-                np.transpose((1.5 * data['pressure_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((1.5 * data['pressure_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
             density_thermal_i_vol = vectorized_numpy_integration(
-                (data['density_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['density_thermal_total_i'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             pressure_thermal_i_vol = vectorized_numpy_integration(
-                (data['pressure_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['pressure_thermal_total_i'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             energy_thermal_i_vol = vectorized_numpy_integration(
-                (1.5 * data['pressure_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                (1.5 * data['pressure_thermal_total_i'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             newvars['density_e_volume_average'] = (['time'], density_e_vol[..., -1] / vol[..., -1])
@@ -1031,15 +1116,15 @@ class plasma_io(io):
             newvars['temperature_peaking_off_axis_i'] = (['time', 'ion'], temperature_i_02 / (temperature_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1]))
 
             density_ratio_vol = vectorized_numpy_integration(
-                (data['density_ratio_main'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['density_ratio_main'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             temperature_ratio_vol = vectorized_numpy_integration(
-                (data['temperature_ratio_main'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['temperature_ratio_main'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             effective_charge_vol = vectorized_numpy_integration(
-                (data['effective_charge'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['effective_charge'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             newvars['density_ratio_vol'] = (['time'], density_ratio_vol[..., -1] / vol[..., -1])
@@ -1047,12 +1132,12 @@ class plasma_io(io):
             newvars['effective_charge_vol'] = (['time'], effective_charge_vol[..., -1] / vol[..., -1])
 
             #if 'mach' in data:
-            #    newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['mxh_dvolume_dr']).to_numpy(), data['r_minor'].to_numpy())[:, -1] / vol[:, -1])
+            #    newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['dvolume_dr']).to_numpy(), data['r_minor'].to_numpy())[:, -1] / vol[:, -1])
             newvars['pressure_total_vol_norm_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] / (data['field_axis'] ** 2)).to_numpy())
             newvars['beta_n_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] * 100.0 * data['r_minor_lcfs'] / (data['field_axis'] * data['current'])).to_numpy())  # pc
 
             field_squared_vol = vectorized_numpy_integration(
-                np.transpose((data['field_squared'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['field_squared'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['field_direction']), axis=1)
             )
             newvars['field_squared_vol'] = (['time', 'field_direction'], field_squared_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
@@ -1227,6 +1312,11 @@ class plasma_io(io):
         use_main_ion: bool = False,
         side: str = 'input',
     ) -> None:
+        # Note: the use_main_ion branches use positional (.to_numpy()-based) indexing to write
+        # the corrected species back, not xarray's label-based .loc[] -- the 'ion' coordinate
+        # holds species-name labels (e.g. 'D'/'T'/'W'), not integer positions, so a bare integer
+        # index would otherwise be looked up as a (generally nonexistent) label rather than a
+        # position (see equalize_thermal_ion_temperatures()/scale_thermal_ion_densities()).
         data_vars: MutableMapping[str, Any] = {}
         if side == 'output' and self.has_output and 'density_e' in self.output and 'charge_i' in self.output and 'density_i' in self.output:
             if use_main_ion and 'atomic_number_i' in self.output and 'type_i' in self.output:
@@ -1235,11 +1325,11 @@ class plasma_io(io):
                 non_main_species = [i for i in range(len(main_species_mask)) if ~main_species_mask[i]]
                 density_main_old = self.output['density_i'].isel(ion=main_species)
                 density_main = self.output['density_e'] - (self.output['density_i'] * self.output['charge_i']).isel(ion=non_main_species).sum('ion')
-                density_main_new = density_main_old * density_main / density_main_old.sum('ion')
-                density_i = self.output['density_i']
+                density_main_new = (density_main_old * density_main / density_main_old.sum('ion')).to_numpy()
+                density_i = self.output['density_i'].to_numpy().copy()
                 for j, i in enumerate(main_species):
-                    density_i.loc[dict(ion=i)] = density_main_new.isel(ion=j).to_numpy()
-                data_vars['density_i'] = (['time', 'radius', 'ion'], density_i.to_numpy())
+                    density_i[..., i] = density_main_new[..., j]
+                data_vars['density_i'] = (list(self.output['density_i'].dims), density_i)
             else:
                 density_e = (self.output['density_i'] * self.output['charge_i']).sum('ion')
                 data_vars['density_e'] = (['time', 'radius'], density_e.to_numpy())
@@ -1251,11 +1341,11 @@ class plasma_io(io):
                 non_main_species = [i for i in range(len(main_species_mask)) if ~main_species_mask[i]]
                 density_main_old = self.input['density_i'].isel(ion=main_species)
                 density_main = self.input['density_e'] - (self.input['density_i'] * self.input['charge_i']).isel(ion=non_main_species).sum('ion')
-                density_main_new = density_main_old * density_main / density_main_old.sum('ion')
-                density_i = self.input['density_i']
+                density_main_new = (density_main_old * density_main / density_main_old.sum('ion')).to_numpy()
+                density_i = self.input['density_i'].to_numpy().copy()
                 for j, i in enumerate(main_species):
-                    density_i.loc[dict(ion=i)] = density_main_new.isel(ion=j).to_numpy()
-                data_vars['density_i'] = (['time', 'radius', 'ion'], density_i.to_numpy())
+                    density_i[..., i] = density_main_new[..., j]
+                data_vars['density_i'] = (list(self.input['density_i'].dims), density_i)
             else:
                 density_e = (self.input['density_i'] * self.input['charge_i']).sum('ion')
                 data_vars['density_e'] = (['time', 'radius'], density_e.to_numpy())
@@ -1266,18 +1356,98 @@ class plasma_io(io):
         self,
         side: str = 'input',
         enforce_quasineutrality: bool = True,
+        use_main_ion: bool = False,
     ) -> None:
-        # Enforcing quasineutrality removes corresponding electron density, as opposed to adding to thermal ion density
+        # Enforcing quasineutrality removes corresponding electron density, as opposed to adding
+        # to thermal ion density -- unless use_main_ion is set, which does the latter instead
+        # (forwarded straight to enforce_quasineutrality's own use_main_ion argument).
         if side == 'output' and self.has_output and 'type_i' in self.output:
             thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
             self.output = self.output.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
             if enforce_quasineutrality:
-                self.enforce_quasineutrality(side='output')
+                self.enforce_quasineutrality(use_main_ion=use_main_ion, side='output')
         elif self.has_input and 'type_i' in self.input:
             thermal_mask = (self.input['type_i'].isin(['thermal'])).to_numpy().flatten()
             self.input = self.input.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
             if enforce_quasineutrality:
-                self.enforce_quasineutrality(side='input')
+                self.enforce_quasineutrality(use_main_ion=use_main_ion, side='input')
+
+
+    def equalize_thermal_ion_temperatures(
+        self,
+        ref_ion: int = 0,
+        side: str = 'input',
+    ) -> None:
+        '''
+        Force every thermal ion species' temperature_i profile to equal the
+        reference ion's (ref_ion, default the first ion). A bookkeeping
+        convention for multi-ion-species representations, not new physics:
+        many downstream consumers assume/require a single ion temperature, so
+        when only one ion's Ti is independently predicted/modified the other
+        thermal species need to be kept in lockstep with it rather than left
+        stale. ref_ion's own profile is left untouched.
+        '''
+        # Note: uses positional (.to_numpy()-based) indexing throughout, not xarray's
+        # label-based .loc[] -- the 'ion' coordinate holds species-name labels (e.g.
+        # 'D'/'T'/'W'), not integer positions, so a bare integer ref_ion/index would
+        # otherwise be looked up as a (generally nonexistent) label rather than a position.
+        data_vars: MutableMapping[str, Any] = {}
+        if side == 'output' and self.has_output and 'type_i' in self.output and 'temperature_i' in self.output:
+            thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
+            temperature_i = self.output['temperature_i'].to_numpy().copy()
+            ti_ref = temperature_i[..., ref_ion].copy()
+            for i in range(temperature_i.shape[-1]):
+                if thermal_mask[i] and i != ref_ion:
+                    temperature_i[..., i] = ti_ref
+            data_vars['temperature_i'] = (list(self.output['temperature_i'].dims), temperature_i)
+            self.update_output_data_vars(data_vars)
+        elif self.has_input and 'type_i' in self.input and 'temperature_i' in self.input:
+            thermal_mask = (self.input['type_i'].isin(['thermal'])).to_numpy().flatten()
+            temperature_i = self.input['temperature_i'].to_numpy().copy()
+            ti_ref = temperature_i[..., ref_ion].copy()
+            for i in range(temperature_i.shape[-1]):
+                if thermal_mask[i] and i != ref_ion:
+                    temperature_i[..., i] = ti_ref
+            data_vars['temperature_i'] = (list(self.input['temperature_i'].dims), temperature_i)
+            self.update_input_data_vars(data_vars)
+
+
+    def scale_thermal_ion_densities(
+        self,
+        scale_factor: float | NDArray,
+        side: str = 'input',
+        exclude_ion_indices: Sequence[int] | None = None,
+    ) -> None:
+        '''
+        Multiply every thermal ion species' density_i profile by the same
+        per-radius scale_factor (e.g. scale_factor = new_density_e /
+        old_density_e), to keep thermal-ion dilution fractions fixed when
+        density_e is updated independently. Species listed in
+        exclude_ion_indices are left untouched (e.g. an impurity species whose
+        density is itself being independently predicted/written elsewhere,
+        and whose value should not also be perturbed by this scaling).
+        '''
+        # See equalize_thermal_ion_temperatures() for why this uses positional numpy
+        # indexing rather than xarray's label-based .loc[].
+        exclude = set(exclude_ion_indices) if exclude_ion_indices is not None else set()
+        scale_factor = np.asarray(scale_factor)
+        data_vars: MutableMapping[str, Any] = {}
+        if side == 'output' and self.has_output and 'type_i' in self.output and 'density_i' in self.output:
+            thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
+            density_i = self.output['density_i'].to_numpy().copy()
+            for i in range(density_i.shape[-1]):
+                if thermal_mask[i] and i not in exclude:
+                    density_i[..., i] = density_i[..., i] * scale_factor
+            data_vars['density_i'] = (list(self.output['density_i'].dims), density_i)
+            self.update_output_data_vars(data_vars)
+        elif self.has_input and 'type_i' in self.input and 'density_i' in self.input:
+            thermal_mask = (self.input['type_i'].isin(['thermal'])).to_numpy().flatten()
+            density_i = self.input['density_i'].to_numpy().copy()
+            for i in range(density_i.shape[-1]):
+                if thermal_mask[i] and i not in exclude:
+                    density_i[..., i] = density_i[..., i] * scale_factor
+            data_vars['density_i'] = (list(self.input['density_i'].dims), density_i)
+            self.update_input_data_vars(data_vars)
 
 
     def lump_species(
