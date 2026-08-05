@@ -407,7 +407,7 @@ class plasma_io(io):
             q_values = vectorized_numpy_interpolation(data['magnetic_flux'].sel(direction=root).to_numpy(), np.asarray(r), np.asarray(q), extrapolate=True)
             newvars['safety_factor'] = (['time', 'radius'], q_values)
             flux = data['magnetic_flux'].to_numpy()
-            if fill == 'poloidal':
+            if fill == 'toroidal':
                 flux[..., fill_idx] = vectorized_numpy_integration(q_values, flux[..., root_idx])
             else:
                 flux[..., fill_idx] = vectorized_numpy_integration(1.0 / q_values, flux[..., root_idx])
