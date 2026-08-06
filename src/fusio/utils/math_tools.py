@@ -43,7 +43,7 @@ def vectorized_numpy_interpolation(
 ) -> NDArray:
     """Interpolate y(x) at query points v along the last axis, with optional linear extrapolation beyond bounds."""
     is_scalar = isinstance(v, float)
-    vm = np.array([v]) if is_scalar else copy.deepcopy(v)
+    vm = np.array([v]) if is_scalar else copy.deepcopy(v)  # type: ignore[arg-type]
     xm = x.reshape(-1, x.shape[-1])
     ym = y.reshape(-1, y.shape[-1])
     shape_in = x.shape[:-1] if x.ndim > 1 else (1, )

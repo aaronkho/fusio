@@ -945,7 +945,8 @@ class imas_io(io):
                 if 'field_axis' in data and 'r_geometric' in data:
                     cs.vacuum_toroidal_field.r0 = float(data['r_geometric'].isel(radius=0).mean('time').to_numpy())
                     cs.vacuum_toroidal_field.b0 = data['field_axis'].to_numpy()
-                cs.source.resize(len(obj.sources))
+                len_sources = len(obj.sources) if hasattr(obj, 'sources') else 0
+                cs.source.resize(len_sources)
                 for i, (k, v) in enumerate(source_mapping.items()):
                     cs.source[i].identifier.name = v[0]
                     cs.source[i].identifier.index = v[1]

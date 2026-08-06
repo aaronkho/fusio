@@ -1653,6 +1653,7 @@ class plasma_io(io):
             if kwargs.get('jetto_style', False) and obj_cocos == 11:
                 cocos_out = 8
             cocos = define_cocos_converter(obj_cocos, cocos_out)
+            transpose_equilibrium = kwargs.get('transpose_equilibrium', False)
 
             dsvec = []
 
@@ -1913,7 +1914,7 @@ class plasma_io(io):
                     dsvec.append(xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs))
 
             if len(dsvec) > 0:
-                newobj.input = xr.concat(dsvec, dim='n').assign_attrs({'header': [newobj.make_file_header()] * len(dsvec)})
+                newobj.input = xr.concat(dsvec, dim='n')
 
         return newobj
 

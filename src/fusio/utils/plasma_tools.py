@@ -1279,7 +1279,7 @@ def calc_nuei_from_ne_te_and_zeff(ne, te, zeff, zi, ze=1.0, cle=False):
 
 def calc_nuee_from_nuei_and_zeff(nuei, zeff):
     """Convert electron-ion collision frequency to electron-electron frequency: nu_ee = nu_ei / Zeff."""
-    nuee = normalize(nuee, zeff)
+    nuee = normalize(nuei, zeff)
     return nuee
 
 def calc_nuei_from_nuee_and_zeff(nuee, zeff):

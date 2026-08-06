@@ -116,7 +116,9 @@ class io():
         elif key in self._tree['input'].to_dataset().data_vars:
             da = self._tree['input'].to_dataset()[key]
         else:
-            coords = {k: self._tree['input'].to_dataset().coords[k].to_numpy() for k, v in dims.items() if k in self._tree['input'].to_dataset().coords} if isinstance(dims, dict) else {}
+            coords: Mapping[str, Any] = {
+                k: self._tree['input'].to_dataset().coords[k].to_numpy() for k, v in dims.items() if k in self._tree['input'].to_dataset().coords
+            } if isinstance(dims, dict) else {}
             value = np.full(tuple([coords[dim].size for dim in coords]), default)
             da = xr.DataArray(value, coords=coords)
         return da
@@ -128,7 +130,9 @@ class io():
         elif key in self._tree['output'].to_dataset().data_vars:
             da = self._tree['output'].to_dataset()[key]
         else:
-            coords = {k: self._tree['output'].to_dataset().coords[k].to_numpy() for k, v in dims.items() if k in self._tree['output'].to_dataset().coords} if isinstance(dims, dict) else {}
+            coords: Mapping[str, Any] = {
+                k: self._tree['output'].to_dataset().coords[k].to_numpy() for k, v in dims.items() if k in self._tree['output'].to_dataset().coords
+            } if isinstance(dims, dict) else {}
             value = np.full(tuple([coords[dim].size for dim in coords]), default)
             da = xr.DataArray(value, coords=coords)
         return da
@@ -182,8 +186,8 @@ class io():
                         raise NotImplementedError(f'File contains data for {fmt} but this format is not yet implemented.')
                     newcls = getattr(mod, f'{fmt}_io')
                     newobj = newcls()
-                    newobj.input = tree.get('input').to_dataset()
-                    newobj.output = tree.get('output').to_dataset()
+                    newobj.input = tree['input'].to_dataset()
+                    newobj.output = tree['output'].to_dataset()
                     return newobj
                 else:
                     logger.warning(f'Requested load path, {load_path}, contains data which is incompatible with fusio! Returning empty base class...')

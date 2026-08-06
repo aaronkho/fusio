@@ -484,32 +484,32 @@ class transp_io(io):
                     subset_temp_data = {var: temp_data[var.upper()] for var in list(subset.keys()) if var.upper() in temp_data}
                     subset_data = {}
                     for k, v in subset_temp_data.items():
-                        new_dims = [dim.lower().replace('time3', 'time') for dim in v.dims]
+                        new_dims = [str(dim).lower().replace('time3', 'time') for dim in v.dims]
                         if np.all([d in coords for d in new_dims]):
                             subset_data[k] = (new_dims, v.to_numpy(), {'units': subset[k][0], 'description': subset[k][1]})
                     data_vars.update(subset_data)
                 max_asym_length = 0
                 geom_asym_data = {}
-                for k, v in self.geom_moment_vars.items():
+                for k2, v2 in self.geom_moment_vars.items():
                     geom_moments = []
-                    for var in temp_data.keys():
-                        if re.match(f'^{k.upper()}[0-9]+$', var):
-                            geom_moments.append(var)
-                    new_data = [temp_data[var].to_numpy() for var in sorted(geom_moments)]
+                    for var2 in temp_data:
+                        if re.match(f'^{k2.upper()}[0-9]+$', str(var2)):
+                            geom_moments.append(str(var2))
+                    new_data = [temp_data[moment].to_numpy() for moment in sorted(geom_moments)]
                     if len(new_data) > 0:
-                        new_dims = [dim.lower().replace('time3', 'time') for dim in temp_data[geom_moments[0]].dims]
+                        new_dims = [str(dim).lower().replace('time3', 'time') for dim in temp_data[geom_moments[0]].dims]
                         if k.endswith('s') or k.endswith('sb'):
                             new_data = [np.zeros(new_data[0].shape)] + new_data
-                        new_data = np.stack(new_data, axis=0)
-                        max_asym_length = max(max_asym_length, new_data.shape[0])
-                        geom_asym_data[k] = (new_dims, new_data)
+                        new_data_array = np.stack(new_data, axis=0)
+                        max_asym_length = max(max_asym_length, new_data_array.shape[0])
+                        geom_asym_data[k] = (new_dims, new_data_array)
                 dtag = 'iasym'
-                for k in geom_asym_data:
-                    val = geom_asym_data[k][1]
+                for k3 in geom_asym_data:
+                    val = geom_asym_data[k3][1]
                     while val.shape[0] < max_asym_length:
                         val = np.concatenate((val, np.zeros((1, *val.shape[1:]))), axis=0)
-                    new_dims = [dtag] + geom_asym_data[k][0]
-                    data_vars[k] = (new_dims, val, {'units': self.geom_moment_vars[k][0], 'description': self.geom_moment_vars[k][1]})
+                    new_dims = [dtag] + geom_asym_data[k3][0]
+                    data_vars[k3] = (new_dims, val, {'units': self.geom_moment_vars[k3][0], 'description': self.geom_moment_vars[k3][1]})
                     if dtag not in coords:
                         coords[dtag] = ([dtag], np.arange(max_asym_length), {'units': self.dim_vars[dtag][0], 'description': self.dim_vars[dtag][1]})
                 data = xr.Dataset(data_vars=data_vars, coords=coords)

@@ -459,7 +459,7 @@ def trace_contour_with_megpy(rvec: NDArray, zvec: NDArray, psi: NDArray, level: 
 
 def calculate_mxh_coefficients_from_eqdsk_dict(
     eqdsk_data: MutableMapping[str, Any],
-    psivec: ArrayLike,
+    psivec: NDArray,
     use_normalized_psi: bool = False,
     trace_last: bool = True,
     boundary_offset: float = 0.0,

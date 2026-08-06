@@ -508,7 +508,7 @@ gacode_unit_strings: Final[Mapping[str, str]] = {
 
 
 # TORAX full settings list available at https://torax.readthedocs.io/en/v1.3.0/configuration.html
-torax_plasma_composition: Final[Mapping[str, Any]] = {
+torax_plasma_composition: Final[Mapping[str, tuple[str, ...]]] = {
     'main_ion': ('-', 'main ion species'),
     'impurity': ('-', 'impurity species'),
     'Z_eff': ('-', 'effective charge'),
@@ -517,7 +517,7 @@ torax_plasma_composition: Final[Mapping[str, Any]] = {
     'Z_impurity_override': ('-', 'override for impurity charge number'),
     'A_impurity_override': ('-', 'override for impurity mass number'),
 }
-torax_profile_conditions: Final[Mapping[str, Any]] = {
+torax_profile_conditions: Final[Mapping[str, tuple[str, ...]]] = {
     'Ip': ('A', 'total plasma current'),
     'use_v_loop_lcfs_boundary_condition': ('', 'toggle LCFS loop voltage as a boundary condition'),
     'v_loop_lcfs': ('V', 'LCFS loop voltage'),
@@ -537,7 +537,7 @@ torax_profile_conditions: Final[Mapping[str, Any]] = {
     'initial_j_is_total_current': ('-', 'toggle whether initial current profile represents total current'),
     'initial_psi_from_j': ('-', 'toggle whether initial poloidal flux is computed from initial current profile'),
 }
-torax_numerics: Final[Mapping[str, Any]] = {
+torax_numerics: Final[Mapping[str, tuple[str, ...]]] = {
     't_initial': ('s', 'initial time of simulation'),
     't_final': ('s', 'final time of simulation'),
     'exact_t_final': ('s', 'exact final time of simulation'),
@@ -554,21 +554,21 @@ torax_numerics: Final[Mapping[str, Any]] = {
     'adaptive_T_source_prefactor': ('-', 'prefactor for adaptive ion temperature source'),
     'adaptive_n_source_prefactor': ('-', 'prefactor for adaptive density source'),
 }
-torax_geometry: Final[Mapping[str, Any]] = {
+torax_geometry: Final[Mapping[str, tuple[str, ...]]] = {
     'geometry_type': ('-', 'type of geometry'),
     'n_rho': ('-', 'number of radial grid points'),
     'face_centers': ('-', 'rho toroidal flux coordinates to be used as face center radial grid points for non-uniform grids'),
     'hires_factor': ('-', 'high-resolution factor'),
     'cocos': ('-', 'COCOS identifier'),
 }
-torax_pedestal: Final[Mapping[str, Any]] = {
+torax_pedestal: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'name of the pedestal model'),
     'set_pedestal': ('-', 'toggle inclusion of pedestal models'),
 }
-torax_edge: Final[Mapping[str, Any]] = {
+torax_edge: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'name of the edge model'),
 }
-torax_transport: Final[Mapping[str, Any]] = {
+torax_transport: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'name of the transport model'),
     'chi_min': ('m**2 s**-1', 'minimum chi value'),
     'chi_max': ('m**2 s**-1', 'maximum chi value'),
@@ -591,7 +591,7 @@ torax_transport: Final[Mapping[str, Any]] = {
     'smoothing_width': ('-', 'width of smoothing region in rho toroidal flux coordinates'),
     'smooth_everywhere': ('-', 'toggle smoothing everywhere in rho toroidal flux coordinates'),
 }
-torax_solver: Final[Mapping[str, Any]] = {
+torax_solver: Final[Mapping[str, tuple[str, ...]]] = {
     'solver_type': ('-', 'type of solver'),
     'theta_implicit': ('-', 'toggle implicit theta scheme'),
     'use_predictor_corrector': ('-', 'toggle use of predictor-corrector method'),
@@ -600,24 +600,24 @@ torax_solver: Final[Mapping[str, Any]] = {
     'chi_pereverzev': ('-', 'chi value for Pereverzev method'),
     'D_pereverzev': ('-', 'diffusivity value for Pereverzev method'),
 }
-torax_time_step_calculator: Final[Mapping[str, Any]] = {
+torax_time_step_calculator: Final[Mapping[str, tuple[str, ...]]] = {
     'calculator_type': ('-', 'type of time step calculator'),
     'tolerance': ('-', 'tolerance for time step calculation'),
 }
-torax_restart: Final[Mapping[str, Any]] = {
+torax_restart: Final[Mapping[str, tuple[str, ...]]] = {
     'filename': ('-', 'restart file name'),
     'time': ('s', 'restart time'),
     'do_restart': ('-', 'toggle restart'),
     'stitch': ('-', 'toggle stitching'),
 }
 
-torax_geometry_circular: Final[Mapping[str, Any]] = {
+torax_geometry_circular: Final[Mapping[str, tuple[str, ...]]] = {
     'R_major': ('m', 'major radius'),
     'a_minor': ('m', 'minor radius'),
     'B_0': ('T', 'magnetic field at magnetic axis'),
     'elongation_LCFS': ('-', 'elongation at LCFS'),
 }
-torax_geometry_chease: Final[Mapping[str, Any]] = {
+torax_geometry_chease: Final[Mapping[str, tuple[str, ...]]] = {
     'geometry_file': ('-', 'geometry file name'),
     'geometry_directory': ('-', 'directory containing geometry file'),
     'Ip_from_parameters': ('A', 'plasma current from parameters'),
@@ -625,7 +625,7 @@ torax_geometry_chease: Final[Mapping[str, Any]] = {
     'a_minor': ('m', 'minor radius'),
     'B_0': ('T', 'magnetic field at magnetic axis'),
 }
-torax_geometry_fbt: Final[Mapping[str, Any]] = {
+torax_geometry_fbt: Final[Mapping[str, tuple[str, ...]]] = {
     'geometry_file': ('-', 'geometry file name'),
     'geometry_directory': ('-', 'directory containing geometry file'),
     'Ip_from_parameters': ('A', 'plasma current from parameters'),
@@ -634,7 +634,7 @@ torax_geometry_fbt: Final[Mapping[str, Any]] = {
     'LY_to_torax_times': ('s', 'times for LY to torax'),
     'L_object': ('-', 'L object'),
 }
-torax_geometry_eqdsk: Final[Mapping[str, Any]] = {
+torax_geometry_eqdsk: Final[Mapping[str, tuple[str, ...]]] = {
     'geometry_file': ('-', 'geometry file name'),
     'geometry_directory': ('-', 'directory containing geometry file'),
     'Ip_from_parameters': ('A', 'plasma current from parameters'),
@@ -647,14 +647,14 @@ torax_geometry_options: Final[Mapping[str, Any]] = {
     'fbt': torax_geometry_fbt,
     'eqdsk': torax_geometry_eqdsk,
 }
-torax_pedestal_nped_tped: Final[Mapping[str, Any]] = {
+torax_pedestal_nped_tped: Final[Mapping[str, tuple[str, ...]]] = {
     'n_e_ped': ('m**-3', 'electron density at pedestal'),
     'n_e_ped_is_fGW': ('-', 'flag for fGW normalization'),
     'T_i_ped': ('keV', 'ion temperature at pedestal'),
     'T_e_ped': ('keV', 'electron temperature at pedestal'),
     'rho_norm_ped_top': ('-', 'normalized radial position at pedestal top'),
 }
-torax_pedestal_pped_nped: Final[Mapping[str, Any]] = {
+torax_pedestal_pped_nped: Final[Mapping[str, tuple[str, ...]]] = {
     'P_ped': ('Pa', 'pedestal pressure'),
     'n_e_ped': ('m**-3', 'electron density at pedestal'),
     'n_e_ped_is_fGW': ('-', 'flag for fGW normalization'),
@@ -665,11 +665,11 @@ torax_pedestal_options: Final[Mapping[str, Any]] = {
     'set_T_ped_n_ped': torax_pedestal_nped_tped,
     'set_P_ped_n_ped': torax_pedestal_pped_nped,
 }
-torax_neoclassical_bootstrap: Final[Mapping[str, Any]] = {
+torax_neoclassical_bootstrap: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'model name'),
     'bootstrap_multiplier': ('-', 'multiplier for bootstrap current'),
 }
-torax_neoclassical_transport: Final[Mapping[str, Any]] = {
+torax_neoclassical_transport: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'model name'),
     'chi_min': ('m**2 s**-1', 'minimum neoclassical heat diffusivity'),
     'chi_max': ('m**2 s**-1', 'maximum neoclassical heat diffusivity'),
@@ -678,7 +678,7 @@ torax_neoclassical_transport: Final[Mapping[str, Any]] = {
     'V_e_min': ('m s**-1', 'minimum neoclassical electron velocity'),
     'V_e_max': ('m s**-1', 'maximum neoclassical electron velocity'),
 }
-torax_neoclassical_conductivity: Final[Mapping[str, Any]] = {
+torax_neoclassical_conductivity: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'model name'),
 }
 torax_neoclassical_options: Final[Mapping[str, Any]] = {
@@ -686,20 +686,20 @@ torax_neoclassical_options: Final[Mapping[str, Any]] = {
     'transport': torax_neoclassical_transport,
     'conductivity': torax_neoclassical_conductivity,
 }
-torax_mhd_sawtooth: Final[Mapping[str, Any]] = {
+torax_mhd_sawtooth: Final[Mapping[str, tuple[str, ...]]] = {
     'crash_time_duration': ('s', 'duration of crash phase of sawtooth cycle'),
 }
-torax_mhd_sawtooth_trigger: Final[Mapping[str, Any]] = {
+torax_mhd_sawtooth_trigger: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'model name'),
     's_critical': ('-', 'critical safety factor'),
     'minimum_radius': ('m', 'minimum radius'),
 }
-torax_mhd_sawtooth_redistribution: Final[Mapping[str, Any]] = {
+torax_mhd_sawtooth_redistribution: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'model name'),
     'flattening_factor': ('-', 'flattening factor'),
     'mixing_radius_multiplier': ('-', 'multiplier for mixing radius'),
 }
-torax_sources_generic_heat: Final[Mapping[str, Any]] = {
+torax_sources_generic_heat: Final[Mapping[str, tuple[str, ...]]] = {
     'prescribed_values': ('W m**-3', 'prescribed heat source profiles, ions then electrons if a tuple is provided'),
     'mode': ('-', 'operation mode'),
     'is_explicit': ('-', 'toggle treatment of source as an explicit term in the solver'),
@@ -709,7 +709,7 @@ torax_sources_generic_heat: Final[Mapping[str, Any]] = {
     'electron_heat_fraction': ('-', 'fraction of electron heat'),
     'absorption_fraction': ('-', 'fraction of absorbed power'),
 }
-torax_sources_generic_particle: Final[Mapping[str, Any]] = {
+torax_sources_generic_particle: Final[Mapping[str, tuple[str, ...]]] = {
     'prescribed_values': ('m**-3 s**-1', 'prescribed particle source profiles'),
     'mode': ('-', 'operation mode'),
     'is_explicit': ('-', 'toggle treatment of source as an explicit term in the solver'),
@@ -717,7 +717,7 @@ torax_sources_generic_particle: Final[Mapping[str, Any]] = {
     'particle_width': ('-', 'width of Gaussian particle deposition profile in rho toroidal flux coordinate'),
     'S_total': ('s**-1', 'total particle injection rate'),
 }
-torax_sources_generic_current: Final[Mapping[str, Any]] = {
+torax_sources_generic_current: Final[Mapping[str, tuple[str, ...]]] = {
     'prescribed_values': ('A m**-2', 'prescribed current source profiles'),
     'mode': ('-', 'operation mode'),
     'is_explicit': ('-', 'toggle treatment of source as an explicit term in the solver'),
@@ -728,146 +728,146 @@ torax_sources_generic_current: Final[Mapping[str, Any]] = {
     'use_absolute_current': ('-', 'toggle use of absolute current'),
 }
 torax_sources_ei_exchange: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
-    'Qei_multiplier',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
+    'Qei_multiplier': '',
 }
 torax_sources_ohmic: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
 }
 torax_sources_fusion: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
 }
 torax_sources_gas_puff: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
-    'puff_decay_length',
-    'S_total',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
+    'puff_decay_length': '',
+    'S_total': '',
 }
 torax_sources_pellet: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
-    'pellet_deposition_location',
-    'pellet_width',
-    'S_total',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
+    'pellet_deposition_location': '',
+    'pellet_width': '',
+    'S_total': '',
 }
 torax_sources_bremsstrahlung: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
-    'use_relativistic_correction',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
+    'use_relativistic_correction': '',
 }
 torax_sources_impurity_radiation: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
-    'model_name',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
+    'model_name': '',
 }
 torax_sources_cyclotron_radiation: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
-    'wall_reflection_coeff',
-    'beta_min',
-    'beta_max',
-    'beta_grid_size',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
+    'wall_reflection_coeff': '',
+    'beta_min': '',
+    'beta_max': '',
+    'beta_grid_size': '',
 }
 torax_sources_ecrh: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
-    'extra_prescribed_power_density',
-    'gaussian_location',
-    'gaussian_width',
-    'P_total',
-    'current_drive_efficiency',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
+    'extra_prescribed_power_density': '',
+    'gaussian_location': '',
+    'gaussian_width': '',
+    'P_total': '',
+    'current_drive_efficiency': '',
 }
 torax_sources_icrh: Final[Mapping[str, Any]] = {
-    'prescribed_values',
-    'mode',
-    'is_explicit',
-    'model_path',
-    'wall_inner',
-    'wall_outer',
-    'frequency',
-    'minority_concentration',
-    'P_total',
+    'prescribed_values': '',
+    'mode': '',
+    'is_explicit': '',
+    'model_path': '',
+    'wall_inner': '',
+    'wall_outer': '',
+    'frequency': '',
+    'minority_concentration': '',
+    'P_total': '',
 }
 torax_transport_constant: Final[Mapping[str, Any]] = {
-    'chi_i',
-    'chi_e',
-    'D_e',
-    'V_e',
+    'chi_i': '',
+    'chi_e': '',
+    'D_e': '',
+    'V_e': '',
 }
 torax_transport_cgm: Final[Mapping[str, Any]] = {
-    'alpha',
-    'chi_stiff',
-    'chi_e_i_ratio',
-    'chi_D_ratio',
-    'VR_D_ratio',
+    'alpha': '',
+    'chi_stiff': '',
+    'chi_e_i_ratio': '',
+    'chi_D_ratio': '',
+    'VR_D_ratio': '',
 }
 torax_transport_bohm_gyrobohm: Final[Mapping[str, Any]] = {
-    'chi_e_bohm_coeff',
-    'chi_e_gyrobohm_coeff',
-    'chi_i_bohm_coeff',
-    'chi_i_gyrobohm_coeff',
-    'chi_e_bohm_multiplier',
-    'chi_e_gyrobohm_multiplier',
-    'chi_i_bohm_multiplier',
-    'chi_i_gyrobohm_multiplier',
-    'D_face_c1',
-    'D_face_c2',
-    'V_face_coeff',
+    'chi_e_bohm_coeff': '',
+    'chi_e_gyrobohm_coeff': '',
+    'chi_i_bohm_coeff': '',
+    'chi_i_gyrobohm_coeff': '',
+    'chi_e_bohm_multiplier': '',
+    'chi_e_gyrobohm_multiplier': '',
+    'chi_i_bohm_multiplier': '',
+    'chi_i_gyrobohm_multiplier': '',
+    'D_face_c1': '',
+    'D_face_c2': '',
+    'V_face_coeff': '',
 }
 torax_transport_qlknn: Final[Mapping[str, Any]] = {
-    'model_path',
-    'qlknn_model_name',
-    'include_ITG',
-    'include_TEM',
-    'include_ETG',
-    'ITG_flux_ratio_correction',
-    'ETG_correction_factor',
-    'clip_inputs',
-    'clip_margin',
-    'collisionality_multiplier',
-    'DV_effective',
-    'An_min',
-    'avoid_big_negative_s',
-    'smag_alpha_correction',
-    'q_sawtooth_proxy',
+    'model_path': '',
+    'qlknn_model_name': '',
+    'include_ITG': '',
+    'include_TEM': '',
+    'include_ETG': '',
+    'ITG_flux_ratio_correction': '',
+    'ETG_correction_factor': '',
+    'clip_inputs': '',
+    'clip_margin': '',
+    'collisionality_multiplier': '',
+    'DV_effective': '',
+    'An_min': '',
+    'avoid_big_negative_s': '',
+    'smag_alpha_correction': '',
+    'q_sawtooth_proxy': '',
 }
 torax_transport_qualikiz: Final[Mapping[str, Any]] = {
-    'n_max_runs',
-    'n_processes',
-    'collisionality_multiplier',
-    'DV_effective',
-    'An_min',
-    'avoid_big_negative_s',
-    'smag_alpha_correction',
-    'q_sawtooth_proxy',
+    'n_max_runs': '',
+    'n_processes': '',
+    'collisionality_multiplier': '',
+    'DV_effective': '',
+    'An_min': '',
+    'avoid_big_negative_s': '',
+    'smag_alpha_correction': '',
+    'q_sawtooth_proxy': '',
 }
 torax_solver_linear: Final[Mapping[str, Any]] = {
 }
 torax_solver_newton_raphson: Final[Mapping[str, Any]] = {
-    'log_iterations',
-    'initial_guess_mode',
-    'residual_tol',
-    'residual_coarse_tol',
-    'n_max_iterations',
-    'delta_reduction_factor',
-    'tau_min',
+    'log_iterations': '',
+    'initial_guess_mode': '',
+    'residual_tol': '',
+    'residual_coarse_tol': '',
+    'n_max_iterations': '',
+    'delta_reduction_factor': '',
+    'tau_min': '',
 }
 torax_solver_optimizer: Final[Mapping[str, Any]] = {
-    'initial_guess_mode',
-    'loss_tol',
-    'n_max_iterations',
+    'initial_guess_mode': '',
+    'loss_tol': '',
+    'n_max_iterations': '',
 }
 torax_solver_options: Final[Mapping[str, Any]] = {
     'linear': torax_solver_linear,

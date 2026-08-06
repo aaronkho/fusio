@@ -2166,7 +2166,7 @@ class gacode_io(io):
                         if eqdsk_data:
                             if psivec is None:
                                 psivec = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], len(coords['rho']))
-                            mxh_data = newobj._calculate_geometry_from_eqdsk(eqdsk_data, psivec)
+                            mxh_data = calculate_mxh_coefficients_from_eqdsk_dict(eqdsk_data, psivec)
                             data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmaj']), axis=0))
                             data_vars['rmin'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmin']), axis=0))
                             data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['zmag']), axis=0))
@@ -2184,6 +2184,7 @@ class gacode_io(io):
                             data_vars['shape_cos4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos4']), axis=0))
                             data_vars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos5']), axis=0))
                             data_vars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
+                            data_vars['fpol'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['fpol']), axis=0))
                         tag = 'equilibrium.time_slice.global_quantities.ip'
                         if tag in data:
                             data_vars['current'] = (['n'], 1.0e-6 * cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
