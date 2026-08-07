@@ -290,6 +290,7 @@ class plasma_io(io):
             #     rho = data['radius'].to_numpy()
             psip = data['magnetic_flux'].sel(direction='poloidal', drop=True).isel(time=time_index, drop=True)
             psip = (eqdsk_data['sibdry'] - eqdsk_data['simagx']) * (psip - psip.isel(radius=0)) / (psip.isel(radius=-1) - psip.isel(radius=0)) + eqdsk_data['simagx']
+            psip[{'radius': 0}] = 0.0  # Pin the axis exactly, mirroring the initial=0.0 pin that fixes torflux's axis value below
             psivec = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
             rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
             zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
@@ -365,12 +366,18 @@ class plasma_io(io):
             rmin = data['r_minor'] if 'r_minor' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
             for i, con in enumerate(fs):
                 r = data['radius'].isel(radius=i).to_numpy().item(0)
-                a_con = np.angle(con['r'] - con['r0'] + 1.0j * con['z'] - 1.0j * con['z0'])
-                a_con[a_con < 0.0] += 2.0 * np.pi
-                if a_con[-1] == a_con[0]:
-                    a_con[-1] += 2.0 * np.pi
-                r_con = np.interp(theta[:-1], a_con, con['r'] - con['r0']) + con['r0']
-                z_con = np.interp(theta[:-1], a_con, con['z'] - con['z0']) + con['z0']
+                r_con_in = copy.deepcopy(con['r'])
+                z_con_in = copy.deepcopy(con['z'])
+                a_con_in = np.angle(r_con_in - con['r0'] + 1.0j * z_con_in - 1.0j * con['z0'])
+                a_con_in[a_con_in < 0.0] += 2.0 * np.pi
+                if a_con_in[-1] == a_con_in[0]:
+                    a_con_in[-1] += 2.0 * np.pi
+                if len(a_con_in) > 1:
+                    a_con_in = np.concatenate([np.asarray([a_con_in[-2] - 2.0 * np.pi]), a_con_in])
+                    r_con_in = np.concatenate([np.asarray([r_con_in[-2]]), r_con_in])
+                    z_con_in = np.concatenate([np.asarray([z_con_in[-2]]), z_con_in])
+                r_con = np.interp(theta[:-1], a_con_in, r_con_in - con['r0']) + con['r0']
+                z_con = np.interp(theta[:-1], a_con_in, z_con_in - con['z0']) + con['z0']
                 r_con = np.concatenate([r_con, np.asarray([r_con[0]])])
                 z_con = np.concatenate([z_con, np.asarray([z_con[0]])])
                 contour.loc[dict(time=t, radius=r)] = np.concatenate([np.atleast_2d(r_con), np.atleast_2d(z_con)], axis=0)
@@ -621,9 +628,9 @@ class plasma_io(io):
             n_theta = 1001
             weight = np.expand_dims(np.expand_dims(np.expand_dims(np.arange(n_coeffs), axis=0), axis=0), axis=0)
             theta = np.expand_dims(np.expand_dims(np.expand_dims(np.linspace(-np.pi, np.pi, n_theta), axis=-1), axis=-1), axis=-1)
-            a = np.sum(mxh_sin * np.sin(weight * theta) + mxh_cos * np.cos(weight * theta), axis=-1)
+            a = theta[..., 0] + np.sum(mxh_sin * np.sin(weight * theta) + mxh_cos * np.cos(weight * theta), axis=-1)
             a_r = np.sum(mxh_s_sin * np.sin(weight * theta) + mxh_s_cos * np.cos(weight * theta), axis=-1)
-            a_t = np.sum(mxh_sin * weight * np.cos(weight * theta) - mxh_cos * weight * np.sin(weight * theta), axis=-1)
+            a_t = 1.0 + np.sum(mxh_sin * weight * np.cos(weight * theta) - mxh_cos * weight * np.sin(weight * theta), axis=-1)
             #a_tt = np.sum(-mxh_sin * weight ** 2 * np.sin(weight * theta) - mxh_cos * weight ** 2 * np.cos(weight * theta), axis=-1)
             r = np.expand_dims(mxh_r0, axis=0) + np.expand_dims(mxh_r, axis=0) * np.cos(a)
             r_r = np.expand_dims(mxh_dr0, axis=0) + np.cos(a) - np.expand_dims(mxh_r, axis=0) * np.sin(a) * a_r
@@ -662,11 +669,11 @@ class plasma_io(io):
             #newvars['mxh_bt'] = (['n', 'rho'], bt[i1] + (bt[i2] - bt[i1]) * ztheta)
             denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1, ...] / b[:-1, ...], axis=0)
             denom[..., 0] = 2.0 * denom[..., 1] - denom[..., 2]
-            b2 = np.stack([np.sum(bp[:-1, ...] ** 2 * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom, np.sum(bt[:-1, ...] ** 2 * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom], axis=-1)
+            b2 = np.stack([np.sum(bt[:-1, ...] ** 2 * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom, np.sum(bp[:-1, ...] ** 2 * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom], axis=-1)
             newvars['mxh_dr_dpsi'] = (['time', 'radius'], np.sum(grad_r[:-1, ...] * g_t[:-1, ...] / b[:-1, ...], axis=0) / denom)
             newvars['mxh_field_squared'] = (['time', 'radius', 'direction'], b2)
             newvars['mxh_cross_sectional_area'] = (['time', 'radius'], trapezoid(r, x=z, axis=0))
-            newvars['mxh_field_ref'] = (['time', 'radius'], np.abs(data['field_unit'].to_numpy() * bt_inner))  # For synchrotron
+            newvars['mxh_field_ref'] = (['time', 'radius'], np.abs(data['field_unit'].to_numpy() * f / data['r_geometric'].to_numpy()))  # Toroidal field at the flux surface's geometric center (R = r_geometric)
             b_inner = np.stack([np.where(np.isfinite(bt_inner), bt_inner, 0.0), np.where(np.isfinite(bp_inner), bp_inner, 0.0)], axis=-1)
             b_outer = np.stack([np.where(np.isfinite(bt_outer), bt_outer, 0.0), np.where(np.isfinite(bp_outer), bp_outer, 0.0)], axis=-1)
             newvars['mxh_field_inner'] = (['time', 'radius', 'direction'], b_inner)
