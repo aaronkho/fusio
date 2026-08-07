@@ -13,6 +13,7 @@ def vectorized_numpy_derivative(
     x: NDArray,
     y: NDArray,
 ) -> NDArray:
+    """Compute dy/dx along the last axis using vectorized second-order finite differences."""
     deriv = np.zeros_like(x)
     if x.shape[-1] > 2:
         x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
@@ -31,7 +32,8 @@ def vectorized_numpy_integration(
     y: NDArray,
     x: NDArray,
 ) -> NDArray:
-    return cumulative_simpson(y, x=x, initial=0.0)
+    """Compute the cumulative integral of y(x) along the last axis using Simpson's rule."""
+    return cumulative_simpson(y, x=x, axis=-1, initial=0.0)
 
 def vectorized_numpy_interpolation(
     v: float | NDArray,
@@ -39,9 +41,13 @@ def vectorized_numpy_interpolation(
     y: NDArray,
     extrapolate: bool = False,
 ) -> NDArray:
-    vm = np.array([v]) if isinstance(v, float) else copy.deepcopy(v)
+    """Interpolate y(x) at query points v along the last axis, with optional linear extrapolation beyond bounds."""
+    is_scalar = isinstance(v, float)
+    vm = np.array([v]) if is_scalar else copy.deepcopy(np.asarray(v))
     xm = x.reshape(-1, x.shape[-1])
     ym = y.reshape(-1, y.shape[-1])
+    shape_in = x.shape[:-1] if x.ndim > 1 else (1, )
+    shape_out = shape_in if is_scalar else vm.shape
     if vm.shape[0] != xm.shape[0]:
         vm = np.repeat(np.expand_dims(vm, axis=0), xm.shape[0], axis=0)
     interp = np.zeros_like(vm)
@@ -54,8 +60,8 @@ def vectorized_numpy_interpolation(
         lm = vm[i] < np.nanmin(xm[i])
         if np.any(lm) and extrapolate:
             s = (ym[i, 0] - ym[i, 1]) / (xm[i, 0] - xm[i, 1])
-            interp[i][um] = ym[i, 0] + s * (vm[i][um] - xm[i, 0])
-    interp = interp.reshape(*y.shape[:-1])
+            interp[i][lm] = ym[i, 0] + s * (vm[i][lm] - xm[i, 0])
+    interp = interp.reshape(*shape_out)
     return interp
 
 def vectorized_numpy_find(
@@ -64,6 +70,7 @@ def vectorized_numpy_find(
     y: NDArray,
     last: bool = False,
 ) -> NDArray:
+    """Find the x-value where y(x) crosses v using linear interpolation; returns the first (or last) crossing."""
     xm = x.reshape(-1, x.shape[-1])
     ym = y.reshape(-1, y.shape[-1])
     flat_found = np.full((xm.shape[0], ), np.nan)

@@ -15,6 +15,7 @@ logger = logging.getLogger('fusio')
 
 
 def define_cocos(cocos_number: int) -> MutableMapping[str, int]:
+    """Return the sign/normalization dictionary for a given COCOS convention number."""
     # Default dictionary returns COCOS=1
     sign_dict = {
         'eBp': 0,   # Normalization of flux by 2 pi
@@ -39,6 +40,7 @@ def define_cocos(cocos_number: int) -> MutableMapping[str, int]:
 
 
 def define_cocos_converter(cocos_in: int, cocos_out: int) -> MutableMapping[str, int]:
+    """Compute the combined sign/factor dictionary needed to convert EQDSK fields from cocos_in to cocos_out."""
     in_dict = define_cocos(cocos_in)
     out_dict = define_cocos(cocos_out)
     for key in out_dict:
@@ -50,6 +52,7 @@ def define_cocos_converter(cocos_in: int, cocos_out: int) -> MutableMapping[str,
 
 
 def determine_cocos(sign_dict: MutableMapping[str, int]) -> int:
+    """Infer the integer COCOS number from a fully-populated sign dictionary."""
     cocos_number = 0  # Signifies unknown
     fcomplete = True
     for var in ['eBp', 'sBp', 'scyl', 'spol', 'srel']:
@@ -77,6 +80,7 @@ def determine_cocos(sign_dict: MutableMapping[str, int]) -> int:
 
 
 def detect_cocos(eqdsk: MutableMapping[str, Any]) -> int:
+    """Auto-detect the COCOS convention of an EQDSK dict by inspecting the signs of Ip, Bt, psi, and q."""
     sign_dict = {}
     sIp = int(np.sign(eqdsk['cpasma'])) if 'cpasma' in eqdsk else 0
     sBt = int(np.sign(eqdsk['bcentr'])) if 'bcentr' in eqdsk else 0
@@ -92,6 +96,7 @@ def detect_cocos(eqdsk: MutableMapping[str, Any]) -> int:
 
 
 def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int, bt_sign_out: int | None = None, ip_sign_out: int | None = None) -> MutableMapping[str, Any]:
+    """Apply a COCOS convention transformation to all fields in an EQDSK dict, optionally enforcing Bt/Ip sign."""
     out = {
         'nr': eqdsk.get('nr', None),
         'nz': eqdsk.get('nz', None),
@@ -146,6 +151,7 @@ def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int
 
 
 def trace_flux_surfaces(r: NDArray, z: NDArray, psi: NDArray, levels: NDArray, axis: Sequence[float] | None = None) -> MutableMapping[float, Any]:
+    """Trace closed flux-surface contours in (R, Z) at requested psi levels, keeping only the contour enclosing the axis."""
     check = Point(axis) if isinstance(axis, (list, tuple, np.ndarray)) else Point(np.mean(r), np.mean(z))
     cg_psi = contourpy.contour_generator(r, z, psi)
     contours = {}
@@ -162,7 +168,7 @@ def trace_flux_surfaces(r: NDArray, z: NDArray, psi: NDArray, levels: NDArray, a
 
 
 def calculate_mxh_coefficients(r: NDArray, z: NDArray, n: int = 5) -> Sequence[Sequence[float]]:
-
+    """Fit MXH (Miller eXtended Harmonic) Fourier cos/sin coefficients to a closed (R, Z) flux-surface contour."""
     z = np.roll(z, -np.argmax(r))
     r = np.roll(r, -np.argmax(r))
     if z[1] < z[0]: # reverses array so that theta increases
@@ -220,7 +226,7 @@ def calculate_mxh_coefficients(r: NDArray, z: NDArray, n: int = 5) -> Sequence[S
 
 
 def read_eqdsk(path: str | Path) -> MutableMapping[str, Any]:
-    ''' Read an eqdsk file '''
+    """Parse a G-EQDSK equilibrium file into a Python dict of scalars and arrays."""
 
     def _sep_eq_line(line, float_width=16, floats_per_line=5, sep=' '):
         ''' Split a eqdsk-style line and inserts seperator characters '''
@@ -306,7 +312,7 @@ def read_eqdsk(path: str | Path) -> MutableMapping[str, Any]:
 
 
 def write_eqdsk(data: MutableMapping[str, Any], path: str | Path) -> None:
-
+    """Write an EQDSK dict to a formatted G-EQDSK text file at the given path."""
     if isinstance(path, (str, Path)) and isinstance(data, dict):
         geqdsk_path = Path(path)
         if geqdsk_path.exists():
@@ -398,6 +404,7 @@ def write_eqdsk(data: MutableMapping[str, Any], path: str | Path) -> None:
 
 
 def convert_mxh_to_contour_megpy(r0: float, z0: float, r: float, kappa: float, cos_coeffs: NDArray, sin_coeffs: NDArray):
+    """Evaluate (R, Z, theta) contour points from MXH shape coefficients using the megpy FluxSurface representation."""
     shape_vector = [r0, z0, r, kappa]
     for i, (c, s) in enumerate(zip(cos_coeffs, sin_coeffs)):
         if i == 0:
@@ -409,6 +416,7 @@ def convert_mxh_to_contour_megpy(r0: float, z0: float, r: float, kappa: float, c
 
 
 def convert_contour_to_mxh_megpy(rc: NDArray, zc: NDArray): #, r0: float, z0: float):
+    """Fit MXH shape coefficients to a closed (R, Z) contour using the megpy FluxSurface optimizer."""
     fs = FluxSurface()
     fs.from_RZ(rc, zc)
     fs.n_harmonics = 6
@@ -427,6 +435,7 @@ def convert_contour_to_mxh_megpy(rc: NDArray, zc: NDArray): #, r0: float, z0: fl
 
 
 def trace_contour_with_megpy(rvec: NDArray, zvec: NDArray, psi: NDArray, level: float, rcheck: float, zcheck: float, boundary: bool = False):
+    """Trace a single closed flux-surface contour at a given psi level near (rcheck, zcheck) using megpy."""
     contour_out = {}
     check = [float(rcheck), float(zcheck)]
     loops = contour_tracer(
@@ -447,3 +456,103 @@ def trace_contour_with_megpy(rvec: NDArray, zvec: NDArray, psi: NDArray, level: 
         contour_out['rmin'] = loops['r']
     return contour_out
 
+
+def calculate_mxh_coefficients_from_eqdsk_dict(
+    eqdsk_data: MutableMapping[str, Any],
+    psivec: NDArray,
+    use_normalized_psi: bool = False,
+    trace_last: bool = True,
+    boundary_offset: float = 0.0,
+) -> MutableMapping[str, list[int | float]]:
+    mxh_data: dict[str, list[int| float]] = {
+        'rmaj': [],
+        'rmin': [],
+        'zmag': [],
+        'kappa': [],
+        'delta': [],
+        'zeta': [],
+        'sin3': [],
+        'sin4': [],
+        'sin5': [],
+        'sin6': [],
+        'cos0': [],
+        'cos1': [],
+        'cos2': [],
+        'cos3': [],
+        'cos4': [],
+        'cos5': [],
+        'cos6': [],
+        'fpol': [],
+    }
+    if isinstance(eqdsk_data, dict) and isinstance(psivec, np.ndarray):
+        faxis = False
+        psi_orig = copy.deepcopy(psivec)
+        psi_axis = eqdsk_data['simagx']
+        psi_boundary = eqdsk_data['sibdry']
+        if use_normalized_psi:
+            psi_span = psi_boundary - psi_axis
+            psivec = np.abs((psivec - psi_axis) / psi_span)
+            eqdsk_data['psi'] = np.abs((eqdsk_data['psi'] - psi_axis) / psi_span)
+            eqdsk_data['simagx'] = np.abs((psi_axis - psi_axis) / psi_span)
+            eqdsk_data['sibdry'] = np.abs((psi_boundary - psi_axis) / psi_span)
+        rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
+        zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
+        if np.isclose(eqdsk_data['psi'][0, 0], eqdsk_data['psi'][-1, -1]) and np.isclose(eqdsk_data['psi'][0, -1], eqdsk_data['psi'][-1, 0]):
+            if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[-1] < eqdsk_data['psi'][0, 0]:
+                psivec[-1] = eqdsk_data['psi'][0, 0] + 1.0e-6
+            elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[-1] > eqdsk_data['psi'][0, 0]:
+                psivec[-1] = eqdsk_data['psi'][0, 0] - 1.0e-6
+        if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[0] >= eqdsk_data['simagx']:
+            faxis = True
+            psivec[0] = eqdsk_data['simagx'] - 1.0e-6
+        elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[0] <= eqdsk_data['simagx']:
+            faxis = True
+            psivec[0] = eqdsk_data['simagx'] + 1.0e-6
+        if boundary_offset > 0.0 and trace_last:
+            psivec[-1] = eqdsk_data['sibdry'] - boundary_offset * (eqdsk_data['sibdry'] - eqdsk_data['simagx'])
+        rmesh, zmesh = np.meshgrid(rvec, zvec)
+        axis = [eqdsk_data['rmagx'], eqdsk_data['zmagx']]
+        fs = trace_flux_surfaces(rmesh, zmesh, eqdsk_data['psi'], psivec, axis=axis)
+        if not trace_last:
+            fs[float(psivec[-1])] = np.concatenate((np.atleast_2d(eqdsk_data['rbdry']).T, np.atleast_2d(eqdsk_data['zbdry']).T), axis=-1)
+        fpol_interp = None
+        if 'fpol' in eqdsk_data:
+            psi_eqdsk = np.linspace(psi_axis, psi_boundary, eqdsk_data['nr'])
+            sort_idx = np.argsort(psi_eqdsk)
+            fpol_interp = np.interp(psi_orig, psi_eqdsk[sort_idx], eqdsk_data['fpol'][sort_idx])
+        mxh = {psi: calculate_mxh_coefficients(c[:, 0], c[:, 1], n=6) for psi, c in fs.items()}
+        for i, psi in enumerate(psivec):
+            mxh_data['rmaj'].append(mxh[psi][2][0] if psi in mxh else np.nan)
+            mxh_data['rmin'].append(mxh[psi][2][1] if psi in mxh else np.nan)
+            mxh_data['zmag'].append(mxh[psi][2][2] if psi in mxh else np.nan)
+            mxh_data['kappa'].append(mxh[psi][2][3] if psi in mxh else np.nan)
+            mxh_data['delta'].append(np.sin(mxh[psi][1][1]) if psi in mxh else np.nan)
+            mxh_data['zeta'].append(-mxh[psi][1][2] if psi in mxh else np.nan)
+            mxh_data['sin3'].append(mxh[psi][1][3] if psi in mxh else np.nan)
+            mxh_data['sin4'].append(mxh[psi][1][4] if psi in mxh else np.nan)
+            mxh_data['sin5'].append(mxh[psi][1][5] if psi in mxh else np.nan)
+            mxh_data['sin6'].append(mxh[psi][1][6] if psi in mxh else np.nan)
+            mxh_data['cos0'].append(mxh[psi][0][0] if psi in mxh else np.nan)
+            mxh_data['cos1'].append(mxh[psi][0][1] if psi in mxh else np.nan)
+            mxh_data['cos2'].append(mxh[psi][0][2] if psi in mxh else np.nan)
+            mxh_data['cos3'].append(mxh[psi][0][3] if psi in mxh else np.nan)
+            mxh_data['cos4'].append(mxh[psi][0][4] if psi in mxh else np.nan)
+            mxh_data['cos5'].append(mxh[psi][0][5] if psi in mxh else np.nan)
+            mxh_data['cos6'].append(mxh[psi][0][6] if psi in mxh else np.nan)
+            mxh_data['fpol'].append(fpol_interp[i] if fpol_interp is not None else np.nan)
+        for key in mxh_data:
+            arr = np.array(mxh_data[key])
+            mask = np.isfinite(arr)
+            if not np.all(mask) and np.any(mask):
+                inner_idx = np.argmax(mask)
+                mask |= (np.arange(len(mask)) >= inner_idx)
+                if inner_idx > 0:
+                    if key == 'rmaj':
+                        arr[~mask] = eqdsk_data['rmagx'] + (psivec[~mask] - psivec[0]) * (arr[inner_idx] - eqdsk_data['rmagx']) / (psivec[inner_idx] - psivec[0])
+                    elif key == 'zmag':
+                        arr[~mask] = eqdsk_data['zmagx'] + (psivec[~mask] - psivec[0]) * (arr[inner_idx] - eqdsk_data['zmagx']) / (psivec[inner_idx] - psivec[0])
+                    else:
+                        arr[~mask] = arr[inner_idx] + (psivec[~mask] - psivec[inner_idx]) * (arr[inner_idx + 1] - arr[inner_idx]) / (psivec[inner_idx + 1] - psivec[inner_idx])
+                    for i in range(inner_idx):
+                        mxh_data[key][i] = arr.item(i)
+    return mxh_data

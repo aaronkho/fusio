@@ -1,6 +1,5 @@
 from .. import Version, __python_version_object__
 import importlib
-import copy
 import logging
 from pathlib import Path
 from typing import Any      # Available in Python 3.5+
@@ -12,6 +11,7 @@ if __python_version_object__ > Version("3.11"):
 else:
     from typing_extensions import Self
 from collections.abc import Mapping, Sequence, Iterable
+import numpy as np
 import xarray as xr
 
 logger = logging.getLogger('fusio')
@@ -109,6 +109,34 @@ class io():
         for key in data:
             self._tree['output'].attrs.pop(key, None)
 
+    def _get_input(self, key: str, dims: Optional[Sequence[str]] = None, default: Any = 0.0) -> xr.DataArray:
+        da = xr.DataArray()
+        if key in self._tree['input'].to_dataset().coords:
+            da = self._tree['input'].to_dataset()[key]
+        elif key in self._tree['input'].to_dataset().data_vars:
+            da = self._tree['input'].to_dataset()[key]
+        else:
+            coords: Mapping[str, Any] = {
+                k: self._tree['input'].to_dataset().coords[k].to_numpy() for k, v in dims.items() if k in self._tree['input'].to_dataset().coords
+            } if isinstance(dims, dict) else {}
+            value = np.full(tuple([coords[dim].size for dim in coords]), default)
+            da = xr.DataArray(value, coords=coords)
+        return da
+
+    def _get_output(self, key: str, dims: Optional[Sequence[str]] = None, default: Any = 0.0) -> xr.DataArray:
+        da = xr.DataArray()
+        if key in self._tree['output'].to_dataset().coords:
+            da = self._tree['output'].to_dataset()[key]
+        elif key in self._tree['output'].to_dataset().data_vars:
+            da = self._tree['output'].to_dataset()[key]
+        else:
+            coords: Mapping[str, Any] = {
+                k: self._tree['output'].to_dataset().coords[k].to_numpy() for k, v in dims.items() if k in self._tree['output'].to_dataset().coords
+            } if isinstance(dims, dict) else {}
+            value = np.full(tuple([coords[dim].size for dim in coords]), default)
+            da = xr.DataArray(value, coords=coords)
+        return da
+
     # These functions always assume data is placed on input side of target format
 
     def to(self, fmt: str, **kwargs: Any) -> Self:
@@ -150,22 +178,21 @@ class io():
             load_path = Path(path)
             if load_path.exists():
                 tree = xr.open_datatree(path)
-                root = tree.get('root')
-                if isinstance(root, xr.DataTree):
-                    fmt = root.to_dataset().attrs.get('class', 'unknown')
+                if isinstance(tree, xr.DataTree):
+                    fmt = tree.to_dataset().attrs.get('class', 'unknown')
                     try:
                         mod = importlib.import_module(f'fusio.classes.{fmt}')
                     except:
                         raise NotImplementedError(f'File contains data for {fmt} but this format is not yet implemented.')
                     newcls = getattr(mod, f'{fmt}_io')
                     newobj = newcls()
-                    newobj.input = tree.get('input')
-                    newobj.output = tree.get('output')
+                    newobj.input = tree['input'].to_dataset()
+                    newobj.output = tree['output'].to_dataset()
                     return newobj
                 else:
-                    logger.warning('Requested load path, {load_path}, contains data which is incompatible with fusio! Returning empty base class...')
+                    logger.warning(f'Requested load path, {load_path}, contains data which is incompatible with fusio! Returning empty base class...')
             else:
-                logger.warning('Requested load path, {load_path}, does not exist! Returning empty base class...')
+                logger.warning(f'Requested load path, {load_path}, does not exist! Returning empty base class...')
         else:
-            logger.warning('Invalid path argument given to load function! Returning empty base class...')
+            logger.warning(f'Invalid path argument given to load function! Returning empty base class...')
         return cls()

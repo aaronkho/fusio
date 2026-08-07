@@ -185,6 +185,46 @@ class plasma_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
+    def to_dict(
+        self,
+        side: str = 'output',
+        item: int = -1,
+    ) -> MutableMapping[str, Any]:
+        '''Flatten this object's native (SI-unit) fields into a plain dict.
+
+        Unlike gacode_io.to_dict(), this keeps plasma_io's own variable names,
+        units, and source/direction/ion resolution as-is -- no GACODE-convention
+        renaming, unit conversion, or source flattening. Callers that need a
+        GACODE-native dict should go through to("gacode").to_dict() instead.
+
+        Intended as a preprocessing step so downstream consumers (e.g. MITIM's
+        powerstate construction) can read plasma_io's derived-quantity pipeline
+        via simple dict indexing and apply their own sign/normalization
+        conventions where those differ from plasma_io's, rather than requiring
+        plasma_io itself to know about a consumer's conventions.
+
+        Does not call compute_derived_quantities() -- run that first if the
+        derived fields are needed in the result.
+
+        Args:
+            side: 'input' or 'output' dataset to flatten.
+            item: Index along the 'time' dimension to select (default -1, the
+                most recent time point, matching from_plasma()'s default
+                window). Ignored if the dataset has no 'time' dimension.
+
+        Returns:
+            A dict keyed by plasma_io's native variable names (both data
+            variables and coordinates), each mapped to its numpy array with
+            the 'time' dimension dropped.
+        '''
+        datadict: MutableMapping[str, Any] = {}
+        data = self.input if side == 'input' else self.output
+        ddata = data.isel(time=item, drop=True) if 'time' in data.dims else data
+        for key in ddata.variables:
+            datadict[f'{key}'] = ddata[f'{key}'].to_numpy()
+        return datadict
+
+
     def interpolate(
         self,
         v: float | NDArray,
@@ -350,6 +390,36 @@ class plasma_io(io):
                 self.update_output_data_vars(newvars)
 
 
+    def add_safety_factor_profile(
+        self,
+        q: ArrayLike,
+        r: ArrayLike,
+        base: str = 'poloidal',
+        side: str = 'input',
+    ) -> None:
+        data = self.input if side == 'input' else self.output
+        if 'magnetic_flux' in data:
+            newvars: MutableMapping[str, Any] = {}
+            root = 'poloidal' if base != 'toroidal' else 'toroidal'
+            fill = 'poloidal' if base == 'toroidal' else 'toroidal'
+            root_idx = self.directions.index(root)
+            fill_idx = self.directions.index(fill)
+            q_values = vectorized_numpy_interpolation(data['magnetic_flux'].sel(direction=root).to_numpy(), np.asarray(r), np.asarray(q), extrapolate=True)
+            newvars['safety_factor'] = (['time', 'radius'], q_values)
+            flux = data['magnetic_flux'].to_numpy()
+            if fill == 'toroidal':
+                flux[..., fill_idx] = vectorized_numpy_integration(q_values, flux[..., root_idx])
+            else:
+                flux[..., fill_idx] = vectorized_numpy_integration(1.0 / q_values, flux[..., root_idx])
+            newvars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
+            if side == 'input':
+                self.update_input_data_vars(newvars)
+            else:
+                self.update_output_data_vars(newvars)
+        else:
+            logger.error(f'No magnetic flux data found in {self.format} data! Aborting safety factor insertion...')
+
+
     def _compute_derived_coordinates(
         self,
         side: str = 'input',
@@ -384,9 +454,22 @@ class plasma_io(io):
             #contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
             contour_r = data['contour'].sel(grid='r')
             contour_z = data['contour'].sel(grid='z')
+            dr = (contour_r - data['r_geometric']).to_numpy()
+            dz = (contour_z - data['z_geometric']).to_numpy()
+            theta = np.unwrap(np.arctan2(dz, dr), axis=-1)
+            degenerate = np.all(np.isclose(dr, 0.0) & np.isclose(dz, 0.0), axis=-1)
+            if np.any(degenerate):  # Fill with uniformly spaced vector for magnetic axis
+                fallback = np.linspace(0.0, 2.0 * np.pi, theta.shape[-1])
+                theta = np.where(degenerate[..., None], fallback, theta)
+            drdtheta = vectorized_numpy_derivative(theta, contour_r.to_numpy())
+            dzdtheta = vectorized_numpy_derivative(theta, contour_z.to_numpy())
+            arc_length = trapezoid((drdtheta ** 2 + dzdtheta ** 2) ** 0.5, x=theta, axis=-1)
+            surf_area = 2.0 * np.pi * data['r_geometric'].to_numpy() * arc_length
             xs_area = trapezoid(contour_r, x=contour_z, axis=-1)
             vol = 2.0 * np.pi * data['r_geometric'].to_numpy() * xs_area
             volp = vectorized_numpy_derivative(data['r_minor'].to_numpy(), vol)
+            volp = np.where(np.isclose(data['r_minor'].to_numpy(), 0.0), 1.0e-8, volp)
+            newvars['surface_area'] = (['time', 'radius'], surf_area)
             newvars['cross_sectional_area'] = (['time', 'radius'], xs_area)
             newvars['volume'] = (['time', 'radius'], vol)
             newvars['dvolume_dr'] = (['time', 'radius'], volp)
@@ -416,7 +499,7 @@ class plasma_io(io):
             mass_ave = np.sum((data['mass_i'].isel(ion=main_species).to_numpy() * n_i_vol[..., -1] / np.expand_dims(np.sum(n_i_vol[..., -1], axis=1), axis=1)), axis=-1)
             mass_ref = data.get('mass_ref', xr.zeros_like(data['time']) + 2.0)
             length_ref = data.get('length_ref', xr.zeros_like(data['time']) + data['r_minor_lcfs'])
-            field_unit = vectorized_numpy_derivative(0.5 * data['r_minor'].to_numpy() ** 2, data['magnetic_flux'].sel(direction='toroidal').to_numpy() / (2.0 * np.pi))
+            field_unit = vectorized_numpy_derivative(0.5 * data['r_minor'].to_numpy() ** 2, data['magnetic_flux'].sel(direction='toroidal').to_numpy())
             safety_factor = vectorized_numpy_derivative(data['magnetic_flux'].sel(direction='toroidal').to_numpy(), data['magnetic_flux'].sel(direction='poloidal').to_numpy())
             safety_factor[..., 0] = 2.0 * safety_factor[..., 1] - safety_factor[..., 2]
             newvars['mass_ref'] = (['time'], mass_ref.to_numpy())
@@ -471,10 +554,25 @@ class plasma_io(io):
             r_norm = np.where(r_norm > 1.0, 1.0, np.where(r_norm < -1.0, -1.0, r_norm))
             z_norm = (contour_z - np.expand_dims(mxh_z0, axis=-1)) / np.expand_dims(mxh_kappa * mxh_r, axis=-1)
             z_norm = np.where(z_norm > 1.0, 1.0, np.where(z_norm < -1.0, -1.0, z_norm))
-            angle_r_norm = np.where(z_norm[..., :-1] < 0.0, 2.0 * np.pi - np.arccos(r_norm[..., :-1]), np.arccos(r_norm[..., :-1]))
+
+            def _arccos2pi(x):
+                idx = np.arange(x.shape[-1])
+                idxm1 = np.argmin(x, axis=-1)
+                theta = np.arccos(x)
+                return np.where(idx >= idxm1[..., None], 2.0 * np.pi - np.arccos(x), theta)
+
+            def _arcsin2pi(x):
+                idx = np.arange(x.shape[-1])
+                idx1 = np.argmax(x, axis=-1)
+                x_after_idx1 = np.where(idx >= idx1[..., None], x, np.inf)
+                idxm1 = np.argmin(x_after_idx1, axis=-1)
+                theta = np.arcsin(x)
+                theta = np.where((idx >= idx1[..., None]) & (idx < idxm1[..., None]), np.pi - np.arcsin(x), theta)
+                return np.where(idx >= idxm1[..., None], np.arcsin(x) + 2.0 * np.pi, theta)
+
+            angle_r_norm = _arccos2pi(r_norm[..., :-1])
             angle_r_norm = np.concatenate([angle_r_norm, np.expand_dims(angle_r_norm[..., 0], axis=-1) + 2.0 * np.pi], axis=-1)
-            angle_z_norm = np.where(r_norm[..., :-1] < 0.0, np.pi - np.arcsin(z_norm[..., :-1]), np.arcsin(z_norm[..., :-1]))
-            angle_z_norm = np.where(angle_z_norm < 0.0, 2.0 * np.pi + angle_z_norm, angle_z_norm)
+            angle_z_norm = _arcsin2pi(z_norm[..., :-1])
             angle_z_norm = np.concatenate([angle_z_norm, np.expand_dims(angle_z_norm[..., 0], axis=-1) + 2.0 * np.pi], axis=-1)
             mxh_sin = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
             mxh_cos = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
@@ -545,6 +643,8 @@ class plasma_io(io):
             #l_r = z_l * z_r + r_l * r_r
             #nsin = (r_r * r_t + z_r * z_t) / l_t
             c = 2.0 * np.pi * np.sum(l_t[:-1, ...] / (r[:-1, ...] * grad_r[:-1, ...]), axis=0)
+            # c_vol carries an extra factor of r in the sum relative to c
+            c_vol = 2.0 * np.pi * np.sum(r[:-1, ...] ** 2 * l_t[:-1, ...] / (r[:-1, ...] * grad_r[:-1, ...]), axis=0)
             f = 2.0 * np.pi * data['r_minor'].to_numpy() / (np.where(np.isclose(c, 0.0), 1.0, c) / float(n_theta - 1))
             f[..., 0] = 2.0 * f[..., 1] - f[..., 2]
             bt = np.expand_dims(f, axis=0) / r
@@ -557,7 +657,7 @@ class plasma_io(io):
             r_v = np.expand_dims((data['r_minor'] * data['r_geometric']).to_numpy(), axis=0)
             g_t = r * b * l_t / (np.where(np.isclose(r_v, 0.0), 1.0, r_v) * grad_r)
             g_t[..., 0] = 2.0 * g_t[..., 1] - g_t[..., 2]
-            newvars['mxh_dvolume_dr'] = (['time', 'radius'], 2.0 * np.pi * np.where(np.isfinite(c), c, 0.0) / float(n_theta - 1))
+            newvars['mxh_dvolume_dr'] = (['time', 'radius'], 2.0 * np.pi * np.where(np.isfinite(c_vol), c_vol, 0.0) / float(n_theta - 1))
             newvars['mxh_surface_area'] = (['time', 'radius'], 2.0 * np.pi * np.sum(l_t[:-1, ...] * r[:-1, ...], axis=0) * 2.0 * np.pi / float(n_theta - 1))
             #newvars['mxh_bt'] = (['n', 'rho'], bt[i1] + (bt[i2] - bt[i1]) * ztheta)
             denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1, ...] / b[:-1, ...], axis=0)
@@ -735,6 +835,8 @@ class plasma_io(io):
             newvars['auxiliary_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source=auxiliary_sources).sum('source').to_numpy())
             newvars['auxiliary_plus_heat_source_e'] = (['time', 'radius'], data['heat_source_e'].sel(source=auxiliary_plus_sources).sum('source').to_numpy())
             newvars['auxiliary_plus_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source=auxiliary_plus_sources).sum('source').to_numpy())
+            newvars['fusion_heat_source_e'] = (['time', 'radius'], data['heat_source_e'].sel(source='fusion', drop=True).to_numpy())
+            newvars['fusion_heat_source_i'] = (['time', 'radius', 'ion'], data['heat_source_i'].sel(source='fusion', drop=True).to_numpy())
             newvars['fusion_heat_source'] = (['time', 'radius'], (data['heat_source_e'].sel(source='fusion') + data['heat_source_i'].sel(source='fusion').sum('ion')).to_numpy())
 
             if side == 'output':
@@ -761,7 +863,7 @@ class plasma_io(io):
         if data is not None:
 
             line = vectorized_numpy_integration(np.ones_like(data['r_minor'].to_numpy()), data['r_minor'].to_numpy())
-            vol = vectorized_numpy_integration(data['mxh_dvolume_dr'].to_numpy(), data['r_minor'].to_numpy())
+            vol = vectorized_numpy_integration(data['dvolume_dr'].to_numpy(), data['r_minor'].to_numpy())
             newvars['line_average'] = (['time', 'radius'], line)
             newvars['volume_average'] = (['time', 'radius'], vol)
 
@@ -776,24 +878,24 @@ class plasma_io(io):
             newvars['concentration_i_line_average'] = (['time', 'ion'], density_i_line[..., -1] / np.expand_dims(np.sum(density_i_line, axis=1), axis=1)[..., -1])
 
             heat_source_e_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['heat_source_e'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1)
             ), axes=(0, 2, 1))
             heat_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
+                np.transpose((data['heat_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
                 np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 3, 1, 2))
             particle_source_e_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['particle_source_e'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['particle_source_e'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1)
             ), axes=(0, 2, 1))
             particle_source_e_conv_vol = 1.5 * self.constants['e_si'] * np.expand_dims(data['temperature_e'].to_numpy(), axis=-1) * particle_source_e_vol  # MW
             particle_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['particle_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
+                np.transpose((data['particle_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 3, 1)),
                 np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 3, 1, 2))
             momentum_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['momentum_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 3, 4, 1)),
+                np.transpose((data['momentum_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 3, 4, 1)),
                 np.repeat(np.expand_dims(np.repeat(np.expand_dims(np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['source']), axis=1), axis=1), len(data['direction']), axis=1), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 4, 1, 2, 3))
             newvars['heat_source_e_vol'] = (['time', 'radius', 'source'], heat_source_e_vol)
@@ -819,47 +921,55 @@ class plasma_io(io):
             #newvars["qratio_surf"] = qi / np.where(qe == 0.0, 1e-10, qe)  # to avoid division by zero
 
             ohmic_heat_source_vol = vectorized_numpy_integration(
-                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ohmic', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ohmic', drop=True) * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             wave_heat_source_vol = vectorized_numpy_integration(
-                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source=['electron_cyclotron', 'ion_cyclotron']).sum('source') * data['mxh_dvolume_dr']).to_numpy(),
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source=['electron_cyclotron', 'ion_cyclotron']).sum('source') * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             beam_heat_source_vol = vectorized_numpy_integration(
-                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='neutral_beam', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='neutral_beam', drop=True) * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             ionization_heat_source_vol = vectorized_numpy_integration(
-                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ionization', drop=True) * data['mxh_dvolume_dr']).to_numpy(),
+                ((data['heat_source_e'] + data['heat_source_i'].sum('ion')).sel(source='ionization', drop=True) * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             radiation_heat_source_vol = vectorized_numpy_integration(
-                (data['radiation_heat_source'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['radiation_heat_source'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             auxiliary_heat_source_e_vol = vectorized_numpy_integration(
-                (data['auxiliary_heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['auxiliary_heat_source_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             auxiliary_heat_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['auxiliary_heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['auxiliary_heat_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 2, 1))
             auxiliary_plus_heat_source_e_vol = vectorized_numpy_integration(
-                (data['auxiliary_plus_heat_source_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['auxiliary_plus_heat_source_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             auxiliary_plus_heat_source_i_vol = np.transpose(vectorized_numpy_integration(
-                np.transpose((data['auxiliary_plus_heat_source_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['auxiliary_plus_heat_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             ), axes=(0, 2, 1))
             fusion_heat_source_vol = vectorized_numpy_integration(
-                (data['fusion_heat_source'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['fusion_heat_source'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
+            fusion_heat_source_e_vol = vectorized_numpy_integration(
+                (data['fusion_heat_source_e'] * data['dvolume_dr']).to_numpy(),
+                data['r_minor'].to_numpy()
+            )
+            fusion_heat_source_i_vol = np.transpose(vectorized_numpy_integration(
+                np.transpose((data['fusion_heat_source_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
+            ), axes=(0, 2, 1))
             heat_exchange_ei_vol = vectorized_numpy_integration(
-                (data['heat_exchange_ei'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['heat_exchange_ei'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             newvars['ohmic_heat_source_vol'] = (['time', 'radius'], ohmic_heat_source_vol)
@@ -872,6 +982,8 @@ class plasma_io(io):
             newvars['auxiliary_plus_heat_source_e_vol'] = (['time', 'radius'], auxiliary_plus_heat_source_e_vol)
             newvars['auxiliary_plus_heat_source_i_vol'] = (['time', 'radius', 'ion'], auxiliary_plus_heat_source_i_vol)
             newvars['fusion_heat_source_vol'] = (['time', 'radius'], fusion_heat_source_vol)
+            newvars['fusion_heat_source_e_vol'] = (['time', 'radius'], fusion_heat_source_e_vol)
+            newvars['fusion_heat_source_i_vol'] = (['time', 'radius', 'ion'], fusion_heat_source_i_vol)
             newvars['heat_exchange_ei_vol'] = (['time', 'radius'], heat_exchange_ei_vol)
 
             heating_source_vol = ohmic_heat_source_vol + wave_heat_source_vol + beam_heat_source_vol + ionization_heat_source_vol + fusion_heat_source_vol
@@ -883,47 +995,47 @@ class plasma_io(io):
             newvars['fusion_gain'] = (['time'], ((5.0 * fusion_heat_source_vol)[..., -1] / (ohmic_heat_source_vol + wave_heat_source_vol + beam_heat_source_vol + ionization_heat_source_vol)[..., -1]))
 
             density_e_vol = vectorized_numpy_integration(
-                (data['density_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['density_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             temperature_e_vol = vectorized_numpy_integration(
-                (data['temperature_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['temperature_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             pressure_e_vol = vectorized_numpy_integration(
-                (data['pressure_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['pressure_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             energy_e_vol = vectorized_numpy_integration(
-                (1.5 * data['pressure_e'] * data['mxh_dvolume_dr']).to_numpy(),
+                (1.5 * data['pressure_e'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             density_i_vol = vectorized_numpy_integration(
-                np.transpose((data['density_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['density_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
             temperature_i_vol = vectorized_numpy_integration(
-                np.transpose((data['temperature_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['temperature_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
             pressure_i_vol = vectorized_numpy_integration(
-                np.transpose((data['pressure_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['pressure_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
             energy_i_vol = vectorized_numpy_integration(
-                np.transpose((1.5 * data['pressure_i'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((1.5 * data['pressure_i'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['ion']), axis=1)
             )
             density_thermal_i_vol = vectorized_numpy_integration(
-                (data['density_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['density_thermal_total_i'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             pressure_thermal_i_vol = vectorized_numpy_integration(
-                (data['pressure_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['pressure_thermal_total_i'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             energy_thermal_i_vol = vectorized_numpy_integration(
-                (1.5 * data['pressure_thermal_total_i'] * data['mxh_dvolume_dr']).to_numpy(),
+                (1.5 * data['pressure_thermal_total_i'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             newvars['density_e_volume_average'] = (['time'], density_e_vol[..., -1] / vol[..., -1])
@@ -998,15 +1110,15 @@ class plasma_io(io):
             newvars['temperature_peaking_off_axis_i'] = (['time', 'ion'], temperature_i_02 / (temperature_i_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1]))
 
             density_ratio_vol = vectorized_numpy_integration(
-                (data['density_ratio_main'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['density_ratio_main'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             temperature_ratio_vol = vectorized_numpy_integration(
-                (data['temperature_ratio_main'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['temperature_ratio_main'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             effective_charge_vol = vectorized_numpy_integration(
-                (data['effective_charge'] * data['mxh_dvolume_dr']).to_numpy(),
+                (data['effective_charge'] * data['dvolume_dr']).to_numpy(),
                 data['r_minor'].to_numpy()
             )
             newvars['density_ratio_vol'] = (['time'], density_ratio_vol[..., -1] / vol[..., -1])
@@ -1014,12 +1126,12 @@ class plasma_io(io):
             newvars['effective_charge_vol'] = (['time'], effective_charge_vol[..., -1] / vol[..., -1])
 
             #if 'mach' in data:
-            #    newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['mxh_dvolume_dr']).to_numpy(), data['r_minor'].to_numpy())[:, -1] / vol[:, -1])
+            #    newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['dvolume_dr']).to_numpy(), data['r_minor'].to_numpy())[:, -1] / vol[:, -1])
             newvars['pressure_total_vol_norm_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] / (data['field_axis'] ** 2)).to_numpy())
             newvars['beta_n_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] * 100.0 * data['r_minor_lcfs'] / (data['field_axis'] * data['current'])).to_numpy())  # pc
 
             field_squared_vol = vectorized_numpy_integration(
-                np.transpose((data['field_squared'] * data['mxh_dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((data['field_squared'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['r_minor'].to_numpy(), axis=1), len(data['field_direction']), axis=1)
             )
             newvars['field_squared_vol'] = (['time', 'field_direction'], field_squared_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
@@ -1202,11 +1314,11 @@ class plasma_io(io):
                 non_main_species = [i for i in range(len(main_species_mask)) if ~main_species_mask[i]]
                 density_main_old = self.output['density_i'].isel(ion=main_species)
                 density_main = self.output['density_e'] - (self.output['density_i'] * self.output['charge_i']).isel(ion=non_main_species).sum('ion')
-                density_main_new = density_main_old * density_main / density_main_old.sum('ion')
-                density_i = self.output['density_i']
+                density_main_new = (density_main_old * density_main / density_main_old.sum('ion')).to_numpy()
+                density_i = self.output['density_i'].to_numpy().copy()
                 for j, i in enumerate(main_species):
-                    density_i.loc[dict(ion=i)] = density_main_new.isel(ion=j).to_numpy()
-                data_vars['density_i'] = (['time', 'radius', 'ion'], density_i.to_numpy())
+                    density_i[..., i] = density_main_new[..., j]
+                data_vars['density_i'] = (list(self.output['density_i'].dims), density_i)
             else:
                 density_e = (self.output['density_i'] * self.output['charge_i']).sum('ion')
                 data_vars['density_e'] = (['time', 'radius'], density_e.to_numpy())
@@ -1218,11 +1330,11 @@ class plasma_io(io):
                 non_main_species = [i for i in range(len(main_species_mask)) if ~main_species_mask[i]]
                 density_main_old = self.input['density_i'].isel(ion=main_species)
                 density_main = self.input['density_e'] - (self.input['density_i'] * self.input['charge_i']).isel(ion=non_main_species).sum('ion')
-                density_main_new = density_main_old * density_main / density_main_old.sum('ion')
-                density_i = self.input['density_i']
+                density_main_new = (density_main_old * density_main / density_main_old.sum('ion')).to_numpy()
+                density_i = self.input['density_i'].to_numpy().copy()
                 for j, i in enumerate(main_species):
-                    density_i.loc[dict(ion=i)] = density_main_new.isel(ion=j).to_numpy()
-                data_vars['density_i'] = (['time', 'radius', 'ion'], density_i.to_numpy())
+                    density_i[..., i] = density_main_new[..., j]
+                data_vars['density_i'] = (list(self.input['density_i'].dims), density_i)
             else:
                 density_e = (self.input['density_i'] * self.input['charge_i']).sum('ion')
                 data_vars['density_e'] = (['time', 'radius'], density_e.to_numpy())
@@ -1233,18 +1345,91 @@ class plasma_io(io):
         self,
         side: str = 'input',
         enforce_quasineutrality: bool = True,
+        use_main_ion: bool = False,
     ) -> None:
-        # Enforcing quasineutrality removes corresponding electron density, as opposed to adding to thermal ion density
+        # Enforcing quasineutrality removes corresponding electron density, as opposed to adding
+        # to thermal ion density -- unless use_main_ion is set, which does the latter instead
         if side == 'output' and self.has_output and 'type_i' in self.output:
             thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
             self.output = self.output.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
             if enforce_quasineutrality:
-                self.enforce_quasineutrality(side='output')
+                self.enforce_quasineutrality(use_main_ion=use_main_ion, side='output')
         elif self.has_input and 'type_i' in self.input:
             thermal_mask = (self.input['type_i'].isin(['thermal'])).to_numpy().flatten()
             self.input = self.input.isel(ion=[i for i in range(len(thermal_mask)) if thermal_mask[i]])
             if enforce_quasineutrality:
-                self.enforce_quasineutrality(side='input')
+                self.enforce_quasineutrality(use_main_ion=use_main_ion, side='input')
+
+
+    def equalize_thermal_ion_temperatures(
+        self,
+        ref_ion: int = 0,
+        side: str = 'input',
+    ) -> None:
+        '''
+        Force every thermal ion species' temperature_i profile to equal the
+        reference ion's (ref_ion, default the first ion). A bookkeeping
+        convention for multi-ion-species representations, not new physics:
+        many downstream consumers assume/require a single ion temperature, so
+        when only one ion's Ti is independently predicted/modified the other
+        thermal species need to be kept in lockstep with it rather than left
+        stale. ref_ion's own profile is left untouched.
+        '''
+        data_vars: MutableMapping[str, Any] = {}
+        if side == 'output' and self.has_output and 'type_i' in self.output and 'temperature_i' in self.output:
+            thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
+            temperature_i = self.output['temperature_i'].to_numpy().copy()
+            ti_ref = temperature_i[..., ref_ion].copy()
+            for i in range(temperature_i.shape[-1]):
+                if thermal_mask[i] and i != ref_ion:
+                    temperature_i[..., i] = ti_ref
+            data_vars['temperature_i'] = (list(self.output['temperature_i'].dims), temperature_i)
+            self.update_output_data_vars(data_vars)
+        elif self.has_input and 'type_i' in self.input and 'temperature_i' in self.input:
+            thermal_mask = (self.input['type_i'].isin(['thermal'])).to_numpy().flatten()
+            temperature_i = self.input['temperature_i'].to_numpy().copy()
+            ti_ref = temperature_i[..., ref_ion].copy()
+            for i in range(temperature_i.shape[-1]):
+                if thermal_mask[i] and i != ref_ion:
+                    temperature_i[..., i] = ti_ref
+            data_vars['temperature_i'] = (list(self.input['temperature_i'].dims), temperature_i)
+            self.update_input_data_vars(data_vars)
+
+
+    def scale_thermal_ion_densities(
+        self,
+        scale_factor: float | NDArray,
+        side: str = 'input',
+        exclude_ion_indices: Sequence[int] | None = None,
+    ) -> None:
+        '''
+        Multiply every thermal ion species' density_i profile by the same
+        per-radius scale_factor (e.g. scale_factor = new_density_e /
+        old_density_e), to keep thermal-ion dilution fractions fixed when
+        density_e is updated independently. Species listed in
+        exclude_ion_indices are left untouched (e.g. an impurity species whose
+        density is itself being independently predicted/written elsewhere,
+        and whose value should not also be perturbed by this scaling).
+        '''
+        exclude = set(exclude_ion_indices) if exclude_ion_indices is not None else set()
+        scale_factor = np.asarray(scale_factor)
+        data_vars: MutableMapping[str, Any] = {}
+        if side == 'output' and self.has_output and 'type_i' in self.output and 'density_i' in self.output:
+            thermal_mask = (self.output['type_i'].isin(['thermal'])).to_numpy().flatten()
+            density_i = self.output['density_i'].to_numpy().copy()
+            for i in range(density_i.shape[-1]):
+                if thermal_mask[i] and i not in exclude:
+                    density_i[..., i] = density_i[..., i] * scale_factor
+            data_vars['density_i'] = (list(self.output['density_i'].dims), density_i)
+            self.update_output_data_vars(data_vars)
+        elif self.has_input and 'type_i' in self.input and 'density_i' in self.input:
+            thermal_mask = (self.input['type_i'].isin(['thermal'])).to_numpy().flatten()
+            density_i = self.input['density_i'].to_numpy().copy()
+            for i in range(density_i.shape[-1]):
+                if thermal_mask[i] and i not in exclude:
+                    density_i[..., i] = density_i[..., i] * scale_factor
+            data_vars['density_i'] = (list(self.input['density_i'].dims), density_i)
+            self.update_input_data_vars(data_vars)
 
 
     def lump_species(
@@ -1426,10 +1611,320 @@ class plasma_io(io):
 
 
     @classmethod
+    def from_imas(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[float] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+
+            data: xr.Dataset = obj.input if side == 'input' else obj.output
+            obj_cocos = obj.input_cocos if side == 'input' else obj.output_cocos  # type: ignore[attr-defined]
+            cp = 'core_profiles'
+            time_cp = f'{cp}.time'
+            prof_cp = f'{cp}.profiles_1d'
+            rho_cp_i = f'{prof_cp}.grid.rho_tor_norm:i'
+            rho_cp = f'{prof_cp}.grid.rho_tor_norm'
+            ion_cp_i = f'{prof_cp}.ion:i'
+            ion_cp = f'{prof_cp}.ion.label'
+            eq = 'equilibrium'
+            time_eq = f'{eq}.time'
+            ts_eq = f'{eq}.time_slice'
+            ts_eq_i = f'{ts_eq}:i'
+            prof_eq = f'{ts_eq}.profiles_1d'
+            psi_eq_i = f'{prof_eq}.psi:i'
+            psi_eq = f'{prof_eq}.psi'
+            rho_eq = f'{prof_eq}.rho_tor_norm'
+            cs = 'core_sources'
+            time_cs = f'{cs}.time'
+            src_cs_i = f'{cs}.source:i'
+            src_cs = f'{cs}.source.identifier.name'
+            prof_cs = f'{cs}.source.profiles_1d'
+            rho_cs_i = f'{prof_cs}.grid.rho_tor_norm:i'
+            rho_cs = f'{prof_cs}.grid.rho_tor_norm'
+            ion_cs_i = f'{prof_cs}.ion:i'
+            ion_cs = f'{prof_cs}.ion.label'
+            ikwargs = {'fill_value': 'extrapolate'}
+
+            cocos_out = 1   # Assumed plasma class has COCOS=1
+            if kwargs.get('jetto_style', False) and obj_cocos == 11:
+                cocos_out = 8
+            cocos = define_cocos_converter(obj_cocos, cocos_out)
+            transpose_equilibrium = kwargs.get('transpose_equilibrium', False)
+
+            dsvec = []
+
+            if time_cp in data.coords:
+
+                time_orig = data.get(time_cp, xr.DataArray()).to_numpy().flatten()
+                time_indices = [-1]
+                if window is not None and len(window) >= 2:
+                    indices = np.arange(len(time_orig)).astype(int)
+                    window_mask = (time_orig >= window[0]) & (time_orig <= window[-1])
+                    if np.any(window_mask):
+                        time_indices = indices[window_mask].tolist()
+                time = data[time_cp].isel({time_cp: time_indices})
+                for i, time_index in enumerate(time_indices):
+
+                    coords: MutableMapping[str, Any] = {}
+                    data_vars: MutableMapping[str, Any] = {}
+                    attrs: MutableMapping[str, Any] = {}
+
+                    if rho_cp_i in data.dims and rho_cp in data:
+                        data = data.isel({time_cp: time_index}).swap_dims({rho_cp_i: rho_cp}).drop_duplicates(rho_cp)
+                        if ion_cp_i in data.dims and ion_cp in data:
+                            data = data.swap_dims({ion_cp_i: ion_cp})
+                        coords['time'] = np.array([i], dtype=int)
+                        coords['radius'] = data[rho_cp].to_numpy().flatten()
+                        data_vars['mass_e'] = (['time'], np.atleast_1d([5.4488748e-04]))
+                        data_vars['charge_e'] = (['time'], np.atleast_1d([-1.0]))
+                        if ion_cp in data.coords:
+                            coords['ion'] = data[ion_cp].to_numpy().flatten()
+                            ni = None
+                            zi = None
+                            tag = 'core_profiles.profiles_1d.ion.density_thermal'
+                            if tag in data:
+                                types = []
+                                for name in coords['ion']:
+                                    types.extend(['thermal' if data[tag].sel({ion_cp: name}).sum() > 0.0 else 'fast'])
+                                ni = data[tag]
+                                data_vars['density_i'] = (['time', 'radius', 'ion'], np.expand_dims(ni.to_numpy().T, axis=0))
+                                data_vars['type'] = (['time', 'ion'], np.expand_dims(types, axis=0))
+                            tag = 'core_profiles.profiles_1d.ion.temperature'
+                            if tag in data:
+                                ti = data[tag]
+                                data_vars['temperature_i'] = (['time', 'radius', 'ion'], np.expand_dims(ti.to_numpy().T, axis=0))
+                            eltag = 'core_profiles.profiles_1d.ion.element:i'
+                            tag = 'core_profiles.profiles_1d.ion.element.a'
+                            if tag in data:
+                                data_vars['mass_i'] = (['time', 'ion'], np.expand_dims(data[tag].isel({eltag: 0}).to_numpy(), axis=0))
+                            tag = 'core_profiles.profiles_1d.ion.element.z_n'
+                            if tag in data:
+                                zi = data[tag].isel({eltag: 0})
+                                data_vars['atomic_number_i'] = (['time', 'ion'], np.expand_dims(zi.to_numpy(), axis=0))
+                            tag = 'core_profiles.profiles_1d.ion.z_ion_1d'
+                            if tag in data:
+                                zi = data[tag]
+                                data_vars['charge_i'] = (['time', 'radius', 'ion'], np.expand_dims(zi.to_numpy().T, axis=0))
+                            tag = 'core_profiles.profiles_1d.electrons.density_thermal'
+                            if tag in data and ni is not None and zi is not None:
+                                zeff = (ni * zi * zi).sum(ion_cp) / data[tag]
+                                data_vars['effective_charge'] = (['time', 'radius'], np.expand_dims(zeff.to_numpy(), axis=0))
+                        tag = 'core_profiles.profiles_1d.electrons.density_thermal'
+                        if tag in data:
+                            ne = data[tag]
+                            data_vars['density_e'] = (['time', 'radius'], np.expand_dims(ne.to_numpy(), axis=0))
+                        tag = 'core_profiles.profiles_1d.electrons.temperature'
+                        if tag in data:
+                            te = data[tag]
+                            data_vars['temperature_e'] = (['time', 'radius'], np.expand_dims(te.to_numpy(), axis=0))
+                        # tag = 'core_profiles.profiles_1d.pressure_thermal'
+                        tag = 'core_profiles.profiles_1d.q'
+                        if tag in data:
+                            data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * np.expand_dims(data[tag].to_numpy(), axis=0))
+                        tag = 'core_profiles.profiles_1d.j_ohmic'
+                        if tag in data:
+                            data_vars['johm'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
+                        tag = 'core_profiles.profiles_1d.j_bootstrap'
+                        if tag in data:
+                            data_vars['jbs'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
+                        #tag = 'core_profiles.profiles_1d.momentum_tor'
+                        tag = 'core_profiles.profiles_1d.ion.velocity.toroidal'
+                        if tag in data:
+                            data_vars['vtor'] = (['n', 'rho', 'name'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy().T, axis=0))
+                        tag = 'core_profiles.profiles_1d.ion.velocity.poloidal'
+                        if tag in data:
+                            data_vars['vpol'] = (['n', 'rho', 'name'], cocos['spol'] * np.expand_dims(data[tag].to_numpy().T, axis=0))
+                        tag = 'core_profiles.profiles_1d.rotation_frequency_tor_sonic'
+                        if tag in data:
+                            data_vars['rotation_frequency_sonic'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
+
+                    if time_eq in data.coords and psi_eq_i in data.dims and rho_eq in data and 'rho' in coords:
+                        data = data.interp({time_eq: time.item(i)}, kwargs=ikwargs) if data[time_eq].size > 1 else data.isel({time_eq: 0})
+                        data = data.swap_dims({psi_eq_i: rho_eq}).drop_duplicates(rho_eq)
+                        eqdsk_data = obj.to_eqdsk(time_index=time_index, side=side, transpose=transpose_equilibrium) if hasattr(obj, 'to_eqdsk') else {}
+                        rhovec = data.get(rho_eq, xr.DataArray()).to_numpy().flatten()
+                        psivec = None
+                        tag = 'equilibrium.time_slice.profiles_1d.psi'
+                        if tag in data:
+                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'psi': (['rho_int'], data[tag].to_numpy().flatten())})
+                            #data_vars['polflux'] = (['n', 'rho'], np.expand_dims(ndata['psi'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            psivec = data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy()
+                            data_vars['polflux'] = (['n', 'rho'], np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * np.expand_dims(psivec, axis=0))
+                            print(psivec[0], eqdsk_data['simagx'])
+                        tag = 'equilibrium.vacuum_toroidal_field.r0'
+                        if tag in data:
+                            data_vars['rcentr'] = (['n'], np.atleast_1d(data[tag].to_numpy()))
+                        tag = 'equilibrium.vacuum_toroidal_field.b0'
+                        if tag in data:
+                            data_vars['bcentr'] = (['n'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
+                        tag = 'equilibrium.time_slice.profiles_1d.pressure'
+                        if tag in data and 'ptot' not in data_vars:
+                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'pressure': (['rho_int'], data[tag].to_numpy().flatten())})
+                            #data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ndata['pressure'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['ptot'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        tag = 'equilibrium.time_slice.profiles_1d.q'
+                        if tag in data and 'q' not in data_vars:
+                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'q': (['rho_int'], data[tag].to_numpy().flatten())})
+                            #data_vars['q'] = (['n', 'rho'], np.expand_dims(ndata['q'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['q'] = (['n', 'rho'], cocos['spol'] * np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        tag = 'equilibrium.time_slice.global_quantities.ip'
+                        if tag in data:
+                            data_vars['current'] = (['n'], 1.0e-6 * cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
+                        itag = 'equilibrium.time_slice.profiles_1d.r_inboard'
+                        otag = 'equilibrium.time_slice.profiles_1d.r_outboard'
+                        if itag in data and otag in data and ('rmaj' not in data_vars or 'rmin' not in data_vars):
+                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={
+                            #    'r_inboard': (['rho_int'], data[itag].to_numpy().flatten()),
+                            #    'r_outboard': (['rho_int'], data[otag].to_numpy().flatten())
+                            #})
+                            #data_vars['rmin'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] - ndata['r_inboard'])).interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            #data_vars['rmaj'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] + ndata['r_inboard'])).interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['rmin'] = (['n', 'rho'], np.expand_dims((0.5 * (data[otag] - data[itag])).interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['rmaj'] = (['n', 'rho'], np.expand_dims((0.5 * (data[otag] + data[itag])).interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        #tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
+                        #if tag in data and 'zmag' not in data_vars:
+                        #    data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.repeat(data[tag].to_numpy().flatten(), len(coords['rho']), axis=0), axis=0))
+                        tag = 'equilibrium.time_slice.profiles_1d.elongation'
+                        if tag in data: # and 'kappa' not in data_vars:
+                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'elongation': (['rho_int'], data[tag].to_numpy().flatten())})
+                            #data_vars['kappa'] = (['n', 'rho'], np.expand_dims(ndata['elongation'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        #if 'equilibrium.time_slice.profiles_1d.triangularity_upper' in data or 'equilibrium.time_slice.profiles_1d.triangularity_lower' in data and 'delta' not in data_vars:
+                            #tri = np.zeros(data['rho(-)'].shape)
+                            #itri = 0
+                            #if hasattr(time_struct.profiles_1d, 'triangularity_upper'):
+                            #    tri += time_struct.profiles_1d.triangularity_upper.flatten()
+                            #    itri += 1
+                            #if hasattr(time_struct.profiles_1d, 'triangularity_lower') and len(time_struct.profiles_1d.triangularity_lower) == data['nexp']:
+                            #    tri += time_struct.profiles_1d.triangularity_lower.flatten()
+                            #    itri += 1
+                            #data['delta(-)'] = tri / float(itri) if itri > 0 else tri
+
+                    if time_cs in data.coords and src_cs_i in data.dims and src_cs in data and rho_cs_i in data.dims and rho_cs in data and 'rho' in coords:
+                        data = data.interp({time_cs: time.item(i)}, kwargs=ikwargs) if data[time_cs].size > 1 else data.isel({time_cs: 0})
+                        data = data.swap_dims({src_cs_i: src_cs})
+                        #if ion_cs_i in data.dims and ion_cs in data:
+                        #    data = data.swap_dims({ion_cs_i: ion_cs})
+                        srclist = data[src_cs].to_numpy().tolist()
+                        qrfe = np.zeros((len(coords['rho']), ))
+                        qrfi = np.zeros((len(coords['rho']), ))
+                        jrf = np.zeros((len(coords['rho']), ))
+                        swall = np.zeros((len(coords['rho']), ))
+                        tag = 'core_sources.source.profiles_1d.electrons.energy'
+                        if tag in data:
+                            srctag = 'ohmic'
+                            if srctag in srclist:
+                                data_vars['qohme'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'ec'
+                            if srctag in srclist:
+                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                            srctag = 'ic'
+                            if srctag in srclist:
+                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                            srctag = 'lh'
+                            if srctag in srclist:
+                                qrfe += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                            srctag = 'nbi'
+                            if srctag in srclist:
+                                data_vars['qbeame'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'synchrotron_radiation'
+                            if srctag in srclist:
+                                data_vars['qsync'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'radiation'
+                            if srctag in srclist:
+                                data_vars['qline'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'bremsstrahlung'
+                            if srctag in srclist:
+                                data_vars['qbrem'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'fusion'
+                            if srctag in srclist:
+                                data_vars['qfuse'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'collisional_equipartition'
+                            if srctag in srclist:
+                                data_vars['qei'] = (['n', 'rho'], -1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        if 'qbrem' not in data_vars:  # Why single this one out randomly?
+                            data_vars['qbrem'] = (['n', 'rho'], np.expand_dims(np.zeros_like(coords['rho']), axis=0))
+                        tag = 'core_sources.source.profiles_1d.total_ion_energy'
+                        if tag in data:
+                            srctag = 'ic'
+                            if srctag in srclist:
+                                qrfi += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                            srctag = 'lh'
+                            if srctag in srclist:
+                                qrfi += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                            srctag = 'nbi'
+                            if srctag in srclist:
+                                data_vars['qbeami'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'charge_exchange'
+                            if srctag in srclist:
+                                data_vars['qcxi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'fusion'
+                            if srctag in srclist:
+                                data_vars['qfusi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        tag = 'core_sources.source.profiles_1d.j_parallel'
+                        if tag in data:
+                            srctag = 'ohmic'
+                            if srctag in srclist and 'johm' not in data_vars:
+                                data_vars['johm'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            srctag = 'j_bootstrap'
+                            if srctag in srclist and 'jbs' not in data_vars:
+                                data_vars['jbs'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
+                            srctag = 'ec'
+                            if srctag in srclist:
+                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                            srctag = 'ic'
+                            if srctag in srclist:
+                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                            srctag = 'lh'
+                            if srctag in srclist:
+                                jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
+                            srctag = 'nbi'
+                            if srctag in srclist:
+                                data_vars['jnb'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        tag = 'core_sources.source.profiles_1d.ion.particles'
+                        if tag in data and ion_cs_i in data.dims:
+                            srctag = 'cold_neutrals'
+                            if srctag in srclist:
+                                swall += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy().flatten()
+                            srctag = 'pellet'
+                            if srctag in srclist:
+                                swall += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy().flatten()
+                            srctag = 'nbi'
+                            if srctag in srclist:
+                                data_vars['qpar_beam'] = (['n', 'rho'], np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).sum(ion_cs_i).to_numpy(), axis=0))
+                        tag = 'core_sources.source.profiles_1d.momentum_tor'
+                        if tag in data:
+                            srctag = 'nbi'
+                            if srctag in srclist:
+                                data_vars['qmom'] = (['n', 'rho'], cocos['scyl'] * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        if np.abs(qrfe).sum() > 0.0:
+                            data_vars['qrfe'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(qrfe, axis=0))
+                        if np.abs(qrfi).sum() > 0.0:
+                            data_vars['qrfi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(qrfi, axis=0))
+                        if np.abs(jrf).sum() > 0.0:
+                            data_vars['jrf'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * np.expand_dims(jrf, axis=0))
+                        if np.abs(swall).sum() > 0.0:
+                            data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(swall, axis=0))
+
+                    dsvec.append(xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs))
+
+            if len(dsvec) > 0:
+                newobj.input = xr.concat(dsvec, dim='n')
+
+        return newobj
+
+
+    @classmethod
     def from_gacode(
         cls,
         obj: io,
         side: str = 'output',
+        window: Sequence[int | float] | None = None,
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
@@ -1459,6 +1954,13 @@ class plasma_io(io):
             data_vars: MutableMapping[str, Any] = {}
             attrs: MutableMapping[str, Any] = {}
             if 'n' in data and 'rho' in data:
+                time = data['time'].to_numpy() if 'time' in data else np.arange(len(data['n']))
+                time_window_indices = data['n'].to_numpy().astype(int)
+                if window is not None and len(window) >= 2:
+                    window_mask = (time >= window[0]) & (time <= window[-1])
+                    if np.any(window_mask):
+                        time_window_indices = data['n'].to_numpy().astype(int)[window_mask]
+                data = data.sel(n=time_window_indices).drop_duplicates('n')  # Fine because data is a copy
                 coords['time'] = data['time'].to_numpy() if 'time' in data else np.arange(len(data['n']))
                 coords['radius'] = data['rho'].to_numpy()
                 attrs['radius'] = 'rho_tor_norm'
@@ -1518,8 +2020,8 @@ class plasma_io(io):
                         polflux = -polflux
                     flux[..., 1] = polflux
                 data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
-                if 'q' in data:
-                    data_vars['safety_factor'] = (['time', 'radius'], data['q'].to_numpy())
+                #if 'q' in data:
+                #    data_vars['safety_factor'] = (['time', 'radius'], data['q'].to_numpy())
                 if 'name' in data:
                     velocity = np.repeat(np.expand_dims(np.zeros((len(coords['time']), len(coords['radius']), len(coords['ion']))), axis=-1), len(coords['direction']), axis=-1)
                     if 'vtor' in data:
@@ -1641,6 +2143,8 @@ class plasma_io(io):
                     coords['grid'] = ['r', 'z']
                     data_vars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], np.stack([r_contour, z_contour], axis=2))
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+            if 'q' in data and 'polflux' in data:
+                newobj.add_safety_factor_profile(data['q'].to_numpy(), data['polflux'].to_numpy(), base='poloidal', side='input')
         return newobj
 
 
@@ -1719,3 +2223,21 @@ class plasma_io(io):
             fig.tight_layout()
             fig.savefig(savepath)
             plt.close(fig)
+
+
+    @classmethod
+    def from_torax(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[int | float] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input if side == 'input' else obj.output
+            coords: MutableMapping[str, Any] = {}
+            data_vars: MutableMapping[str, Any] = {}
+            attrs: MutableMapping[str, Any] = {}
+            newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+        return newobj

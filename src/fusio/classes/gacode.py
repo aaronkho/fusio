@@ -8,16 +8,22 @@ import numpy as np
 import xarray as xr
 
 import datetime
-from scipy.integrate import cumulative_simpson, trapezoid  # type: ignore[import-untyped]
+from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
 from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
     read_eqdsk,
     trace_flux_surfaces,
-    calculate_mxh_coefficients,
+    calculate_mxh_coefficients_from_eqdsk_dict,
     convert_mxh_to_contour_megpy,
     convert_contour_to_mxh_megpy,
+)
+from ..utils.math_tools import (
+    vectorized_numpy_derivative,
+    vectorized_numpy_integration,
+    vectorized_numpy_interpolation,
+    vectorized_numpy_find,
 )
 
 logger = logging.getLogger('fusio')
@@ -250,13 +256,7 @@ class gacode_io(io):
         data = self.input if side == 'input' else self.output
         if isinstance(path, (str, Path)) and 'polflux' in data:
             eqdsk_data = read_eqdsk(path)
-            psivec = data.isel(n=0)['polflux'].to_numpy().flatten()
-            if use_normalized_psi:
-                psivec = np.abs((psivec - psivec[0]) / (psivec[-1] - psivec[0]))
-                eqdsk_data['psi'] = np.abs((eqdsk_data['psi'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
-                eqdsk_data['simagx'] = np.abs((eqdsk_data['simagx'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
-                eqdsk_data['sibdry'] = np.abs((eqdsk_data['sibdry'] - eqdsk_data['simagx']) / (eqdsk_data['sibdry'] - eqdsk_data['simagx']))
-            mxh_data = self._calculate_geometry_from_eqdsk(eqdsk_data, psivec, boundary_offset=boundary_offset)
+            mxh_data = calculate_mxh_coefficients_from_eqdsk_dict(eqdsk_data, data.isel(n=0)['polflux'].to_numpy().flatten(), use_normalized_psi=use_normalized_psi, boundary_offset=boundary_offset)
             newvars = {}
             if overwrite or np.abs(data.get('rmaj', np.array([0.0]))).sum() == 0.0:
                 newvars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmaj']), axis=0))
@@ -292,12 +292,8 @@ class gacode_io(io):
                 newvars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos5']), axis=0))
             if overwrite or np.abs(data.get('shape_cos6', np.array([0.0]))).sum() == 0.0:
                 newvars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
-            if 'fpol' in eqdsk_data:
-                psi_eqdsk = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
-                polflux_gacode = data.isel(n=0)['polflux'].to_numpy().flatten()
-                sort_idx = np.argsort(psi_eqdsk)
-                fpol_interp = np.interp(polflux_gacode, psi_eqdsk[sort_idx], eqdsk_data['fpol'][sort_idx])
-                newvars['fpol'] = (['n', 'rho'], np.expand_dims(fpol_interp, axis=0))
+            if overwrite or np.abs(data.get('fpol', np.array([0.0]))).sum() == 0.0:
+                newvars['fpol'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['fpol']), axis=0))
             if newvars:
                 if side == 'input':
                     self.update_input_data_vars(newvars)
@@ -305,96 +301,11 @@ class gacode_io(io):
                     self.update_output_data_vars(newvars)
 
 
-    # This could probably be generalized and moved to eqdsk_tools
-    def _calculate_geometry_from_eqdsk(
-        self,
-        eqdsk_data: MutableMapping[str, Any],
-        psivec: ArrayLike,
-        trace_last: bool = True,
-        boundary_offset: float = 0.0,
-    ) -> MutableMapping[str, list[int | float]]:
-        mxh_data: dict[str, list[int| float]] = {
-            'rmaj': [],
-            'rmin': [],
-            'zmag': [],
-            'kappa': [],
-            'delta': [],
-            'zeta': [],
-            'sin3': [],
-            'sin4': [],
-            'sin5': [],
-            'sin6': [],
-            'cos0': [],
-            'cos1': [],
-            'cos2': [],
-            'cos3': [],
-            'cos4': [],
-            'cos5': [],
-            'cos6': [],
-        }
-        if isinstance(eqdsk_data, dict) and isinstance(psivec, np.ndarray):
-            faxis = False
-            rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
-            zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
-            if np.isclose(eqdsk_data['psi'][0, 0], eqdsk_data['psi'][-1, -1]) and np.isclose(eqdsk_data['psi'][0, -1], eqdsk_data['psi'][-1, 0]):
-                if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[-1] < eqdsk_data['psi'][0, 0]:
-                    psivec[-1] = eqdsk_data['psi'][0, 0] + 1.0e-6
-                elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[-1] > eqdsk_data['psi'][0, 0]:
-                    psivec[-1] = eqdsk_data['psi'][0, 0] - 1.0e-6
-            if eqdsk_data['simagx'] > eqdsk_data['sibdry'] and psivec[0] >= eqdsk_data['simagx']:
-                faxis = True
-                psivec[0] = eqdsk_data['simagx'] - 1.0e-6
-            elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[0] <= eqdsk_data['simagx']:
-                faxis = True
-                psivec[0] = eqdsk_data['simagx'] + 1.0e-6
-            if boundary_offset > 0.0 and trace_last:
-                psivec[-1] = eqdsk_data['sibdry'] - boundary_offset * (eqdsk_data['sibdry'] - eqdsk_data['simagx'])
-            rmesh, zmesh = np.meshgrid(rvec, zvec)
-            axis = [eqdsk_data['rmagx'], eqdsk_data['zmagx']]
-            fs = trace_flux_surfaces(rmesh, zmesh, eqdsk_data['psi'], psivec, axis=axis)
-            if not trace_last:
-                fs[float(psivec[-1])] = np.concatenate((np.atleast_2d(eqdsk_data['rbdry']).T, np.atleast_2d(eqdsk_data['zbdry']).T), axis=-1)
-            mxh = {psi: calculate_mxh_coefficients(c[:, 0], c[:, 1], n=6) for psi, c in fs.items()}
-            for psi in psivec:
-                mxh_data['rmaj'].append(mxh[psi][2][0] if psi in mxh else np.nan)
-                mxh_data['rmin'].append(mxh[psi][2][1] if psi in mxh else np.nan)
-                mxh_data['zmag'].append(mxh[psi][2][2] if psi in mxh else np.nan)
-                mxh_data['kappa'].append(mxh[psi][2][3] if psi in mxh else np.nan)
-                mxh_data['delta'].append(np.sin(mxh[psi][1][1]) if psi in mxh else np.nan)
-                mxh_data['zeta'].append(-mxh[psi][1][2] if psi in mxh else np.nan)
-                mxh_data['sin3'].append(mxh[psi][1][3] if psi in mxh else np.nan)
-                mxh_data['sin4'].append(mxh[psi][1][4] if psi in mxh else np.nan)
-                mxh_data['sin5'].append(mxh[psi][1][5] if psi in mxh else np.nan)
-                mxh_data['sin6'].append(mxh[psi][1][6] if psi in mxh else np.nan)
-                mxh_data['cos0'].append(mxh[psi][0][0] if psi in mxh else np.nan)
-                mxh_data['cos1'].append(mxh[psi][0][1] if psi in mxh else np.nan)
-                mxh_data['cos2'].append(mxh[psi][0][2] if psi in mxh else np.nan)
-                mxh_data['cos3'].append(mxh[psi][0][3] if psi in mxh else np.nan)
-                mxh_data['cos4'].append(mxh[psi][0][4] if psi in mxh else np.nan)
-                mxh_data['cos5'].append(mxh[psi][0][5] if psi in mxh else np.nan)
-                mxh_data['cos6'].append(mxh[psi][0][6] if psi in mxh else np.nan)
-            for key in mxh_data:
-                arr = np.array(mxh_data[key])
-                mask = np.isfinite(arr)
-                if not np.all(mask) and np.any(mask):
-                    inner_idx = np.argmax(mask)
-                    mask |= (np.arange(len(mask)) >= inner_idx)
-                    if inner_idx > 0:
-                        if key == 'rmaj':
-                            arr[~mask] = eqdsk_data['rmagx'] + (psivec[~mask] - psivec[0]) * (arr[inner_idx] - eqdsk_data['rmagx']) / (psivec[inner_idx] - psivec[0])
-                        elif key == 'zmag':
-                            arr[~mask] = eqdsk_data['zmagx'] + (psivec[~mask] - psivec[0]) * (arr[inner_idx] - eqdsk_data['zmagx']) / (psivec[inner_idx] - psivec[0])
-                        else:
-                            arr[~mask] = arr[inner_idx] + (psivec[~mask] - psivec[inner_idx]) * (arr[inner_idx + 1] - arr[inner_idx]) / (psivec[inner_idx + 1] - psivec[inner_idx])
-                        for i in range(inner_idx):
-                            mxh_data[key][i] = arr.item(i)
-        return mxh_data
-
-
     def _compute_derived_coordinates(
         self,
+        side: str = 'input',
     ) -> None:
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
         if 'rho' in data:
             if 'rmin' in data:
@@ -418,36 +329,26 @@ class gacode_io(io):
                 polfluxn = (data['polflux'] - data['polflux'].isel(rho=0)) / (data['polflux'].isel(rho=-1) - data['polflux'].isel(rho=0))
                 newvars['psi_pol_norm'] = (['n', 'rho'], polfluxn.to_numpy())
                 newvars['rho_pol'] = (['n', 'rho'], np.sqrt(polfluxn.to_numpy()))
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
     def _compute_derived_reference_quantities(
         self,
+        side: str = 'input',
     ) -> None:
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if x.shape[-1] > 2:
-                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
-                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
-                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
-                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
-                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
-                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif x.shape[-1] > 1:
-                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-            return deriv
         e_si = 1.60218e-19  # C
         u_si = 1.66054e-27  # kg
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars = {}
         if 'rho' in data:
             mref = data.get('mref', xr.zeros_like(data['n']) + 2.0).to_numpy()
             if 'mref' not in data:
                 newvars['mref'] = (['n'], mref)
             if 'rmin' in data and 'torflux' in data:
-                bunit = derivative(0.5 * data['rmin'].to_numpy() ** 2, data['torflux'].to_numpy() / (2.0 * np.pi))
+                bunit = vectorized_numpy_derivative(0.5 * data['rmin'].to_numpy() ** 2, data['torflux'].to_numpy() / (2.0 * np.pi))
                 newvars['b_unit'] = (['n', 'rho'], bunit)
             if 'te' in data:
                 newvars['c_s'] = (['n', 'rho'], (1.0e3 * e_si * data['te'].to_numpy() / (u_si * mref)) ** (0.5))
@@ -461,45 +362,35 @@ class gacode_io(io):
                 newvars['rgeo'] = (['n'], data['rcentr'].to_numpy())
             if 'bcentr' in data:
                 newvars['b_zero'] = (['n'], np.abs(data['bcentr'].to_numpy()))
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
     def _compute_derived_geometry(
         self,
+        side: str = 'input',
     ) -> None:
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if x.shape[-1] > 2:
-                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
-                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
-                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
-                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
-                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
-                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif x.shape[-1] > 1:
-                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-            return deriv
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
         if 'roa' in data:
             signb = 1.0
             n_rho = len(data['rho'])
             if 'kappa' in data:
-                s_v = (data['roa'] / data['kappa']).to_numpy() * derivative(data['roa'].to_numpy(), data['kappa'].to_numpy())
+                s_v = (data['roa'] / data['kappa']).to_numpy() * vectorized_numpy_derivative(data['roa'].to_numpy(), data['kappa'].to_numpy())
                 newvars['s_kappa'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             if 'delta' in data:
-                s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data['delta'].to_numpy())
+                s_v = data['roa'].to_numpy() * vectorized_numpy_derivative(data['roa'].to_numpy(), data['delta'].to_numpy())
                 newvars['s_delta'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             if 'zeta' in data:
-                s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data['zeta'].to_numpy())
+                s_v = data['roa'].to_numpy() * vectorized_numpy_derivative(data['roa'].to_numpy(), data['zeta'].to_numpy())
                 newvars['s_zeta'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             if 'rmaj' in data:
-                s_v = derivative(data['roa'].to_numpy(), data['rmaj'].to_numpy())
+                s_v = vectorized_numpy_derivative(data['roa'].to_numpy(), data['rmaj'].to_numpy())
                 newvars['drmajdr'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             if 'zmag' in data:
-                s_v = derivative(data['roa'].to_numpy(), data['zmag'].to_numpy())
+                s_v = vectorized_numpy_derivative(data['roa'].to_numpy(), data['zmag'].to_numpy())
                 newvars['dzmagdr'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             n_theta = 1001
             theta = np.expand_dims(np.expand_dims(np.linspace(-np.pi, np.pi, n_theta), axis=-1), axis=-1)
@@ -513,7 +404,7 @@ class gacode_io(io):
             a_tt = np.zeros_like(a)
             for i in range(7):
                 if f'shape_sin{i:d}' in data:
-                    s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data[f'shape_sin{i:d}'].to_numpy())
+                    s_v = data['roa'].to_numpy() * vectorized_numpy_derivative(data['roa'].to_numpy(), data[f'shape_sin{i:d}'].to_numpy())
                     newvars[f's_shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
                     a += np.expand_dims(data[f'shape_sin{i:d}'].to_numpy(), axis=0) * np.sin(float(i) * theta)
                     a_r += np.expand_dims(newvars[f's_shape_sin{i:d}'][-1], axis=0) * np.sin(float(i) * theta)
@@ -523,7 +414,7 @@ class gacode_io(io):
                     newvars[f'shape_sin{i:d}'] = (['n', 'rho'], np.zeros_like(data['kappa'].to_numpy()))
                 elif i == 1 and 'delta' in data:
                     s = np.arcsin(data['delta'].to_numpy())
-                    s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), np.where(np.isclose(s, 0.0), 0.0, s))
+                    s_v = data['roa'].to_numpy() * vectorized_numpy_derivative(data['roa'].to_numpy(), np.where(np.isclose(s, 0.0), 0.0, s))
                     newvars[f'shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s, 0.0), 0.0, s))
                     newvars[f's_shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
                     a += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * np.sin(float(i) * theta)
@@ -532,7 +423,7 @@ class gacode_io(io):
                     a_tt += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * float(-i * i) * np.sin(float(i) * theta)
                 elif i == 2 and 'zeta' in data:
                     s = -data['zeta'].to_numpy()
-                    s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), np.where(np.isclose(s, 0.0), 0.0, s))
+                    s_v = data['roa'].to_numpy() * vectorized_numpy_derivative(data['roa'].to_numpy(), np.where(np.isclose(s, 0.0), 0.0, s))
                     newvars[f'shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s, 0.0), 0.0, s))
                     newvars[f's_shape_sin{i:d}'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
                     a += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * np.sin(float(i) * theta)
@@ -540,7 +431,7 @@ class gacode_io(io):
                     a_t += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * float(i) * np.cos(float(i) * theta)
                     a_tt += np.expand_dims(newvars[f'shape_sin{i:d}'][-1], axis=0) * float(-i * i) * np.sin(float(i) * theta)
                 if f'shape_cos{i:d}' in data:
-                    s_v = data['roa'].to_numpy() * derivative(data['roa'].to_numpy(), data[f'shape_cos{i:d}'].to_numpy())
+                    s_v = data['roa'].to_numpy() * vectorized_numpy_derivative(data['roa'].to_numpy(), data[f'shape_cos{i:d}'].to_numpy())
                     newvars[f's_shape_cos{i:d}'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
                     a += np.expand_dims(data[f'shape_cos{i:d}'].to_numpy(), axis=0) * np.cos(float(i) * theta)
                     a_r += np.expand_dims(newvars[f's_shape_cos{i:d}'][-1], axis=0) * np.cos(float(i) * theta)
@@ -599,6 +490,8 @@ class gacode_io(io):
             newvars['geo_bt'] = (['n', 'rho'], bt[i1] + (bt[i2] - bt[i1]) * ztheta)
             denom = np.sum(np.where(np.isfinite(g_t), g_t, 0.0)[:-1] / b[:-1], axis=0)
             denom[..., 0] = 2.0 * denom[..., 1] - denom[..., 2]
+            #newvars['gradr_miller_debug'] = (['n', 'rho'], np.mean(grad_r, axis=0))
+            #newvars['bp_miller_debug'] = (['n', 'rho'], np.mean(bp, axis=0))
             newvars['gradr_miller'] = (['n', 'rho'], np.sum(grad_r[:-1] * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bp2_miller'] = (['n', 'rho'], np.sum(bp[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
             newvars['bt2_miller'] = (['n', 'rho'], np.sum(bt[:-1] ** 2 * g_t[:-1] / b[:-1], axis=0) / denom)
@@ -667,6 +560,7 @@ class gacode_io(io):
             newvars['gradr_miller'][1][..., 0] = 1.0
             newvars['r_surface'] = (['theta', 'n', 'rho'], r)
             newvars['z_surface'] = (['theta', 'n', 'rho'], z)
+            newvars['jac_surface'] = (['theta', 'n', 'rho'], j_r)
             newvars['surfxs'] = (['n', 'rho'], trapezoid(r, x=z, axis=0))
             newvars['r_out'] = (['n', 'rho'], np.nanmax(r, axis=0))
             newvars['r_in'] = (['n', 'rho'], np.nanmin(r, axis=0))
@@ -675,33 +569,40 @@ class gacode_io(io):
             bp = np.squeeze(np.take_along_axis(bp, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
             newvars['bt_out'] = (['n', 'rho'], np.where(np.isfinite(bt), bt, 0.0))
             newvars['bp_out'] = (['n', 'rho'], np.where(np.isfinite(bp), bp, 0.0))
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
     def _compute_average_mass(
         self,
+        side: str = 'input',
     ) -> None:
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
         if 'z' in data and 'mass' in data and 'ni' in data and 'volp_miller' in data:
             main_species_mask = (np.isclose(data['z'].to_numpy(), 1.0) & (data['type'].isin(['[therm]'])).to_numpy()).flatten()
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
-            n_i_vol = cumulative_simpson(
+            n_i_vol = vectorized_numpy_integration(
                 np.transpose((data['ni'].isel(name=main_species) * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(main_species), axis=1),
-                initial=0.0
+                np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(main_species), axis=1),
             )
             f_i_i_vol = n_i_vol[:, :, -1] / np.expand_dims(np.sum(n_i_vol[:, :, -1], axis=1), axis=1)
             mass_factor = data['mass'].isel(name=main_species).to_numpy()
             newvars['mass_i'] = (['n'], np.sum((f_i_i_vol * mass_factor), axis=1))
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
     def _compute_source_terms(
         self,
+        side: str = 'input',
     ) -> None:
 
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
 
         qe_terms = {
@@ -822,53 +723,18 @@ class gacode_io(io):
                 qalpha += qalpha_terms[var] * data[var].to_numpy()
         newvars['qalpha'] = (['n', 'rho'], qalpha)
 
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
     def _compute_extended_local_inputs(
-        self
+        self,
+        side: str = 'input',
     ) -> None:
 
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if x.shape[-1] > 2:
-                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
-                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
-                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
-                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
-                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
-                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif x.shape[-1] > 1:
-                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-            return deriv
-
-        def interpolate(v, x, y):
-            vm = np.array([v]) if isinstance(v, (float, int)) else copy.deepcopy(v)
-            xm = x.reshape(-1, x.shape[-1])
-            ym = y.reshape(-1, y.shape[-1])
-            if vm.shape[0] != xm.shape[0]:
-                vm = np.repeat(np.expand_dims(vm, axis=0), xm.shape[0], axis=0)
-            interp = np.zeros_like(vm)
-            for i in range(xm.shape[0]):
-                interp[i] = np.interp(vm[i], xm[i], ym[i])
-            interp = interp.reshape(*y.shape[:-1])
-            return interp
-
-        def find(v, x, y, last=False):
-            xm = x.reshape(-1, x.shape[-1])
-            ym = y.reshape(-1, y.shape[-1])
-            flat_found = np.full((xm.shape[0], ), np.nan)
-            for i in range(xm.shape[0]):
-                yidx = np.where(((ym[i] - v)[1:] * (ym[i] - v)[:-1]) < 0.0)[0]
-                if len(yidx) > 0:
-                    yi = yidx[-1] if last else yidx[0]
-                    flat_found[i] = (v - ym[i, yi]) * (xm[i, yi + 1] - xm[i, yi]) / (ym[i, yi + 1] - ym[i, yi])
-            found = flat_found.reshape(*y.shape[:-1])
-            return found
-
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
 
         e_si = 1.60218e-19
@@ -892,21 +758,21 @@ class gacode_io(io):
         if 'qmom' not in data:
             newvars['qmom'] = (['n', 'rho'], np.repeat(np.expand_dims(np.zeros_like(data['rho'].to_numpy()), axis=0), len(data['n']), axis=0))
         if 'kappa' in data:
-            newvars['kappa95'] = (['n'], interpolate(0.95, data['psi_pol_norm'].to_numpy(), data['kappa'].to_numpy()))
-            newvars['kappa995'] = (['n'], interpolate(0.995, data['psi_pol_norm'].to_numpy(), data['kappa'].to_numpy()))
+            newvars['kappa95'] = (['n'], vectorized_numpy_interpolation(0.95, data['psi_pol_norm'].to_numpy(), data['kappa'].to_numpy()))
+            newvars['kappa995'] = (['n'], vectorized_numpy_interpolation(0.995, data['psi_pol_norm'].to_numpy(), data['kappa'].to_numpy()))
             #newvars['kappa_a'] = (['n'], (data['surfXS'].isel(-1) / np.pi / data['a'] ** 2).to_numpy())
         if 'shape_sin0' not in data:
             newvars['shape_sin0'] = (['n', 'rho'], np.repeat(np.expand_dims(np.zeros_like(data['rho'].to_numpy()), axis=0), len(data['n']), axis=0))
         if 'delta' in data:
             newvars['shape_sin1'] = (['n', 'rho'], np.arcsin(data['delta'].to_numpy()))
-            newvars['delta95'] = (['n'], interpolate(0.95, data['psi_pol_norm'].to_numpy(), data['delta'].to_numpy()))
-            newvars['delta995'] = (['n'], interpolate(0.995, data['psi_pol_norm'].to_numpy(), data['delta'].to_numpy()))
+            newvars['delta95'] = (['n'], vectorized_numpy_interpolation(0.95, data['psi_pol_norm'].to_numpy(), data['delta'].to_numpy()))
+            newvars['delta995'] = (['n'], vectorized_numpy_interpolation(0.995, data['psi_pol_norm'].to_numpy(), data['delta'].to_numpy()))
         if 'zeta' in data:
             newvars['shape_sin2'] = (['n', 'rho'], -1.0 * data['zeta'].to_numpy())
         if 'q' in data and 'psi_pol_norm' in data:
-            newvars['q0'] = (['n'], interpolate(0.0, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy()))
-            newvars['q95'] = (['n'], interpolate(0.95, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy()))
-            newvars['rho_saw'] = (['n'], find(1.0, data['rho_tor'].to_numpy(), data['q'].to_numpy(), last=True))
+            newvars['q0'] = (['n'], vectorized_numpy_interpolation(0.0, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy()))
+            newvars['q95'] = (['n'], vectorized_numpy_interpolation(0.95, data['psi_pol_norm'].to_numpy(), data['q'].to_numpy()))
+            newvars['rho_saw'] = (['n'], vectorized_numpy_find(1.0, data['rho_tor'].to_numpy(), data['q'].to_numpy(), last=True))
         if 'rho_s_unit' in data and 'c_s' in data:
             newvars['gammae_gb'] = (['n', 'rho'], (data['ne'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
             newvars['gammai_gb'] = (['n', 'rho', 'name'], (data['ni'] * data['c_s'] * (data['rho_s_unit'] / data['a']) ** 2).to_numpy())
@@ -924,15 +790,15 @@ class gacode_io(io):
             newvars['surf_gacode'] = (['n', 'rho'], np.where(np.isfinite(surf), surf, 0.0))
         if 'q' in data:
             norm = (data['rmin'] / data['q']).to_numpy()
-            newvars['s'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), data['q'].to_numpy()))
-            newvars['dqdr'] = (['n', 'rho'], derivative(data['rmin'].to_numpy(), data['q'].to_numpy()))
+            newvars['s'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['rmin'].to_numpy(), data['q'].to_numpy()))
+            newvars['dqdr'] = (['n', 'rho'], vectorized_numpy_derivative(data['rmin'].to_numpy(), data['q'].to_numpy()))
         if 'bp2_miller' in data and 'b_unit' in data:
             newvars['bp2'] = (['n', 'rho'], (data['bp2_miller'] * data['b_unit'] ** 2).to_numpy())
         if 'bt2_miller' in data and 'b_unit' in data:
             newvars['bt2'] = (['n', 'rho'], (data['bt2_miller'] * data['b_unit'] ** 2).to_numpy())
         if 'te' in data:
             norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
-            newvars['alte'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['te'].to_numpy())))
+            newvars['alte'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['rmin'].to_numpy(), -np.log(data['te'].to_numpy())))
             if 'masse' in data:
                 v_e_th = (2.0 * (data['te'] * 1.0e3 * e_si) / (data['masse'] * u_si)) ** 0.5  # m/s
                 newvars['v_e_th'] = (['n', 'rho'], v_e_th.to_numpy())
@@ -941,7 +807,7 @@ class gacode_io(io):
                 newvars['v_s'] = (['n', 'rho'], v_s.to_numpy())
         if 'ti' in data:
             norm = np.expand_dims(np.expand_dims(data['a'].to_numpy(), axis=-1), axis=-1)
-            newvars['alti'] = (['n', 'rho', 'name'], np.transpose(norm * derivative(np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), -np.log(np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1)))), axes=(0, 2, 1)))
+            newvars['alti'] = (['n', 'rho', 'name'], np.transpose(norm * vectorized_numpy_derivative(np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), -np.log(np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1)))), axes=(0, 2, 1)))
             if 'te' in data:
                 newvars['tite'] = (['n', 'rho', 'name'], (data['ti'] / data['te']).to_numpy())
             if 'mass_i' in data:
@@ -949,10 +815,10 @@ class gacode_io(io):
                 newvars['v_i_th'] = (['n', 'rho', 'name'], v_i_th.to_numpy())
         if 'ne' in data:
             norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
-            newvars['alne'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['ne'].to_numpy())))
+            newvars['alne'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['rmin'].to_numpy(), -np.log(data['ne'].to_numpy())))
         if 'ni' in data:
             norm = np.expand_dims(np.expand_dims(data['a'].to_numpy(), axis=-1), axis=-1)
-            newvars['alni'] = (['n', 'rho', 'name'], np.transpose(norm * derivative(np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), -np.log(np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1)))), axes=(0, 2, 1)))
+            newvars['alni'] = (['n', 'rho', 'name'], np.transpose(norm * vectorized_numpy_derivative(np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), -np.log(np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1)))), axes=(0, 2, 1)))
             if 'ne' in data:
                 newvars['nine'] = (['n', 'rho', 'name'], (data['ni'] / data['ne']).to_numpy())
                 zeff = (data['ni'] * data['z'] ** 2 / data['ne']).sum('name')
@@ -968,38 +834,28 @@ class gacode_io(io):
             newvars['debye_i_norm'] = (['n', 'rho', 'name'], (debye_i / data['rho_s_unit']).to_numpy())
         if 'omega0' in data:
             norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
-            newvars['alw0'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['omega0'].to_numpy())))
-            newvars['dw0dr'] = (['n', 'rho'], -1.0 * derivative(data['rmin'].to_numpy(), data['omega0'].to_numpy()))
+            newvars['alw0'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['rmin'].to_numpy(), -np.log(data['omega0'].to_numpy())))
+            newvars['dw0dr'] = (['n', 'rho'], -1.0 * vectorized_numpy_derivative(data['rmin'].to_numpy(), data['omega0'].to_numpy()))
             if 'r_out' in data:
                 newvars['mach'] = (['n', 'rho'], (data['omega0'] * data['r_out']).to_numpy() / newvars['v_s'][-1])
         elif 'w0' in data:
             norm = np.expand_dims(data['a'].to_numpy(), axis=-1)
-            newvars['alw0'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -np.log(data['w0'].to_numpy())))
-            newvars['dw0dr'] = (['n', 'rho'], -1.0 * derivative(data['rmin'].to_numpy(), data['w0'].to_numpy()))
+            newvars['alw0'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['rmin'].to_numpy(), -np.log(data['w0'].to_numpy())))
+            newvars['dw0dr'] = (['n', 'rho'], -1.0 * vectorized_numpy_derivative(data['rmin'].to_numpy(), data['w0'].to_numpy()))
             if 'r_out' in data:
                 newvars['mach'] = (['n', 'rho'], (data['w0'] * data['r_out']).to_numpy() / newvars['v_s'][-1])
 
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
     def _compute_secondary_quantities(
-        self
+        self,
+        side: str = 'input',
     ) -> None:
-        def derivative(x, y):
-            deriv = np.zeros_like(x)
-            if x.shape[-1] > 2:
-                x1 = np.concatenate([np.expand_dims(x[..., 0], axis=-1), x[..., :-2], np.expand_dims(x[..., -3], axis=-1)], axis=-1)
-                x2 = np.concatenate([np.expand_dims(x[..., 1], axis=-1), x[..., 1:-1], np.expand_dims(x[..., -2], axis=-1)], axis=-1)
-                x3 = np.concatenate([np.expand_dims(x[..., 2], axis=-1), x[..., 2:], np.expand_dims(x[..., -1], axis=-1)], axis=-1)
-                y1 = np.concatenate([np.expand_dims(y[..., 0], axis=-1), y[..., :-2], np.expand_dims(y[..., -3], axis=-1)], axis=-1)
-                y2 = np.concatenate([np.expand_dims(y[..., 1], axis=-1), y[..., 1:-1], np.expand_dims(y[..., -2], axis=-1)], axis=-1)
-                y3 = np.concatenate([np.expand_dims(y[..., 2], axis=-1), y[..., 2:], np.expand_dims(y[..., -1], axis=-1)], axis=-1)
-                deriv = ((x - x1) + (x - x2)) / (x3 - x1) / (x3 - x2) * y3 + ((x - x1) + (x - x3)) / (x2 - x1) / (x2 - x3) * y2 + ((x - x2) + (x - x3)) / (x1 - x2) / (x1 - x3) * y1
-            elif x.shape[-1] > 1:
-                deriv[..., 0] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-                deriv[..., 1] = np.diff(y, axis=-1) / np.diff(x, axis=-1)
-            return deriv
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
         e_si = 1.60218e-19
         u_si = 1.66054e-27
@@ -1026,11 +882,11 @@ class gacode_io(io):
                 newvars['machpar'] = (['n', 'rho'], newvars['vpar'][-1] / data['c_s'].to_numpy())
                 if 'a' in data:
                     norm = (data['a'] / data['c_s']).to_numpy()
-                    newvars['alvperp'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vperp'][-1]))
-                    newvars['alvpar'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vpar'][-1]))
+                    newvars['alvperp'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['rmin'].to_numpy(), -newvars['vperp'][-1]))
+                    newvars['alvpar'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['rmin'].to_numpy(), -newvars['vpar'][-1]))
             if 'rmin' in data and 'q' in data:
                 norm = (data['rmin'] / data['q']).to_numpy()
-                newvars['gamma_exb'] = (['n', 'rho'], norm * derivative(data['rmin'].to_numpy(), -newvars['vperp'][-1] / np.where(np.isclose(norm, 0.0), 1.0e-4, norm)))
+                newvars['gamma_exb'] = (['n', 'rho'], norm * vectorized_numpy_derivative(data['rmin'].to_numpy(), -newvars['vperp'][-1] / np.where(np.isclose(norm, 0.0), 1.0e-4, norm)))
                 if 'c_s' in data and 'a' in data:
                     newvars['gamma_exb_norm'] = (['n', 'rho'], newvars['gamma_exb'][-1] * (data['a'] / data['c_s']).to_numpy())
         if 'pressure_e' in data and 'bp2' in data and 'bt2' in data:
@@ -1059,33 +915,26 @@ class gacode_io(io):
                 newvars['nu_ee_norm'] = (['n', 'rho'], (f_ee * f_nu * data['a'] / data['c_s']).to_numpy())
                 newvars['nu_ei_norm'] = (['n', 'rho'], (f_ei * f_nu * data['a'] / data['c_s']).sum('name').to_numpy())
                 newvars['nu_ii_norm'] = (['n', 'rho', 'name'], (f_ii * f_nu * data['a'] / data['c_s']).to_numpy())
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
-    def _compute_integrated_quantities(self):
+    def _compute_integrated_quantities(
+        self,
+        side: str = 'input',
+    ) -> None:
 
-        def interpolate(v, x, y):
-            vm = np.array([v]) if isinstance(v, (float, int)) else copy.deepcopy(v)
-            xm = x.reshape(-1, x.shape[-1])
-            ym = y.reshape(-1, y.shape[-1])
-            if vm.shape[0] != xm.shape[0]:
-                vm = np.repeat(np.expand_dims(vm, axis=0), xm.shape[0], axis=0)
-            interp = np.zeros_like(vm)
-            for i in range(xm.shape[0]):
-                interp[i] = np.interp(vm[i], xm[i], ym[i])
-            interp = interp.reshape(*y.shape[:-1])
-            return interp
-
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
 
         if 'rmin' in data:
-            line = cumulative_simpson(np.ones_like(data['rmin'].to_numpy()), x=data['rmin'].to_numpy(), initial=0.0)
-            n_e_line = cumulative_simpson((data['ne']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            n_i_line = cumulative_simpson(
+            line = vectorized_numpy_integration(np.ones_like(data['rmin'].to_numpy()), data['rmin'].to_numpy())
+            n_e_line = vectorized_numpy_integration((data['ne']).to_numpy(), data['rmin'].to_numpy())
+            n_i_line = vectorized_numpy_integration(
                 np.transpose((data['ni']).to_numpy(), axes=(0, 2, 1)),
                 x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
             )
             newvars['n_e_line'] = (['n'], n_e_line[:, -1] / line[:, -1])
             newvars['n_i_line'] = (['n', 'name'], n_i_line[:, :, -1] / np.expand_dims(line, axis=1)[:, :, -1])
@@ -1093,11 +942,11 @@ class gacode_io(io):
 
         if 'rmin' in data and 'volp_miller' in data:
 
-            pe = cumulative_simpson((data['qe'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            pi = cumulative_simpson((data['qi'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            se = cumulative_simpson((data['ge'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
+            pe = vectorized_numpy_integration((data['qe'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            pi = vectorized_numpy_integration((data['qi'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            se = vectorized_numpy_integration((data['ge'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             pce = 1.5 * 1.0e-3 * 1.60218e-19 * data['te'].to_numpy() * se  # MW
-            mt = cumulative_simpson((data['qmom'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
+            mt = vectorized_numpy_integration((data['qmom'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             newvars['pe'] = (['n', 'rho'], pe)
             newvars['pi'] = (['n', 'rho'], pi)
             newvars['se'] = (['n', 'rho'], se)
@@ -1116,24 +965,24 @@ class gacode_io(io):
                 newvars['tt_surf'] = (['n', 'rho'], np.where(np.isclose(surf, 0.0), 0.0, mt * inv_surf))
                 #newvars["qratio_surf"] = qi / np.where(qe == 0.0, 1e-10, qe)  # to avoid division by zero
 
-            pe_aux = cumulative_simpson((data['qe_aux_ion'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            pi_aux = cumulative_simpson((data['qi_aux_ion'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            palpha = cumulative_simpson((data['qalpha'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            prad = cumulative_simpson((data['qrad'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            newvars['pe_aux'] = (['n', 'rho'], cumulative_simpson((data['qe_aux'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['pi_aux'] = (['n', 'rho'], cumulative_simpson((data['qi_aux'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
+            pe_aux = vectorized_numpy_integration((data['qe_aux_ion'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            pi_aux = vectorized_numpy_integration((data['qi_aux_ion'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            palpha = vectorized_numpy_integration((data['qalpha'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            prad = vectorized_numpy_integration((data['qrad'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            newvars['pe_aux'] = (['n', 'rho'], vectorized_numpy_integration((data['qe_aux'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy()))
+            newvars['pi_aux'] = (['n', 'rho'], vectorized_numpy_integration((data['qi_aux'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy()))
             newvars['pe_aux_ion'] = (['n', 'rho'], pe_aux)
             newvars['pi_aux_ion'] = (['n', 'rho'], pi_aux)
-            newvars['pohm'] = (['n', 'rho'], cumulative_simpson((data['qohme'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['prf'] = (['n', 'rho'], cumulative_simpson((data['qrf'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['pbeam'] = (['n', 'rho'], cumulative_simpson((data['qbeam'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
-            newvars['pion'] = (['n', 'rho'], cumulative_simpson((data['qion'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
+            newvars['pohm'] = (['n', 'rho'], vectorized_numpy_integration((data['qohme'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy()))
+            newvars['prf'] = (['n', 'rho'], vectorized_numpy_integration((data['qrf'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy()))
+            newvars['pbeam'] = (['n', 'rho'], vectorized_numpy_integration((data['qbeam'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy()))
+            newvars['pion'] = (['n', 'rho'], vectorized_numpy_integration((data['qion'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy()))
             newvars['palpha'] = (['n', 'rho'], palpha)
             newvars['prad'] = (['n', 'rho'], prad)
             newvars['ptr'] = (['n', 'rho'], pe_aux + pi_aux + palpha + prad)
 
             if 'qei' in data:
-                newvars['pei'] = (['n', 'rho'], cumulative_simpson((data['qei'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0))
+                newvars['pei'] = (['n', 'rho'], vectorized_numpy_integration((data['qei'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy()))
             newvars['p_rad'] = (['n'], prad[:, -1])
             newvars['p_fus'] = (['n'], 5.0 * palpha[:, -1])
             newvars['p_in'] = (['n'], (pe_aux + pi_aux)[:, -1])
@@ -1141,34 +990,30 @@ class gacode_io(io):
             newvars['p_heat'] = (['n'], (pe_aux + pi_aux + palpha)[:, -1])
             newvars['p_sol'] = (['n'], (pe_aux + pi_aux + palpha - prad)[:, -1])
 
-            vol = cumulative_simpson(data['volp_miller'].to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            n_e_vol = cumulative_simpson((data['ne'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            t_e_vol = cumulative_simpson((data['te'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            p_e_vol = cumulative_simpson((data['pressure_e'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            w_e_vol = cumulative_simpson((1.5 * data['pressure_e'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            n_i_vol = cumulative_simpson(
+            vol = vectorized_numpy_integration(data['volp_miller'].to_numpy(), data['rmin'].to_numpy())
+            n_e_vol = vectorized_numpy_integration((data['ne'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            t_e_vol = vectorized_numpy_integration((data['te'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            p_e_vol = vectorized_numpy_integration((data['pressure_e'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            w_e_vol = vectorized_numpy_integration((1.5 * data['pressure_e'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            n_i_vol = vectorized_numpy_integration(
                 np.transpose((data['ni'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+                np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
             )
-            t_i_vol = cumulative_simpson(
+            t_i_vol = vectorized_numpy_integration(
                 np.transpose((data['ti'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+                np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
             )
-            p_i_vol = cumulative_simpson(
+            p_i_vol = vectorized_numpy_integration(
                 np.transpose((data['pressure_i'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+                np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
             )
-            w_i_vol = cumulative_simpson(
+            w_i_vol = vectorized_numpy_integration(
                 np.transpose((1.5 * data['pressure_i'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
-                x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
-                initial=0.0
+                np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
             )
-            #n_i_th_vol = cumulative_simpson((data['ni'].isel(name=thermal_species).sum('name') * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            p_i_th_vol = cumulative_simpson((data['pressure_i_th'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
-            w_i_th_vol = cumulative_simpson((1.5 * data['pressure_i_th'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)
+            #n_i_th_vol = vectorized_numpy_integration((data['ni'].isel(name=thermal_species).sum('name') * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            p_i_th_vol = vectorized_numpy_integration((data['pressure_i_th'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            w_i_th_vol = vectorized_numpy_integration((1.5 * data['pressure_i_th'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             newvars['vol'] = (['n'], vol[:, -1])
             #newvars['n_e'] = (['n'], n_e_vol[:, -1])
             #newvars['n_i'] = (['n', 'name'], n_i_vol[:, :, -1])
@@ -1191,14 +1036,14 @@ class gacode_io(io):
             newvars['t_i_vol'] = (['n', 'name'], t_i_vol[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
             newvars['f_i_vol'] = (['n', 'name'], n_i_vol[:, :, -1] / np.expand_dims(n_e_vol, axis=1)[:, :, -1])
 
-            newvars['nu_ne'] = (['n'], interpolate(0.0, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['ne'].to_numpy()) / newvars['n_e_vol'][-1])
-            newvars['nu_ne_0.2'] = (['n'], interpolate(0.2, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['ne'].to_numpy())  / newvars['n_e_vol'][-1])
-            newvars['nu_te'] = (['n'], interpolate(0.0, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['te'].to_numpy()) / newvars['t_e_vol'][-1])
-            newvars['nu_te_0.2'] = (['n'], interpolate(0.2, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['te'].to_numpy()) / newvars['t_e_vol'][-1])
-            newvars['nu_ni'] = (['n', 'name'], interpolate(0.0, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1))) / newvars['n_i_vol'][-1])
-            newvars['nu_ni_0.2'] = (['n', 'name'], interpolate(0.2, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1))) / newvars['n_i_vol'][-1])
-            newvars['nu_ti'] = (['n', 'name'], interpolate(0.0, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1))) / newvars['t_i_vol'][-1])
-            newvars['nu_ti_0.2'] = (['n', 'name'], interpolate(0.2, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1))) / newvars['t_i_vol'][-1])
+            newvars['nu_ne'] = (['n'], vectorized_numpy_interpolation(0.0, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['ne'].to_numpy()) / newvars['n_e_vol'][-1])
+            newvars['nu_ne_0.2'] = (['n'], vectorized_numpy_interpolation(0.2, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['ne'].to_numpy())  / newvars['n_e_vol'][-1])
+            newvars['nu_te'] = (['n'], vectorized_numpy_interpolation(0.0, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['te'].to_numpy()) / newvars['t_e_vol'][-1])
+            newvars['nu_te_0.2'] = (['n'], vectorized_numpy_interpolation(0.2, np.repeat(np.expand_dims(data['rho'].to_numpy(), axis=0), len(data['n']), axis=0), data['te'].to_numpy()) / newvars['t_e_vol'][-1])
+            newvars['nu_ni'] = (['n', 'name'], vectorized_numpy_interpolation(0.0, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1))) / newvars['n_i_vol'][-1])
+            newvars['nu_ni_0.2'] = (['n', 'name'], vectorized_numpy_interpolation(0.2, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ni'].to_numpy(), axes=(0, 2, 1))) / newvars['n_i_vol'][-1])
+            newvars['nu_ti'] = (['n', 'name'], vectorized_numpy_interpolation(0.0, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1))) / newvars['t_i_vol'][-1])
+            newvars['nu_ti_0.2'] = (['n', 'name'], vectorized_numpy_interpolation(0.2, np.repeat(np.repeat(np.expand_dims(np.expand_dims(data['rho'].to_numpy(), axis=0), axis=0), len(data['name']), axis=0), len(data['n']), axis=0), np.transpose(data['ti'].to_numpy(), axes=(0, 2, 1))) / newvars['t_i_vol'][-1])
 
             newvars['pressure_e_derived_vol'] = (['n'], p_e_vol[:, -1] / vol[:, -1])
             newvars['pressure_tot_derived_vol'] = (['n'], (p_e_vol + np.sum(p_i_vol, axis=1))[:, -1] / vol[:, -1])
@@ -1207,33 +1052,37 @@ class gacode_io(io):
             newvars['pressure_fast_fraction'] = (['n'], newvars['pressure_fast_derived_vol'][-1] / newvars['pressure_tot_derived_vol'][-1])
 
             if 'nine' in data:
-                newvars['nine_vol'] = (['n', 'name'], cumulative_simpson(np.transpose((data['nine'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)), x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), initial=0.0)[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
+                newvars['nine_vol'] = (['n', 'name'], vectorized_numpy_integration(np.transpose((data['nine'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)), np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1))[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
             if 'tite' in data:
-                newvars['tite_vol'] = (['n', 'name'], cumulative_simpson(np.transpose((data['tite'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)), x=np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1), initial=0.0)[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
+                newvars['tite_vol'] = (['n', 'name'], vectorized_numpy_integration(np.transpose((data['tite'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)), np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1))[:, :, -1] / np.expand_dims(vol, axis=1)[:, :, -1])
             if 'zeff_derived' in data:
-                newvars['zeff_derived_vol'] = (['n'], cumulative_simpson((data['zeff_derived'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
+                newvars['zeff_derived_vol'] = (['n'], vectorized_numpy_integration((data['zeff_derived'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
                 newvars['nueff'] = (['n'], newvars['zeff_derived_vol'][-1] * (data['rcentr'] * 0.1 * data['ne'] * data['te'] ** (-2)).isel(rho=-1).to_numpy())
             if 'mach' in data:
-                newvars['mach_vol'] = (['n'], cumulative_simpson((data['mach'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
+                newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
 
             newvars['beta_zero'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / (data['b_zero'] ** 2).to_numpy())
             newvars['beta_n_eng'] = newvars['beta_zero'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy()  # pc
 
-            newvars['bp2_vol'] = (['n'], cumulative_simpson((data['bp2'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
-            newvars['bt2_vol'] = (['n'], cumulative_simpson((data['bt2'] * data['volp_miller']).to_numpy(), x=data['rmin'].to_numpy(), initial=0.0)[:, -1] / vol[:, -1])
+            newvars['bp2_vol'] = (['n'], vectorized_numpy_integration((data['bp2'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
+            newvars['bt2_vol'] = (['n'], vectorized_numpy_integration((data['bt2'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
             newvars['beta_p'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bp2_vol'][-1])
             newvars['beta_t'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bt2_vol'][-1])
             newvars['beta'] = (['n'], 1.0 / (newvars['beta_p'][-1] ** (-1) + newvars['beta_t'][-1] ** (-1)))
             newvars['beta_n'] = (['n'], newvars['beta'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy())  # pc
 
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
     def _compute_scalings(
-        self
+        self,
+        side: str = 'input',
     ) -> None:
 
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
         if 'current' in data and 'bcentr' in data:
 
@@ -1341,21 +1190,25 @@ class gacode_io(io):
             #te_up = (3.5 * (lpsol / Aqpar) * lnC / k0e) ** (2.0 / 7.0)
             #newvars['te_upstream'] = (['n'], te_up)
 
-        self.update_input_data_vars(newvars)
+        if side == 'output':
+            self.update_output_data_vars(newvars)
+        else:
+            self.update_input_data_vars(newvars)
 
 
     def compute_derived_quantities(
         self,
+        side: str = 'input',
     ) -> None:
-        self._compute_derived_coordinates()
-        self._compute_derived_reference_quantities()
-        self._compute_derived_geometry()
-        self._compute_average_mass()
-        self._compute_source_terms()
-        self._compute_extended_local_inputs()
-        self._compute_secondary_quantities()
-        self._compute_integrated_quantities()
-        self._compute_scalings()
+        self._compute_derived_coordinates(side=side)
+        self._compute_derived_reference_quantities(side=side)
+        self._compute_derived_geometry(side=side)
+        self._compute_average_mass(side=side)
+        self._compute_source_terms(side=side)
+        self._compute_extended_local_inputs(side=side)
+        self._compute_secondary_quantities(side=side)
+        self._compute_integrated_quantities(side=side)
+        self._compute_scalings(side=side)
 
 
     def read(
@@ -1784,8 +1637,8 @@ class gacode_io(io):
                 if 'magnetic_flux' in data:
                     data_vars['torfluxa'] = (['n'], data['magnetic_flux'].isel(radius=-1).sel(direction='toroidal', drop=True).to_numpy())
                     data_vars['polflux'] = (['n', 'rho'], data['magnetic_flux'].sel(direction='poloidal', drop=True).to_numpy())
-                if 'rmaj' in data:
-                    data_vars['rcentr'] = (['n'], data['rmaj'].isel(radius=0).to_numpy())
+                if 'r_geometric' in data:
+                    data_vars['rcentr'] = (['n'], data['r_geometric'].isel(radius=0).to_numpy())
                 if 'safety_factor' in data:
                     data_vars['q'] = (['n', 'rho'], data['safety_factor'].to_numpy())
                 if 'effective_charge' in data:
@@ -2213,6 +2066,7 @@ class gacode_io(io):
                         data_vars['shot'] = (['n'], np.atleast_1d([0]))
                         data_vars['masse'] = (['n'], np.atleast_1d([5.4488748e-04]))
                         data_vars['ze'] = (['n'], np.atleast_1d([-1.0]))
+                        data_vars['time'] = (['n'], np.atleast_1d(float(time.item(i))))
                         if ion_cp in data.coords:
                             coords['name'] = data[ion_cp].to_numpy().flatten()
                             data_vars['nion'] = (['n'], np.array([len(coords['name'])], dtype=int))
@@ -2312,7 +2166,7 @@ class gacode_io(io):
                         if eqdsk_data:
                             if psivec is None:
                                 psivec = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], len(coords['rho']))
-                            mxh_data = newobj._calculate_geometry_from_eqdsk(eqdsk_data, psivec)
+                            mxh_data = calculate_mxh_coefficients_from_eqdsk_dict(eqdsk_data, psivec)
                             data_vars['rmaj'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmaj']), axis=0))
                             data_vars['rmin'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['rmin']), axis=0))
                             data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['zmag']), axis=0))
@@ -2330,6 +2184,7 @@ class gacode_io(io):
                             data_vars['shape_cos4'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos4']), axis=0))
                             data_vars['shape_cos5'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos5']), axis=0))
                             data_vars['shape_cos6'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['cos6']), axis=0))
+                            data_vars['fpol'] = (['n', 'rho'], np.expand_dims(np.atleast_1d(mxh_data['fpol']), axis=0))
                         tag = 'equilibrium.time_slice.global_quantities.ip'
                         if tag in data:
                             data_vars['current'] = (['n'], 1.0e-6 * cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
