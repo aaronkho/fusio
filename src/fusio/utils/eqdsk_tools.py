@@ -205,7 +205,7 @@ def piecewise_linear_fourier_coeffs(theta: NDArray, f: NDArray, n: int) -> tuple
     return c / np.pi, s / np.pi
 
 
-def calculate_mxh_coefficients(r: NDArray, z: NDArray, n: int = 5) -> Sequence[Sequence[float]]:
+def calculate_mxh_coefficients(r: NDArray, z: NDArray, n: int = 5) -> tuple[NDArray, NDArray, NDArray]:
     """Fit MXH (Miller eXtended Harmonic) Fourier cos/sin coefficients to a closed (R, Z) flux-surface contour."""
     z = np.roll(z, -np.argmax(r))
     r = np.roll(r, -np.argmax(r))
@@ -218,7 +218,7 @@ def calculate_mxh_coefficients(r: NDArray, z: NDArray, n: int = 5) -> Sequence[S
     kappa = 0.5 * (np.nanmax(z) - np.nanmin(z)) / rmin
     r0 = 0.5 * (np.nanmax(r) + np.nanmin(r))
     z0 = 0.5 * (np.max(z) + np.min(z))
-    bbox = [r0, rmin, z0, kappa]
+    bbox = np.asarray([r0, rmin, z0, kappa])
 
     # solve for polar angles
     # need to use np.clip to avoid floating-point precision errors
