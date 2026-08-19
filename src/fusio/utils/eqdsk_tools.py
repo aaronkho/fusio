@@ -5,7 +5,6 @@ from ..classes.io import Any, Final, Self
 from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, Iterable
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
-from scipy.integrate import quad  # type: ignore[import-untyped]
 import contourpy
 from shapely import Point, Polygon  # type: ignore[import-untyped]
 from megpy import contour as contour_tracer  # type: ignore[import-untyped]
@@ -167,6 +166,45 @@ def trace_flux_surfaces(r: NDArray, z: NDArray, psi: NDArray, levels: NDArray, a
     return contours
 
 
+def piecewise_linear_fourier_coeffs(theta: NDArray, f: NDArray, n: int) -> tuple[NDArray, NDArray]:
+    """Exactly integrate a piecewise-linear function f(theta) against cos(k*theta) and sin(k*theta), k=0..n.
+
+    Avoids scipy.integrate.quad's adaptive oscillatory quadrature (QAWO), which struggles with
+    the kinks in a linearly-interpolated integrand (e.g. one built from np.interp) and can fail
+    with a subdivision error. Since f is piecewise-linear by construction, each segment has a
+    closed-form integral against cos(k*theta)/sin(k*theta), making the result exact rather than
+    merely convergent.
+
+    theta and f may carry arbitrary leading batch dimensions; the last axis holds the samples of
+    one closed contour (assumed to be covered exactly once by consecutive samples, i.e. the same
+    semantics as np.interp). Returns (c, s), each of shape theta.shape[:-1] + (n + 1,).
+    """
+    theta0, theta1 = theta[..., :-1], theta[..., 1:]
+    f0, f1 = f[..., :-1], f[..., 1:]
+    dtheta = theta1 - theta0
+    slope = np.divide(f1 - f0, dtheta, out=np.zeros_like(dtheta), where=(dtheta != 0))
+    intercept = f0 - slope * theta0
+
+    out_shape = theta.shape[:-1] + (n + 1,)
+    c = np.zeros(out_shape)
+    s = np.zeros(out_shape)
+    c[..., 0] = np.sum(0.5 * (f0 + f1) * dtheta, axis=-1)
+    for k in range(1, n + 1):
+        sin0, sin1 = np.sin(k * theta0), np.sin(k * theta1)
+        cos0, cos1 = np.cos(k * theta0), np.cos(k * theta1)
+
+        cos_int = (sin1 - sin0) / k
+        theta_cos_int = (theta1 * sin1 + cos1 / k) / k - (theta0 * sin0 + cos0 / k) / k
+
+        sin_int = -(cos1 - cos0) / k
+        theta_sin_int = (-theta1 * cos1 + sin1 / k) / k - (-theta0 * cos0 + sin0 / k) / k
+
+        c[..., k] = np.sum(intercept * cos_int + slope * theta_cos_int, axis=-1)
+        s[..., k] = np.sum(intercept * sin_int + slope * theta_sin_int, axis=-1)
+
+    return c / np.pi, s / np.pi
+
+
 def calculate_mxh_coefficients(r: NDArray, z: NDArray, n: int = 5) -> Sequence[Sequence[float]]:
     """Fit MXH (Miller eXtended Harmonic) Fourier cos/sin coefficients to a closed (R, Z) flux-surface contour."""
     z = np.roll(z, -np.argmax(r))
@@ -209,17 +247,21 @@ def calculate_mxh_coefficients(r: NDArray, z: NDArray, n: int = 5) -> Sequence[S
     theta_r_cont = theta_r_cont - theta_cont
     theta_r_cont[-1] = theta_r_cont[0]
 
-    # Fourier decompose to find coefficients
-    c = [0.0] * (n + 1)
-    s = [0.0] * (n + 1)
+    # Previous implementation used scipy.integrate.quad's weighted (QAWO) oscillatory quadrature on the
+    # np.interp piecewise-linear function directly. Its adaptive algorithm assumes a smooth integrand, so
+    # the kinks from linear interpolation could force it past the subdivision limit and raise an error.
+    # c = [0.0] * (n + 1)
+    # s = [0.0] * (n + 1)
+    #
+    # def f_theta_r(theta):
+    #     return np.interp(theta, theta_cont, theta_r_cont)
+    #
+    # for i in range(n + 1):
+    #     s[i] = quad(f_theta_r, 0, 2.0 * np.pi, weight='sin', wvar=i)[0] / np.pi
+    #     c[i] = quad(f_theta_r, 0, 2.0 * np.pi, weight='cos', wvar=i)[0] / np.pi
 
-    def f_theta_r(theta):
-        return np.interp(theta, theta_cont, theta_r_cont)
-
-    for i in range(n + 1):
-        s[i] = quad(f_theta_r, 0, 2.0 * np.pi, weight='sin', wvar=i)[0] / np.pi
-        c[i] = quad(f_theta_r, 0, 2.0 * np.pi, weight='cos', wvar=i)[0] / np.pi
-
+    # Fourier decompose to find coefficients (exact for the piecewise-linear theta_r_cont(theta_cont) data)
+    c, s = piecewise_linear_fourier_coeffs(theta_cont, theta_r_cont, n)
     c[0] /= 2
 
     return c, s, bbox
