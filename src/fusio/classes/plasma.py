@@ -9,7 +9,7 @@ import numpy as np
 import xarray as xr
 
 import datetime
-from scipy.integrate import quad, trapezoid  # type: ignore[import-untyped]
+from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
 from ..utils.plasma_tools import define_ion_species
 from ..utils.math_tools import (
@@ -24,6 +24,7 @@ from ..utils.eqdsk_tools import (
     trace_contour_with_megpy,
     convert_mxh_to_contour_megpy,
     convert_contour_to_mxh_megpy,
+    piecewise_linear_fourier_coeffs,
 )
 
 logger = logging.getLogger('fusio')
@@ -581,15 +582,16 @@ class plasma_io(io):
             angle_r_norm = np.concatenate([angle_r_norm, np.expand_dims(angle_r_norm[..., 0], axis=-1) + 2.0 * np.pi], axis=-1)
             angle_z_norm = _arcsin2pi(z_norm[..., :-1])
             angle_z_norm = np.concatenate([angle_z_norm, np.expand_dims(angle_z_norm[..., 0], axis=-1) + 2.0 * np.pi], axis=-1)
-            mxh_sin = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
-            mxh_cos = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
-            for i in range(n_coeffs):
-                sint_func = lambda angle_z, angle_r: quad(np.interp, 0.0, 2.0 * np.pi, weight='sin', wvar=i, args=(angle_z, angle_r - angle_z))[0]
-                sint_vfunc = np.vectorize(sint_func, signature='(n),(n)->()')
-                cint_func = lambda angle_z, angle_r: quad(np.interp, 0.0, 2.0 * np.pi, weight='cos', wvar=i, args=(angle_z, angle_r - angle_z))[0]
-                cint_vfunc = np.vectorize(cint_func, signature='(n),(n)->()')
-                mxh_sin[..., i] = sint_vfunc(angle_z_norm, angle_r_norm) / np.pi
-                mxh_cos[..., i] = cint_vfunc(angle_z_norm, angle_r_norm) / np.pi
+            # mxh_sin = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
+            # mxh_cos = np.repeat(np.expand_dims(np.zeros_like(mxh_r), axis=-1), n_coeffs, axis=-1)
+            # for i in range(n_coeffs):
+            #     sint_func = lambda angle_z, angle_r: quad(np.interp, 0.0, 2.0 * np.pi, weight='sin', wvar=i, args=(angle_z, angle_r - angle_z))[0]
+            #     sint_vfunc = np.vectorize(sint_func, signature='(n),(n)->()')
+            #     cint_func = lambda angle_z, angle_r: quad(np.interp, 0.0, 2.0 * np.pi, weight='cos', wvar=i, args=(angle_z, angle_r - angle_z))[0]
+            #     cint_vfunc = np.vectorize(cint_func, signature='(n),(n)->()')
+            #     mxh_sin[..., i] = sint_vfunc(angle_z_norm, angle_r_norm) / np.pi
+            #     mxh_cos[..., i] = cint_vfunc(angle_z_norm, angle_r_norm) / np.pi
+            mxh_cos, mxh_sin = piecewise_linear_fourier_coeffs(angle_z_norm, angle_r_norm - angle_z_norm, n_coeffs - 1)
             mxh_cos[..., 0] = mxh_cos[..., 0] / 2.0
             mxh_sin[:, 0, :] = 2.0 * mxh_sin[:, 1, :] - mxh_sin[:, 2, :]
             mxh_cos[:, 0, :] = 2.0 * mxh_cos[:, 1, :] - mxh_cos[:, 2, :]

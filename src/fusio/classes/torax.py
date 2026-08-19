@@ -66,8 +66,6 @@ class torax_io(io):
             'chi_timestep_prefactor',
             'fixed_dt',
             'dt_reduction_factor',
-            'adaptive_T_source_prefactor',
-            'adaptive_n_source_prefactor',
         ],
         'geometry': [
             'geometry_type',
@@ -83,27 +81,13 @@ class torax_io(io):
             'model_name',
         ],
         'transport': [
-            'model_name',
             'chi_min',
             'chi_max',
             'D_e_min',
             'D_e_max',
             'V_e_min',
             'V_e_max',
-            'apply_inner_patch',
-            'D_e_inner',
-            'V_e_inner',
-            'chi_i_inner',
-            'chi_e_inner',
-            'rho_inner',
-            'apply_outer_patch',
-            'D_e_outer',
-            'V_e_outer',
-            'chi_i_outer',
-            'chi_e_outer',
-            'rho_outer',
             'smoothing_width',
-            'smooth_everywhere',
         ],
         'sources': [
         ],
@@ -1100,9 +1084,6 @@ class torax_io(io):
         newattrs['pedestal.set_pedestal'] = True
         newattrs['pedestal.model_name'] = 'set_P_ped_n_ped'
         newattrs['pedestal.n_e_ped_is_fGW'] = False
-        newattrs['transport.smooth_everywhere'] = False
-        newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
-        newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
         self.update_input_attrs(newattrs)
 
 
@@ -1125,9 +1106,6 @@ class torax_io(io):
         newattrs['pedestal.set_pedestal'] = True
         newattrs['pedestal.model_name'] = 'set_T_ped_n_ped'
         newattrs['pedestal.n_e_ped_is_fGW'] = False
-        newattrs['transport.smooth_everywhere'] = False
-        newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
-        newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
         self.update_input_attrs(newattrs)
 
 
@@ -1171,10 +1149,10 @@ class torax_io(io):
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
         wrho_array = data.get('pedestal.rho_norm_ped_top', None)
-        if data.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
-            models = data.attrs.get('map_combined_pedestal_models', [])
-            prefix = f'transport.pedestal_transport_models.{len(models):d}'
-            #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
+        if wrho_array is not None:
+            models = data.attrs.get('map_pedestal_transport_model_names', [])
+            name = f'constant_{len(models):d}'
+            prefix = f'transport.pedestal_transport_models.{name}'
             wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
             chiirho = np.zeros_like(xrho) + chi_i
@@ -1187,9 +1165,8 @@ class torax_io(io):
             newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(derho, axis=0), len(time), axis=0))
             newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(verho, axis=0), len(time), axis=0))
             newattrs[f'{prefix}.model_name'] = 'constant'
-            #newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
-            models.append('constant')
-            newattrs['map_combined_pedestal_models'] = models
+            models.append(name)
+            newattrs['map_pedestal_transport_model_names'] = models
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -1208,10 +1185,10 @@ class torax_io(io):
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
         wrho_array = data.get('pedestal.rho_norm_ped_top', None)
-        if data.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
-            models = data.attrs.get('map_combined_pedestal_models', [])
-            prefix = f'transport.pedestal_transport_models.{len(models):d}'
-            #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
+        if wrho_array is not None:
+            models = data.attrs.get('map_pedestal_transport_model_names', [])
+            name = f'constant_{len(models):d}'
+            prefix = f'transport.pedestal_transport_models.{name}'
             wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
             factor = np.abs((xrho - wrho) / (1.0 - wrho))
@@ -1224,9 +1201,8 @@ class torax_io(io):
             newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
             newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
             newattrs[f'{prefix}.model_name'] = 'constant'
-            #newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
-            models.append('constant')
-            newattrs['map_combined_pedestal_models'] = models
+            models.append(name)
+            newattrs['map_pedestal_transport_model_names'] = models
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -1247,11 +1223,10 @@ class torax_io(io):
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
         wrho_array = data.get('pedestal.rho_norm_ped_top', None)
-        prefix = 'transport'
-        if data.attrs.get('transport.model_name', '') == 'combined' and wrho_array is not None:
-            models = data.attrs.get('map_combined_pedestal_models', [])
-            prefix = f'transport.pedestal_transport_models.{len(models):d}'
-            #newvars[f'{prefix}.rho_min'] = (['time'], wrho_array.to_numpy())
+        if wrho_array is not None:
+            models = data.attrs.get('map_pedestal_transport_model_names', [])
+            name = f'CGM_{len(models):d}'
+            prefix = f'transport.pedestal_transport_models.{name}'
             wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
             erho = np.zeros_like(xrho) + ei_ratio
@@ -1264,9 +1239,8 @@ class torax_io(io):
             newattrs[f'{prefix}.alpha'] = float(alpha)
             newattrs[f'{prefix}.chi_stiff'] = float(chi_grad)
             newattrs[f'{prefix}.model_name'] = 'CGM'
-            #newattrs[f'{prefix}.rho_min'] = float(np.mean(wrho_array.to_numpy()))
-            models.append('CGM')
-            newattrs['map_combined_pedestal_models'] = models
+            models.append(name)
+            newattrs['map_pedestal_transport_model_names'] = models
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -1312,9 +1286,6 @@ class torax_io(io):
         newattrs['pedestal.set_pedestal'] = True
         newattrs['pedestal.model_name'] = 'set_T_ped_n_ped'
         newattrs['pedestal.n_e_ped_is_fGW'] = False
-        newattrs['transport.smooth_everywhere'] = False
-        newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
-        newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
         self.update_input_attrs(newattrs)
 
 
@@ -1346,25 +1317,6 @@ class torax_io(io):
             self.input['sources.generic_current.prescribed_values'] = data['sources.generic_current.prescribed_values'] - data['profile_conditions.j_bootstrap']
 
 
-    def add_combined_transport(
-        self,
-    ) -> None:
-        data = self.input
-        newattrs: MutableMapping[str, Any] = {}
-        newattrs['transport.model_name'] = 'combined'
-        newattrs['transport.chi_min'] = 0.05
-        newattrs['transport.chi_max'] = 100.0
-        newattrs['transport.D_e_min'] = 0.05
-        newattrs['transport.D_e_max'] = 100.0
-        newattrs['transport.V_e_min'] = -50.0
-        newattrs['transport.V_e_max'] = 50.0
-        newattrs['transport.smoothing_width'] = 0.1
-        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
-        newattrs['map_combined_core_models'] = data.attrs.get('map_combined_core_models', [])
-        newattrs['map_combined_pedestal_models'] = data.attrs.get('map_combined_pedestal_models', [])
-        self.update_input_attrs(newattrs)
-
-
     def add_constant_transport(
         self,
         chi_i: float = 0.0,
@@ -1380,17 +1332,13 @@ class torax_io(io):
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        prefix = 'transport'
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            prefix = f'transport.transport_models.{len(models):d}'
-            if 'pedestal.rho_norm_ped_top' in data:
-                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
-                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
-            newattrs[f'{prefix}.apply_inner_patch'] = False
-            newattrs[f'{prefix}.apply_outer_patch'] = False
-            models.append('constant')
-            newattrs['map_combined_core_models'] = models
+        models = data.attrs.get('map_core_transport_model_names', [])
+        name = f'constant_{len(models):d}'
+        prefix = f'transport.core_transport_models.{name}'
+        if 'pedestal.rho_norm_ped_top' in data:
+            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        models.append(name)
+        newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1420,7 +1368,6 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
-        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -1441,17 +1388,13 @@ class torax_io(io):
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        prefix = 'transport'
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            prefix = f'transport.transport_models.{len(models):d}'
-            if 'pedestal.rho_norm_ped_top' in data:
-                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
-                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
-            newattrs[f'{prefix}.apply_inner_patch'] = False
-            newattrs[f'{prefix}.apply_outer_patch'] = False
-            models.append('CGM')
-            newattrs['map_combined_core_models'] = models
+        models = data.attrs.get('map_core_transport_model_names', [])
+        name = f'CGM_{len(models):d}'
+        prefix = f'transport.core_transport_models.{name}'
+        if 'pedestal.rho_norm_ped_top' in data:
+            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        models.append(name)
+        newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1471,7 +1414,6 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
-        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
@@ -1486,17 +1428,13 @@ class torax_io(io):
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        prefix = 'transport'
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            prefix = f'transport.transport_models.{len(models):d}'
-            if 'pedestal.rho_norm_ped_top' in data:
-                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
-                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
-            newattrs[f'{prefix}.apply_inner_patch'] = False
-            newattrs[f'{prefix}.apply_outer_patch'] = False
-            models.append('qualikiz')
-            newattrs['map_combined_core_models'] = models
+        models = data.attrs.get('map_core_transport_model_names', [])
+        name = f'qualikiz_{len(models):d}'
+        prefix = f'transport.core_transport_models.{name}'
+        if 'pedestal.rho_norm_ped_top' in data:
+            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        models.append(name)
+        newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
             #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
@@ -1519,7 +1457,6 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
-        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
@@ -1530,13 +1467,10 @@ class torax_io(io):
     ) -> None:
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            for n in range(len(models)):
-                if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qualikiz':
-                    newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
-        elif data.attrs.get('transport.model_name', '') == 'qualikiz':
-            newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
+        models = data.attrs.get('map_core_transport_model_names', [])
+        for name in models:
+            if data.attrs.get(f'transport.core_transport_models.{name}.model_name', '') == 'qualikiz':
+                newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
         self.update_input_attrs(newattrs)
 
 
@@ -1549,23 +1483,16 @@ class torax_io(io):
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        prefix = 'transport'
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            prefix = f'transport.transport_models.{len(models):d}'
-            #newattrs[f'{prefix}.rho_min'] = {0.0: 0.15}
-            if 'pedestal.rho_norm_ped_top' in data:
-                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
-                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
-            newattrs[f'{prefix}.apply_inner_patch'] = False
-            newattrs[f'{prefix}.apply_outer_patch'] = False
-            models.append('qlknn')
-            newattrs['map_combined_core_models'] = models
+        models = data.attrs.get('map_core_transport_model_names', [])
+        name = f'qlknn_{len(models):d}'
+        prefix = f'transport.core_transport_models.{name}'
+        if 'pedestal.rho_norm_ped_top' in data:
+            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        models.append(name)
+        newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
-            #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
-            #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'qlknn'
         #newattrs[f'{prefix}.model_path'] = ''
@@ -1589,7 +1516,6 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.0
-        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
@@ -1600,13 +1526,10 @@ class torax_io(io):
     ) -> None:
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            for n in range(len(models)):
-                if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'qlknn':
-                    newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
-        if data.attrs.get('transport.model_name', '') == 'qlknn':
-            newattrs['transport.model_path'] = f'{path}'
+        models = data.attrs.get('map_core_transport_model_names', [])
+        for name in models:
+            if data.attrs.get(f'transport.core_transport_models.{name}.model_name', '') == 'qlknn':
+                newattrs[f'transport.core_transport_models.{name}.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
 
@@ -1620,22 +1543,16 @@ class torax_io(io):
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        prefix = 'transport'
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            prefix = f'transport.transport_models.{len(models):d}'
-            if 'pedestal.rho_norm_ped_top' in data:
-                #newvars[f'{prefix}.rho_max'] = (['time'], data['pedestal.rho_norm_ped_top'].to_numpy())
-                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
-            newattrs[f'{prefix}.apply_inner_patch'] = False
-            newattrs[f'{prefix}.apply_outer_patch'] = False
-            models.append('tglf')
-            newattrs['map_combined_core_models'] = models
+        models = data.attrs.get('map_core_transport_model_names', [])
+        name = f'tglf_{len(models):d}'
+        prefix = f'transport.core_transport_models.{name}'
+        if 'pedestal.rho_norm_ped_top' in data:
+            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        models.append(name)
+        newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
-            #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
-            #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'tglf'
         newattrs[f'{prefix}.n_processes'] = int(n_processes)
@@ -1650,7 +1567,6 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.1
-        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
@@ -1661,14 +1577,10 @@ class torax_io(io):
     ) -> None:
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            for n in range(len(models)):
-                if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'tglf':
-                    prefix = f'transport.transport_models.{n:d}'
-                    newattrs[f'{prefix}.tglf_exec_path'] = f'{path}'
-        elif data.attrs.get('transport.model_name', '') == 'tglf':
-            newattrs[f'transport.tglf_exec_path'] = f'{path}'
+        models = data.attrs.get('map_core_transport_model_names', [])
+        for name in models:
+            if data.attrs.get(f'transport.core_transport_models.{name}.model_name', '') == 'tglf':
+                newattrs[f'transport.core_transport_models.{name}.tglf_exec_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
 
@@ -1682,16 +1594,13 @@ class torax_io(io):
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        prefix = 'transport'
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            prefix = f'transport.transport_models.{len(models):d}'
-            if 'pedestal.rho_norm_ped_top' in data:
-                newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
-            newattrs[f'{prefix}.apply_inner_patch'] = False
-            newattrs[f'{prefix}.apply_outer_patch'] = False
-            models.append('tglfnn')
-            newattrs['map_combined_core_models'] = models
+        models = data.attrs.get('map_core_transport_model_names', [])
+        name = f'tglfnn_{len(models):d}'
+        prefix = f'transport.core_transport_models.{name}'
+        if 'pedestal.rho_norm_ped_top' in data:
+            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        models.append(name)
+        newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
@@ -1711,7 +1620,6 @@ class torax_io(io):
         newattrs['transport.V_e_min'] = -50.0
         newattrs['transport.V_e_max'] = 50.0
         newattrs['transport.smoothing_width'] = 0.0
-        newattrs['transport.smooth_everywhere'] = (not data.attrs.get('pedestal.set_pedestal', False))
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
@@ -1722,13 +1630,10 @@ class torax_io(io):
     ) -> None:
         data = self.input
         newattrs: MutableMapping[str, Any] = {}
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            models = data.attrs.get('map_combined_core_models', [])
-            for n in range(len(models)):
-                if data.attrs.get(f'transport.transport_models.{n:d}.model_name', '') == 'tglfnn':
-                    newattrs[f'transport.transport_models.{n:d}.model_path'] = f'{path}'
-        if data.attrs.get('transport.model_name', '') == 'tglfnn':
-            newattrs['transport.model_path'] = f'{path}'
+        models = data.attrs.get('map_core_transport_model_names', [])
+        for name in models:
+            if data.attrs.get(f'transport.core_transport_models.{name}.model_name', '') == 'tglfnn':
+                newattrs[f'transport.core_transport_models.{name}.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
 
@@ -1742,26 +1647,7 @@ class torax_io(io):
         tstart: float | None = None,
         tend: float | None = None,
     ) -> None:
-        data = self.input
-        time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        trigger = np.isfinite(time)
-        if isinstance(tstart, (float, int)):
-            trigger &= (time >= tstart)
-        if isinstance(tend, (float, int)):
-            trigger &= (time <= tend)
-        newvars: MutableMapping[str, Any] = {}
-        newattrs: MutableMapping[str, Any] = {}
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            self.add_constant_transport(chii, chie, de, ve, rho_max=rho)
-        else:
-            newvars['transport.apply_inner_patch'] = (['time'], trigger)
-            newvars['transport.D_e_inner'] = (['time'], np.zeros_like(time) + de)
-            newvars['transport.V_e_inner'] = (['time'], np.zeros_like(time) + ve)
-            newvars['transport.chi_i_inner'] = (['time'], np.zeros_like(time) + chii)
-            newvars['transport.chi_e_inner'] = (['time'], np.zeros_like(time) + chie)
-            newattrs['transport.rho_inner'] = float(rho)
-        self.update_input_data_vars(newvars)
-        self.update_input_attrs(newattrs)
+        self.add_constant_transport(chii, chie, de, ve, rho_max=rho)
 
 
     def add_transport_outer_patch(
@@ -1774,26 +1660,7 @@ class torax_io(io):
         tstart: float | None = None,
         tend: float | None = None,
     ) -> None:
-        data = self.input
-        time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        trigger = np.isfinite(time)
-        if isinstance(tstart, (float, int)):
-            trigger &= (time >= tstart)
-        if isinstance(tend, (float, int)):
-            trigger &= (time <= tend)
-        newvars: MutableMapping[str, Any] = {}
-        newattrs: MutableMapping[str, Any] = {}
-        if data.attrs.get('transport.model_name', '') == 'combined':
-            self.add_constant_transport(chii, chie, de, ve, rho_min=rho)
-        else:
-            newvars['transport.apply_outer_patch'] = (['time'], trigger)
-            newvars['transport.D_e_outer'] = (['time'], np.zeros_like(time) + de)
-            newvars['transport.V_e_outer'] = (['time'], np.zeros_like(time) + ve)
-            newvars['transport.chi_i_outer'] = (['time'], np.zeros_like(time) + chii)
-            newvars['transport.chi_e_outer'] = (['time'], np.zeros_like(time) + chie)
-            newattrs['transport.rho_outer'] = float(rho)
-        self.update_input_data_vars(newvars)
-        self.update_input_attrs(newattrs)
+        self.add_constant_transport(chii, chie, de, ve, rho_min=rho)
 
 
     def reset_mhd_sawtooth_trigger(
@@ -3260,21 +3127,22 @@ class torax_io(io):
                                 datadict[f'{key}']['time'].to_numpy().flatten().tolist(),
                                 datadict[f'{key}'].to_numpy().tolist(),
                             )
-        core_models = datadict.pop('map_combined_core_models', {})
-        pedestal_models = datadict.pop('map_combined_pedestal_models', {})
-        if datadict.get('transport.model_name', '') == 'combined':
-            datadict['transport.transport_models'] = []
-            for nn in range(len(core_models)):
-                modeldict = {key.replace(f'transport.transport_models.{nn:d}.', ''): val for key, val in datadict.items() if key.startswith(f'transport.transport_models.{nn:d}.')}
-                for key in modeldict:
-                    datadict.pop(f'transport.transport_models.{nn:d}.{key}', None)
-                datadict['transport.transport_models'].append(self._unflatten(modeldict))
-            datadict['transport.pedestal_transport_models'] = []
-            for nn in range(len(pedestal_models)):
-                modeldict = {key.replace(f'transport.pedestal_transport_models.{nn:d}.', ''): val for key, val in datadict.items() if key.startswith(f'transport.pedestal_transport_models.{nn:d}.')}
-                for key in modeldict:
-                    datadict.pop(f'transport.pedestal_transport_models.{nn:d}.{key}', None)
-                datadict['transport.pedestal_transport_models'].append(self._unflatten(modeldict))
+        core_names = datadict.pop('map_core_transport_model_names', [])
+        pedestal_names = datadict.pop('map_pedestal_transport_model_names', [])
+        datadict['transport.core_transport_models'] = {}
+        for name in core_names:
+            prefix = f'transport.core_transport_models.{name}.'
+            modeldict = {k[len(prefix):]: v for k, v in datadict.items() if k.startswith(prefix)}
+            for k in list(modeldict):
+                datadict.pop(prefix + k, None)
+            datadict['transport.core_transport_models'][name] = self._unflatten(modeldict)
+        datadict['transport.pedestal_transport_models'] = {}
+        for name in pedestal_names:
+            prefix = f'transport.pedestal_transport_models.{name}.'
+            modeldict = {k[len(prefix):]: v for k, v in datadict.items() if k.startswith(prefix)}
+            for k in list(modeldict):
+                datadict.pop(prefix + k, None)
+            datadict['transport.pedestal_transport_models'][name] = self._unflatten(modeldict)
         srctags = [
             'sources.ei_exchange',
             'sources.ohmic',
@@ -3372,8 +3240,8 @@ class torax_io(io):
                             data_vars[f'{key}.{field}.{key2}'] = (dims, np.asarray(json_dict[key][field][key2][-1]))
                         else:
                             attrs[f'{key}.{field}.{key2}'] = json_dict[key][field][key2]
-                if key == 'transport' and field in ['transport_models', 'pedestal_transport_models']:
-                    for i, settings in enumerate(json_dict[key][field]):
+                if key == 'transport' and field in ['core_transport_models', 'pedestal_transport_models']:
+                    for name, settings in json_dict[key][field].items():
                         for k, v in settings.items():
                             if isinstance(v, (tuple, list)):
                                 ndim = len(v) - 1
@@ -3382,9 +3250,9 @@ class torax_io(io):
                                 if ndim > 1:
                                     dims.append(f'rho_{key}_{k}')
                                     pre_coords[dims[1]] = np.asarray(v[1])
-                                data_vars[f'{key}.{field}.{i:d}.{k}'] = (dims, np.asarray(v[-1]))
+                                data_vars[f'{key}.{field}.{name}.{k}'] = (dims, np.asarray(v[-1]))
                             else:
-                                attrs[f'{key}.{field}.{i:d}.{k}'] = v
+                                attrs[f'{key}.{field}.{name}.{k}'] = v
                 elif key == 'profile_conditions' and field in ['internal_boundary_conditions']:
                     for i, variable in enumerate(json_dict[key][field]):
                         rho_bc = 1.0
