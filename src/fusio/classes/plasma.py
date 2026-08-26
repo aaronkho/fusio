@@ -7,6 +7,7 @@ from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, 
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
+from packaging.version import Version
 
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
@@ -1632,13 +1633,15 @@ class plasma_io(io):
 
             data: xr.Dataset = obj.input if side == 'input' else obj.output
             obj_cocos = obj.input_cocos if side == 'input' else obj.output_cocos  # type: ignore[attr-defined]
+            dd_version = data.attrs.get('data_dictionary_version', None)
+            ion_field = 'name' if dd_version is None or Version(dd_version) >= Version('4.0.0') else 'label'
             cp = 'core_profiles'
             time_cp = f'{cp}.time'
             prof_cp = f'{cp}.profiles_1d'
             rho_cp_i = f'{prof_cp}.grid.rho_tor_norm:i'
             rho_cp = f'{prof_cp}.grid.rho_tor_norm'
             ion_cp_i = f'{prof_cp}.ion:i'
-            ion_cp = f'{prof_cp}.ion.label'
+            ion_cp = f'{prof_cp}.ion.{ion_field}'
             eq = 'equilibrium'
             time_eq = f'{eq}.time'
             ts_eq = f'{eq}.time_slice'
@@ -1655,7 +1658,7 @@ class plasma_io(io):
             rho_cs_i = f'{prof_cs}.grid.rho_tor_norm:i'
             rho_cs = f'{prof_cs}.grid.rho_tor_norm'
             ion_cs_i = f'{prof_cs}.ion:i'
-            ion_cs = f'{prof_cs}.ion.label'
+            ion_cs = f'{prof_cs}.ion.{ion_field}'
             ikwargs = {'fill_value': 'extrapolate'}
 
             cocos_out = 1   # Assumed plasma class has COCOS=1
