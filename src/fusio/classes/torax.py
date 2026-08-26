@@ -2834,7 +2834,7 @@ class torax_io(io):
                 data_vars[r'#T_1'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             ns = 1
             if full_impurities:
-                for j, symbol in enumerate(data.get('impurity_symbol', xr.DataArray()).to_numpy()):
+                for j, symbol in enumerate(data.get('impurity_symbol', xr.DataArray()).to_numpy().tolist()):
                     ns += 1
                     sname = symbol if 'He' not in symbol else 'He'
                     sn, sa, sz = define_ion_species(short_name=sname)
@@ -2901,8 +2901,8 @@ class torax_io(io):
             else:
                 if 'A_impurity' in data:
                     ns += 1
-                    mimp = data['A_impurity'].to_numpy() * c['u'] / c['md']
-                    data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], np.repeat(np.expand_dims(mimp, axis=-1), len(coords['rho']), axis=-1))
+                    mimp = data['A_impurity'].interp({'rho_norm': coords['rho']}).to_numpy() * c['u'] / c['md']
+                    data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], mimp)
                 if 'Z_impurity' in data:
                     data_vars[f'Z_{ns:d}'] = (['time', 'rho'], data['Z_impurity'].interp({'rho_norm': coords['rho']}).to_numpy())
                 if 'n_impurity' in data:
@@ -2931,6 +2931,7 @@ class torax_io(io):
                 prof = data['n_e'].interp({'rho_norm': coords['rho']})
                 data_vars[f'DENS_{ns:d}'] = (['time', 'rho'], xr.ones_like(prof).to_numpy())
                 data_vars[f'DLNNDR_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[f'SDLNNDR_{ns:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
                 data_vars[r'#'+f'N_{ns:d}'] = (['time', 'rho'], 1.0e-19 * prof.to_numpy())
             if 'T_e' in data:
                 norm = -1.0 * data['a_minor']
@@ -2938,6 +2939,7 @@ class torax_io(io):
                 prof = data['T_e'].interp({'rho_norm': coords['rho']})
                 data_vars[f'TEMP_{ns:d}'] = (['time', 'rho'], xr.ones_like(prof).to_numpy())
                 data_vars[f'DLNTDR_{ns:d}'] = (['time', 'rho'], (norm * prof.differentiate('rho_norm') / prof / drdrho).to_numpy())
+                data_vars[f'SDLNTDR_{ns:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([0.0]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
                 data_vars[r'#'+f'T_{ns:d}'] = (['time', 'rho'], prof.to_numpy())  # Already in keV
             data_vars['N_SPECIES'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([ns]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
             if 'q' in data:
