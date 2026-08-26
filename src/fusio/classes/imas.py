@@ -293,7 +293,7 @@ class imas_io(io):
             zeros = np.array([0])
             prev_key = delimiter.join(key.split(delimiter)[:-1]) if delimiter in key else ''
             if prev_key in index_data and f'{prev_key}{delimiter}AOS_SHAPE' in data:
-                zeros = np.repeat(np.expand_dims(np.zeros(np.array(data[f'{prev_key}{delimiter}AOS_SHAPE']).shape), axis=-1), index_data[prev_key], axis=-1)
+                zeros = np.repeat(np.expand_dims(np.zeros(np.array(data[f'{prev_key}{delimiter}AOS_SHAPE']).shape), axis=-1), index_data[key], axis=-1)
             data[f'{key}{delimiter}AOS_SHAPE'] = zeros.astype(int) + index_data[key]
         shape_data = {}
         for key in list(data.keys()):
@@ -669,11 +669,15 @@ class imas_io(io):
             psinvec = data[psin_eq].to_numpy().flatten() if psin_eq in data else None
             conversion = None
             ikwargs = {'fill_value': 'extrapolate'}
+            psin_data = None
             if psinvec is None:
                 conversion = (
                     (data['equilibrium.time_slice.profiles_1d.psi'] - data['equilibrium.time_slice.global_quantities.psi_axis']) /
                     (data['equilibrium.time_slice.global_quantities.psi_boundary'] - data['equilibrium.time_slice.global_quantities.psi_axis'])
                 ).to_numpy().flatten()
+            else:
+                psin_dim = data[psin_eq].dims[0]
+                psin_data = data.swap_dims({psin_dim: psin_eq}).drop_duplicates(psin_eq)
             tag = 'equilibrium.time_slice.profiles_2d.grid.dim1'
             if tag in data:
                 rvec = data[tag].to_numpy().flatten()
@@ -690,50 +694,50 @@ class imas_io(io):
                 eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
             tag = 'equilibrium.vacuum_toroidal_field.r0'
             if tag in data:
-                eqdata['rcentr'] = float(data[tag].to_numpy().flatten())
+                eqdata['rcentr'] = float(data[tag].to_numpy().item())
             tag = 'equilibrium.vacuum_toroidal_field.b0'
             if tag in data:
-                eqdata['bcentr'] = float(data[tag].to_numpy().flatten())
+                eqdata['bcentr'] = float(data[tag].to_numpy().item())
             tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.r'
             if tag in data:
-                eqdata['rmagx'] = float(data[tag].to_numpy().flatten())
+                eqdata['rmagx'] = float(data[tag].to_numpy().item())
             tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
             if tag in data:
-                eqdata['zmagx'] = float(data[tag].to_numpy().flatten())
+                eqdata['zmagx'] = float(data[tag].to_numpy().item())
             tag = 'equilibrium.time_slice.global_quantities.psi_axis'
             if tag in data:
-                eqdata['simagx'] = float(data[tag].to_numpy().flatten())
+                eqdata['simagx'] = float(data[tag].to_numpy().item())
             tag = 'equilibrium.time_slice.global_quantities.psi_boundary'
             if tag in data:
-                eqdata['sibdry'] = float(data[tag].to_numpy().flatten())
+                eqdata['sibdry'] = float(data[tag].to_numpy().item())
             tag = 'equilibrium.time_slice.global_quantities.ip'
             if tag in data:
-                eqdata['cpasma'] = float(data[tag].to_numpy().flatten())
+                eqdata['cpasma'] = float(data[tag].to_numpy().item())
             tag = 'equilibrium.time_slice.profiles_1d.f'
             if tag in data:
                 if conversion is None:
-                    eqdata['fpol'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                    eqdata['fpol'] = psin_data[tag].interp({psin_eq: psinvec}, kwargs=ikwargs).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['fpol'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.pressure'
             if tag in data:
                 if conversion is None:
-                    eqdata['pres'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                    eqdata['pres'] = psin_data[tag].interp({psin_eq: psinvec}, kwargs=ikwargs).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['pres'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.f_df_dpsi'
             if tag in data:
                 if conversion is None:
-                    eqdata['ffprime'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                    eqdata['ffprime'] = psin_data[tag].interp({psin_eq: psinvec}, kwargs=ikwargs).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['ffprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
             tag = 'equilibrium.time_slice.profiles_1d.dpressure_dpsi'
             if tag in data:
                 if conversion is None:
-                    eqdata['pprime'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                    eqdata['pprime'] = psin_data[tag].interp({psin_eq: psinvec}, kwargs=ikwargs).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['pprime'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
@@ -749,7 +753,7 @@ class imas_io(io):
             tag = 'equilibrium.time_slice.profiles_1d.q'
             if tag in data:
                 if conversion is None:
-                    eqdata['qpsi'] = data.drop_duplicates(psin_eq)[tag].interp({psin_eq: psinvec}).to_numpy().flatten()
+                    eqdata['qpsi'] = psin_data[tag].interp({psin_eq: psinvec}, kwargs=ikwargs).to_numpy().flatten()
                 else:
                     ndata = xr.Dataset(coords={'psin_interp': conversion}, data_vars={tag: (['psin_interp'], data[tag].to_numpy().flatten())})
                     eqdata['qpsi'] = ndata.drop_duplicates('psin_interp')[tag].interp(psin_interp=psinvec, kwargs=ikwargs).to_numpy().flatten()
