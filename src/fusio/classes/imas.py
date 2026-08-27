@@ -181,7 +181,10 @@ class imas_io(io):
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self.has_imas: bool = imas.backends.imas_core.imas_interface.has_imas
+        # This was only available for imas-python < 2.2
+        self.has_imas: bool = getattr(
+            imas.backends.imas_core.imas_interface, 'has_imas', True
+        )
         ipath = None
         opath = None
         for arg in args:
