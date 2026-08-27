@@ -355,6 +355,7 @@ class plasma_io(io):
                 zb = np.concatenate([zb, np.asarray([zb[0]])])
                 fs[-1]['r'] = rb
                 fs[-1]['z'] = zb
+                fs[-1]['rmin'] = 0.5 * (np.nanmax(rb) - np.nanmin(rb))
             grid = [str(g) for g in data['grid'].to_numpy()] if 'grid' in data else ['r', 'z']
             poloidal_index = list(data['poloidal_index'].to_numpy()) if 'poloidal_index' in data else [i for i in range(501)]
             theta = np.linspace(0.0, 2.0 * np.pi, len(poloidal_index))
@@ -363,9 +364,9 @@ class plasma_io(io):
             if 'grid' not in data:
                 newcoords['grid'] = grid
             contour = data['contour'] if 'contour' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']), 2, len(theta))), coords={'time': data['time'], 'radius': data['radius'], 'grid': grid, 'poloidal_index': poloidal_index})
-            rgeo = data['r_geometric'] if 'r_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
-            zgeo = data['z_geometric'] if 'z_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
-            rmin = data['r_minor'] if 'r_minor' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
+            rgeo = data['r_geometric'] if 'r_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))), coords={'time': data['time'], 'radius': data['radius']})
+            zgeo = data['z_geometric'] if 'z_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))), coords={'time': data['time'], 'radius': data['radius']})
+            rmin = data['r_minor'] if 'r_minor' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))), coords={'time': data['time'], 'radius': data['radius']})
             for i, con in enumerate(fs):
                 r = data['radius'].isel(radius=i).to_numpy().item(0)
                 r_con_in = copy.deepcopy(con['r'])
@@ -389,7 +390,13 @@ class plasma_io(io):
             newvars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], contour.to_numpy())
             newvars['r_geometric'] = (['time', 'radius'], rgeo.to_numpy())
             newvars['z_geometric'] = (['time', 'radius'], zgeo.to_numpy())
-            newvars['r_minor'] = (['time', 'radius'], rmin.to_numpy())
+            rmin_arr = rmin.to_numpy()
+            # Fix for r_minor dropping in the LCFS, since megpy tracing errors can cause monotonicity violation
+            for it in range(rmin_arr.shape[0]):
+                for ir in range(1, rmin_arr.shape[1]):
+                    if rmin_arr[it, ir] <= rmin_arr[it, ir - 1]:
+                        rmin_arr[it, ir] = rmin_arr[it, ir - 1] + 1.0e-6
+            newvars['r_minor'] = (['time', 'radius'], rmin_arr)
         if newvars:
             if side == 'input':
                 self.update_input_coords(newcoords)
@@ -815,7 +822,9 @@ class plasma_io(io):
             newcoords['field_direction'] = np.array(['parallel', 'perpendicular'])
             field_velocity_i = np.concatenate([np.expand_dims(vperp.to_numpy(), axis=-1), np.expand_dims(vpar.to_numpy(), axis=-1)], axis=-1)
             grad_field_velocity_i = np.concatenate([np.expand_dims(grad_vperp, axis=-1), np.expand_dims(grad_vpar, axis=-1)], axis=-1)
-            rotation_frequency_sonic = (vperp * field / (data['r_geometric'] * (data['field_squared'].sel(direction='poloidal', drop=True) ** 0.5))).isel(ion=main_species).max('ion').to_numpy()
+            poloidal_field = data['field_squared'].sel(direction='poloidal', drop=True) ** 0.5
+            poloidal_field = poloidal_field.where(~np.isclose(poloidal_field, 0.0), 1.0e-6)
+            rotation_frequency_sonic = (vperp * field / (data['r_geometric'] * poloidal_field)).isel(ion=main_species).max('ion').to_numpy()
             exb_norm = (data['r_minor'] / data['safety_factor']).to_numpy()
             exb_shearing_rate = exb_norm * vectorized_numpy_derivative(data['r_minor'].to_numpy(), -vperp.isel(ion=main_species).mean('ion').to_numpy() / np.where(np.isclose(exb_norm, 0.0), 1.0e-4, exb_norm))
             newvars['field_velocity_i'] = (['time', 'radius', 'ion', 'field_direction'], field_velocity_i)
