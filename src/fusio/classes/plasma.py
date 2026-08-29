@@ -1754,12 +1754,7 @@ class plasma_io(io):
                         vtag = 'core_profiles.profiles_1d.ion.velocity.toroidal'
                         ptag = 'core_profiles.profiles_1d.ion.velocity.poloidal'
                         if 'ion' in coords:
-                            # compute_derived_quantities()'s _compute_extended_local_inputs requires
-                            # velocity_i unconditionally (no presence guard, unlike e.g.
-                            # rotation_frequency_sonic) -- always populate it, zero (i.e. no
-                            # rotation, the physically correct default for this project's static
-                            # equilibrium reconstructions) where the source has no ion-velocity data,
-                            # matching from_gacode's own always-populate pattern for the same field.
+                            # _compute_extended_local_inputs() requires velocity_i unconditionally
                             velocity_i = np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.directions)))
                             if vtag in data:
                                 velocity_i[0, ..., cls.directions.index('toroidal')] = cocos['scyl'] * data[vtag].to_numpy()
@@ -1767,13 +1762,6 @@ class plasma_io(io):
                                 velocity_i[0, ..., cls.directions.index('poloidal')] = cocos['spol'] * data[ptag].to_numpy()
                             data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], velocity_i)
                             coords['direction'] = list(cls.directions)
-                        # _compute_extended_local_inputs also requires heat_source_e/i,
-                        # particle_source_e/i, momentum_source_i, and heat_exchange_ei
-                        # unconditionally, all 'source'-dimensioned against the full cls.sources
-                        # list (it .sel()s specific source names out of them). Real source-profile
-                        # data (core_sources IDS) is never populated anywhere in this project (see
-                        # cmod_to_imas/SESSION_NOTES.md) -- zero-fill all of them, matching
-                        # from_gacode's own always-populate pattern for these same fields.
                         coords['source'] = list(cls.sources)
                         data_vars['heat_source_e'] = (['time', 'radius', 'source'], np.zeros((1, len(coords['radius']), len(cls.sources))))
                         data_vars['particle_source_e'] = (['time', 'radius', 'source'], np.zeros((1, len(coords['radius']), len(cls.sources))))
@@ -1818,23 +1806,9 @@ class plasma_io(io):
                             data_vars['r_geometric'] = (['time', 'radius'], np.expand_dims((0.5 * (data[otag] + data[itag])).interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
                         tag = 'equilibrium.time_slice.profiles_1d.elongation'
                         if tag in data:
-                            # Not a plasma_io basevar, but _compute_scalings requires a plain
-                            # 'kappa' (LCFS elongation) unconditionally for its confinement-time
-                            # scaling laws -- distinct from the contour-derived 'mxh_kappa' that
-                            # _compute_derived_geometry computes from add_geometry_from_eqdsk's
-                            # traced flux surfaces.
                             data_vars['kappa'] = (['time', 'radius'], np.expand_dims(data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
 
-                    # NOTE: core_sources is never populated in any IMAS data this codebase has
-                    # produced so far (see cmod_to_imas/SESSION_NOTES.md) -- this block's own
-                    # 'radius' vs. 'rho' coordinate-key convention was never adapted to match
-                    # the fix above (still checks/uses 'rho', which coords never contains any
-                    # more), so it now consistently no-ops instead of running with plasma_io's
-                    # 'time'/'radius' schema and gacode-style dims/names mismatched -- same
-                    # observable (no-op) behavior as before this fix, just for a documented
-                    # reason rather than an accidental one. Left unconverted: no real
-                    # core_sources data exists anywhere in this project to verify a rewrite
-                    # against, unlike the core_profiles/equilibrium blocks above.
+                    # NOTE: core_sources is never populated in any IMAS data this codebase generates
                     if time_cs in data.coords and src_cs_i in data.dims and src_cs in data and rho_cs_i in data.dims and rho_cs in data and 'rho' in coords:
                         data = data.interp({time_cs: time.item(i)}, kwargs=ikwargs) if data[time_cs].size > 1 else data.isel({time_cs: 0})
                         data = data.swap_dims({src_cs_i: src_cs})
