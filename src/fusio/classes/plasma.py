@@ -1698,7 +1698,7 @@ class plasma_io(io):
                         data = data.isel({time_cp: time_index}).swap_dims({rho_cp_i: rho_cp}).drop_duplicates(rho_cp)
                         if ion_cp_i in data.dims and ion_cp in data:
                             data = data.swap_dims({ion_cp_i: ion_cp})
-                        coords['time'] = np.array([i], dtype=int)
+                        coords['time'] = np.atleast_1d(time.item(i))
                         coords['radius'] = data[rho_cp].to_numpy().flatten()
                         data_vars['mass_e'] = (['time'], np.atleast_1d([5.4488748e-04]))
                         data_vars['charge_e'] = (['time'], np.atleast_1d([-1.0]))
@@ -1713,7 +1713,7 @@ class plasma_io(io):
                                     types.extend(['thermal' if data[tag].sel({ion_cp: name}).sum() > 0.0 else 'fast'])
                                 ni = data[tag]
                                 data_vars['density_i'] = (['time', 'radius', 'ion'], np.expand_dims(ni.to_numpy().T, axis=0))
-                                data_vars['type'] = (['time', 'ion'], np.expand_dims(types, axis=0))
+                                data_vars['type_i'] = (['time', 'ion'], np.expand_dims(types, axis=0))
                             tag = 'core_profiles.profiles_1d.ion.temperature'
                             if tag in data:
                                 ti = data[tag]
@@ -1742,7 +1742,6 @@ class plasma_io(io):
                         if tag in data:
                             te = data[tag]
                             data_vars['temperature_e'] = (['time', 'radius'], np.expand_dims(te.to_numpy(), axis=0))
-                        # tag = 'core_profiles.profiles_1d.pressure_thermal'
                         tag = 'core_profiles.profiles_1d.q'
                         if tag in data:
                             data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * np.expand_dims(data[tag].to_numpy(), axis=0))
@@ -1752,84 +1751,93 @@ class plasma_io(io):
                         tag = 'core_profiles.profiles_1d.j_bootstrap'
                         if tag in data:
                             data_vars['jbs'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
-                        #tag = 'core_profiles.profiles_1d.momentum_tor'
-                        tag = 'core_profiles.profiles_1d.ion.velocity.toroidal'
-                        if tag in data:
-                            data_vars['vtor'] = (['n', 'rho', 'name'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy().T, axis=0))
-                        tag = 'core_profiles.profiles_1d.ion.velocity.poloidal'
-                        if tag in data:
-                            data_vars['vpol'] = (['n', 'rho', 'name'], cocos['spol'] * np.expand_dims(data[tag].to_numpy().T, axis=0))
+                        vtag = 'core_profiles.profiles_1d.ion.velocity.toroidal'
+                        ptag = 'core_profiles.profiles_1d.ion.velocity.poloidal'
+                        if 'ion' in coords:
+                            # compute_derived_quantities()'s _compute_extended_local_inputs requires
+                            # velocity_i unconditionally (no presence guard, unlike e.g.
+                            # rotation_frequency_sonic) -- always populate it, zero (i.e. no
+                            # rotation, the physically correct default for this project's static
+                            # equilibrium reconstructions) where the source has no ion-velocity data,
+                            # matching from_gacode's own always-populate pattern for the same field.
+                            velocity_i = np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.directions)))
+                            if vtag in data:
+                                velocity_i[0, ..., cls.directions.index('toroidal')] = cocos['scyl'] * data[vtag].to_numpy()
+                            if ptag in data:
+                                velocity_i[0, ..., cls.directions.index('poloidal')] = cocos['spol'] * data[ptag].to_numpy()
+                            data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], velocity_i)
+                            coords['direction'] = list(cls.directions)
+                        # _compute_extended_local_inputs also requires heat_source_e/i,
+                        # particle_source_e/i, momentum_source_i, and heat_exchange_ei
+                        # unconditionally, all 'source'-dimensioned against the full cls.sources
+                        # list (it .sel()s specific source names out of them). Real source-profile
+                        # data (core_sources IDS) is never populated anywhere in this project (see
+                        # cmod_to_imas/SESSION_NOTES.md) -- zero-fill all of them, matching
+                        # from_gacode's own always-populate pattern for these same fields.
+                        coords['source'] = list(cls.sources)
+                        data_vars['heat_source_e'] = (['time', 'radius', 'source'], np.zeros((1, len(coords['radius']), len(cls.sources))))
+                        data_vars['particle_source_e'] = (['time', 'radius', 'source'], np.zeros((1, len(coords['radius']), len(cls.sources))))
+                        data_vars['heat_exchange_ei'] = (['time', 'radius'], np.zeros((1, len(coords['radius']))))
+                        if 'ion' in coords:
+                            data_vars['heat_source_i'] = (['time', 'radius', 'ion', 'source'], np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.sources))))
+                            data_vars['particle_source_i'] = (['time', 'radius', 'ion', 'source'], np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.sources))))
+                            data_vars['momentum_source_i'] = (['time', 'radius', 'ion', 'direction', 'source'], np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.directions), len(cls.sources))))
+                            coords['direction'] = list(cls.directions)
                         tag = 'core_profiles.profiles_1d.rotation_frequency_tor_sonic'
                         if tag in data:
                             data_vars['rotation_frequency_sonic'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
 
-                    if time_eq in data.coords and psi_eq_i in data.dims and rho_eq in data and 'rho' in coords:
+                    if time_eq in data.coords and psi_eq_i in data.dims and rho_eq in data and 'radius' in coords:
                         data = data.interp({time_eq: time.item(i)}, kwargs=ikwargs) if data[time_eq].size > 1 else data.isel({time_eq: 0})
                         data = data.swap_dims({psi_eq_i: rho_eq}).drop_duplicates(rho_eq)
-                        eqdsk_data = obj.to_eqdsk(time_index=time_index, side=side, transpose=transpose_equilibrium) if hasattr(obj, 'to_eqdsk') else {}
-                        rhovec = data.get(rho_eq, xr.DataArray()).to_numpy().flatten()
-                        psivec = None
                         tag = 'equilibrium.time_slice.profiles_1d.psi'
-                        if tag in data:
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'psi': (['rho_int'], data[tag].to_numpy().flatten())})
-                            #data_vars['polflux'] = (['n', 'rho'], np.expand_dims(ndata['psi'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            psivec = data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy()
-                            data_vars['polflux'] = (['n', 'rho'], np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * np.expand_dims(psivec, axis=0))
-                            print(psivec[0], eqdsk_data['simagx'])
-                        tag = 'equilibrium.vacuum_toroidal_field.r0'
-                        if tag in data:
-                            data_vars['rcentr'] = (['n'], np.atleast_1d(data[tag].to_numpy()))
+                        ptag = 'equilibrium.time_slice.profiles_1d.phi'
+                        if tag in data or ptag in data:
+                            magnetic_flux = np.zeros((1, len(coords['radius']), len(cls.directions)))
+                            if tag in data:
+                                psivec = data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy()
+                                magnetic_flux[0, :, cls.directions.index('poloidal')] = np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * psivec
+                            if ptag in data:
+                                phivec = data[ptag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy()
+                                magnetic_flux[0, :, cls.directions.index('toroidal')] = np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * phivec
+                            data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], magnetic_flux)
+                            coords['direction'] = list(cls.directions)
                         tag = 'equilibrium.vacuum_toroidal_field.b0'
-                        if tag in data:
-                            data_vars['bcentr'] = (['n'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
-                        tag = 'equilibrium.time_slice.profiles_1d.pressure'
-                        if tag in data and 'ptot' not in data_vars:
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'pressure': (['rho_int'], data[tag].to_numpy().flatten())})
-                            #data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ndata['pressure'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['ptot'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                        tag = 'equilibrium.time_slice.profiles_1d.q'
-                        if tag in data and 'q' not in data_vars:
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'q': (['rho_int'], data[tag].to_numpy().flatten())})
-                            #data_vars['q'] = (['n', 'rho'], np.expand_dims(ndata['q'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['q'] = (['n', 'rho'], cocos['spol'] * np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        if tag in data and 'field_axis' not in data_vars:
+                            data_vars['field_axis'] = (['time'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
                         tag = 'equilibrium.time_slice.global_quantities.ip'
-                        if tag in data:
-                            data_vars['current'] = (['n'], 1.0e-6 * cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
+                        if tag in data and 'current' not in data_vars:
+                            data_vars['current'] = (['time'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
+                        tag = 'equilibrium.time_slice.profiles_1d.q'
+                        if tag in data and 'safety_factor' not in data_vars:
+                            data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * np.expand_dims(data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
                         itag = 'equilibrium.time_slice.profiles_1d.r_inboard'
                         otag = 'equilibrium.time_slice.profiles_1d.r_outboard'
-                        if itag in data and otag in data and ('rmaj' not in data_vars or 'rmin' not in data_vars):
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={
-                            #    'r_inboard': (['rho_int'], data[itag].to_numpy().flatten()),
-                            #    'r_outboard': (['rho_int'], data[otag].to_numpy().flatten())
-                            #})
-                            #data_vars['rmin'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] - ndata['r_inboard'])).interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            #data_vars['rmaj'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] + ndata['r_inboard'])).interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['rmin'] = (['n', 'rho'], np.expand_dims((0.5 * (data[otag] - data[itag])).interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['rmaj'] = (['n', 'rho'], np.expand_dims((0.5 * (data[otag] + data[itag])).interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                        #tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
-                        #if tag in data and 'zmag' not in data_vars:
-                        #    data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.repeat(data[tag].to_numpy().flatten(), len(coords['rho']), axis=0), axis=0))
+                        if itag in data and otag in data and ('r_minor' not in data_vars or 'r_geometric' not in data_vars):
+                            data_vars['r_minor'] = (['time', 'radius'], np.expand_dims((0.5 * (data[otag] - data[itag])).interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['r_geometric'] = (['time', 'radius'], np.expand_dims((0.5 * (data[otag] + data[itag])).interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
                         tag = 'equilibrium.time_slice.profiles_1d.elongation'
-                        if tag in data: # and 'kappa' not in data_vars:
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'elongation': (['rho_int'], data[tag].to_numpy().flatten())})
-                            #data_vars['kappa'] = (['n', 'rho'], np.expand_dims(ndata['elongation'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                        #if 'equilibrium.time_slice.profiles_1d.triangularity_upper' in data or 'equilibrium.time_slice.profiles_1d.triangularity_lower' in data and 'delta' not in data_vars:
-                            #tri = np.zeros(data['rho(-)'].shape)
-                            #itri = 0
-                            #if hasattr(time_struct.profiles_1d, 'triangularity_upper'):
-                            #    tri += time_struct.profiles_1d.triangularity_upper.flatten()
-                            #    itri += 1
-                            #if hasattr(time_struct.profiles_1d, 'triangularity_lower') and len(time_struct.profiles_1d.triangularity_lower) == data['nexp']:
-                            #    tri += time_struct.profiles_1d.triangularity_lower.flatten()
-                            #    itri += 1
-                            #data['delta(-)'] = tri / float(itri) if itri > 0 else tri
+                        if tag in data:
+                            # Not a plasma_io basevar, but _compute_scalings requires a plain
+                            # 'kappa' (LCFS elongation) unconditionally for its confinement-time
+                            # scaling laws -- distinct from the contour-derived 'mxh_kappa' that
+                            # _compute_derived_geometry computes from add_geometry_from_eqdsk's
+                            # traced flux surfaces.
+                            data_vars['kappa'] = (['time', 'radius'], np.expand_dims(data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
 
+                    # NOTE: core_sources is never populated in any IMAS data this codebase has
+                    # produced so far (see cmod_to_imas/SESSION_NOTES.md) -- this block's own
+                    # 'radius' vs. 'rho' coordinate-key convention was never adapted to match
+                    # the fix above (still checks/uses 'rho', which coords never contains any
+                    # more), so it now consistently no-ops instead of running with plasma_io's
+                    # 'time'/'radius' schema and gacode-style dims/names mismatched -- same
+                    # observable (no-op) behavior as before this fix, just for a documented
+                    # reason rather than an accidental one. Left unconverted: no real
+                    # core_sources data exists anywhere in this project to verify a rewrite
+                    # against, unlike the core_profiles/equilibrium blocks above.
                     if time_cs in data.coords and src_cs_i in data.dims and src_cs in data and rho_cs_i in data.dims and rho_cs in data and 'rho' in coords:
                         data = data.interp({time_cs: time.item(i)}, kwargs=ikwargs) if data[time_cs].size > 1 else data.isel({time_cs: 0})
                         data = data.swap_dims({src_cs_i: src_cs})
-                        #if ion_cs_i in data.dims and ion_cs in data:
-                        #    data = data.swap_dims({ion_cs_i: ion_cs})
                         srclist = data[src_cs].to_numpy().tolist()
                         qrfe = np.zeros((len(coords['rho']), ))
                         qrfi = np.zeros((len(coords['rho']), ))
@@ -1894,7 +1902,6 @@ class plasma_io(io):
                             srctag = 'j_bootstrap'
                             if srctag in srclist and 'jbs' not in data_vars:
                                 data_vars['jbs'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                                #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
                             srctag = 'ec'
                             if srctag in srclist:
                                 jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
@@ -1935,7 +1942,7 @@ class plasma_io(io):
                     dsvec.append(xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs))
 
             if len(dsvec) > 0:
-                newobj.input = xr.concat(dsvec, dim='n')
+                newobj.input = xr.concat(dsvec, dim='time')
 
         return newobj
 
