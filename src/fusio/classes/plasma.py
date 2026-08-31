@@ -7,6 +7,7 @@ from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, 
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
+from packaging.version import Version
 
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
@@ -354,6 +355,7 @@ class plasma_io(io):
                 zb = np.concatenate([zb, np.asarray([zb[0]])])
                 fs[-1]['r'] = rb
                 fs[-1]['z'] = zb
+                fs[-1]['rmin'] = 0.5 * (np.nanmax(rb) - np.nanmin(rb))
             grid = [str(g) for g in data['grid'].to_numpy()] if 'grid' in data else ['r', 'z']
             poloidal_index = list(data['poloidal_index'].to_numpy()) if 'poloidal_index' in data else [i for i in range(501)]
             theta = np.linspace(0.0, 2.0 * np.pi, len(poloidal_index))
@@ -362,9 +364,9 @@ class plasma_io(io):
             if 'grid' not in data:
                 newcoords['grid'] = grid
             contour = data['contour'] if 'contour' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']), 2, len(theta))), coords={'time': data['time'], 'radius': data['radius'], 'grid': grid, 'poloidal_index': poloidal_index})
-            rgeo = data['r_geometric'] if 'r_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
-            zgeo = data['z_geometric'] if 'z_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
-            rmin = data['r_minor'] if 'r_minor' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))))
+            rgeo = data['r_geometric'] if 'r_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))), coords={'time': data['time'], 'radius': data['radius']})
+            zgeo = data['z_geometric'] if 'z_geometric' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))), coords={'time': data['time'], 'radius': data['radius']})
+            rmin = data['r_minor'] if 'r_minor' in data else xr.DataArray(np.zeros((len(data['time']), len(data['radius']))), coords={'time': data['time'], 'radius': data['radius']})
             for i, con in enumerate(fs):
                 r = data['radius'].isel(radius=i).to_numpy().item(0)
                 r_con_in = copy.deepcopy(con['r'])
@@ -388,7 +390,13 @@ class plasma_io(io):
             newvars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], contour.to_numpy())
             newvars['r_geometric'] = (['time', 'radius'], rgeo.to_numpy())
             newvars['z_geometric'] = (['time', 'radius'], zgeo.to_numpy())
-            newvars['r_minor'] = (['time', 'radius'], rmin.to_numpy())
+            rmin_arr = rmin.to_numpy()
+            # Fix for r_minor dropping in the LCFS, since megpy tracing errors can cause monotonicity violation
+            for it in range(rmin_arr.shape[0]):
+                for ir in range(1, rmin_arr.shape[1]):
+                    if rmin_arr[it, ir] <= rmin_arr[it, ir - 1]:
+                        rmin_arr[it, ir] = rmin_arr[it, ir - 1] + 1.0e-6
+            newvars['r_minor'] = (['time', 'radius'], rmin_arr)
         if newvars:
             if side == 'input':
                 self.update_input_coords(newcoords)
@@ -498,7 +506,12 @@ class plasma_io(io):
         elif self.has_input:
             data = self.input
         if data is not None:
-            main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
+            # Ion identity (atomic_number_i/type_i) doesn't vary in time --
+            # select a single time slice before building the mask (matching
+            # plot()'s own pattern) rather than flattening the full
+            # (time, ion) array, which silently produced out-of-range `ion`
+            # indices for any data with more than one time point.
+            main_species_mask = (np.isclose(data['atomic_number_i'].isel(time=0).to_numpy(), 1.0) & (data['type_i'].isel(time=0).isin(['thermal'])).to_numpy())
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
             n_i_vol = vectorized_numpy_integration(
                 np.transpose((data['density_i'].isel(ion=main_species) * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
@@ -681,7 +694,9 @@ class plasma_io(io):
             newvars['mxh_field_inner'] = (['time', 'radius', 'direction'], b_inner)
             newvars['mxh_field_outer'] = (['time', 'radius', 'direction'], b_outer)
 
-            main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
+            # See _compute_derived_reference_quantities's identical fix for
+            # why time is selected before building this mask.
+            main_species_mask = (np.isclose(data['atomic_number_i'].isel(time=0).to_numpy(), 1.0) & (data['type_i'].isel(time=0).isin(['thermal'])).to_numpy())
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
             n_i_vol = vectorized_numpy_integration(
                 np.transpose(data['density_i'].isel(ion=main_species).to_numpy() * np.expand_dims(newvars['mxh_dvolume_dr'][-1], axis=-1), axes=(0, 2, 1)),
@@ -714,9 +729,13 @@ class plasma_io(io):
         elif self.has_input:
             data = self.input
         if data is not None:
-            main_species_mask = (np.isclose(data['atomic_number_i'].to_numpy(), 1.0) & (data['type_i'].isin(['thermal'])).to_numpy()).flatten()
+            # See _compute_derived_reference_quantities's identical fix for
+            # why time is selected before building this mask.
+            main_species_mask = (np.isclose(data['atomic_number_i'].isel(time=0).to_numpy(), 1.0) & (data['type_i'].isel(time=0).isin(['thermal'])).to_numpy())
             main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
-            thermal_species_mask = data['type_i'].isin(['thermal']).to_numpy().flatten()
+            # Same time-varies-across-(time,ion) flatten issue as
+            # main_species_mask above.
+            thermal_species_mask = data['type_i'].isel(time=0).isin(['thermal']).to_numpy()
             thermal_species = [i for i in range(len(thermal_species_mask)) if thermal_species_mask[i]]
 
             pressure_e = self.constants['e_si'] * data['temperature_e'] * data['density_e']
@@ -814,7 +833,9 @@ class plasma_io(io):
             newcoords['field_direction'] = np.array(['parallel', 'perpendicular'])
             field_velocity_i = np.concatenate([np.expand_dims(vperp.to_numpy(), axis=-1), np.expand_dims(vpar.to_numpy(), axis=-1)], axis=-1)
             grad_field_velocity_i = np.concatenate([np.expand_dims(grad_vperp, axis=-1), np.expand_dims(grad_vpar, axis=-1)], axis=-1)
-            rotation_frequency_sonic = (vperp * field / (data['r_geometric'] * (data['field_squared'].sel(direction='poloidal', drop=True) ** 0.5))).isel(ion=main_species).max('ion').to_numpy()
+            poloidal_field = data['field_squared'].sel(direction='poloidal', drop=True) ** 0.5
+            poloidal_field = poloidal_field.where(~np.isclose(poloidal_field, 0.0), 1.0e-6)
+            rotation_frequency_sonic = (vperp * field / (data['r_geometric'] * poloidal_field)).isel(ion=main_species).max('ion').to_numpy()
             exb_norm = (data['r_minor'] / data['safety_factor']).to_numpy()
             exb_shearing_rate = exb_norm * vectorized_numpy_derivative(data['r_minor'].to_numpy(), -vperp.isel(ion=main_species).mean('ion').to_numpy() / np.where(np.isclose(exb_norm, 0.0), 1.0e-4, exb_norm))
             newvars['field_velocity_i'] = (['time', 'radius', 'ion', 'field_direction'], field_velocity_i)
@@ -1318,7 +1339,9 @@ class plasma_io(io):
         data_vars: MutableMapping[str, Any] = {}
         if side == 'output' and self.has_output and 'density_e' in self.output and 'charge_i' in self.output and 'density_i' in self.output:
             if use_main_ion and 'atomic_number_i' in self.output and 'type_i' in self.output:
-                main_species_mask = (np.isclose(self.output['atomic_number_i'].to_numpy(), 1.0) & (self.output['type_i'].isin(['thermal'])).to_numpy()).flatten()
+                # See _compute_derived_reference_quantities's identical fix
+                # for why time is selected before building this mask.
+                main_species_mask = (np.isclose(self.output['atomic_number_i'].isel(time=0).to_numpy(), 1.0) & (self.output['type_i'].isel(time=0).isin(['thermal'])).to_numpy())
                 main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
                 non_main_species = [i for i in range(len(main_species_mask)) if ~main_species_mask[i]]
                 density_main_old = self.output['density_i'].isel(ion=main_species)
@@ -1334,7 +1357,9 @@ class plasma_io(io):
             self.update_output_data_vars(data_vars)
         elif self.has_input and 'density_e' in self.input and 'charge_i' in self.input and 'density_i' in self.input:
             if use_main_ion and 'atomic_number_i' in self.input and 'type_i' in self.input:
-                main_species_mask = (np.isclose(self.input['atomic_number_i'].to_numpy(), 1.0) & (self.input['type_i'].isin(['thermal'])).to_numpy()).flatten()
+                # See _compute_derived_reference_quantities's identical fix
+                # for why time is selected before building this mask.
+                main_species_mask = (np.isclose(self.input['atomic_number_i'].isel(time=0).to_numpy(), 1.0) & (self.input['type_i'].isel(time=0).isin(['thermal'])).to_numpy())
                 main_species = [i for i in range(len(main_species_mask)) if main_species_mask[i]]
                 non_main_species = [i for i in range(len(main_species_mask)) if ~main_species_mask[i]]
                 density_main_old = self.input['density_i'].isel(ion=main_species)
@@ -1632,13 +1657,15 @@ class plasma_io(io):
 
             data: xr.Dataset = obj.input if side == 'input' else obj.output
             obj_cocos = obj.input_cocos if side == 'input' else obj.output_cocos  # type: ignore[attr-defined]
+            dd_version = data.attrs.get('data_dictionary_version', None)
+            ion_field = 'name' if dd_version is None or Version(dd_version) >= Version('4.0.0') else 'label'
             cp = 'core_profiles'
             time_cp = f'{cp}.time'
             prof_cp = f'{cp}.profiles_1d'
             rho_cp_i = f'{prof_cp}.grid.rho_tor_norm:i'
             rho_cp = f'{prof_cp}.grid.rho_tor_norm'
             ion_cp_i = f'{prof_cp}.ion:i'
-            ion_cp = f'{prof_cp}.ion.label'
+            ion_cp = f'{prof_cp}.ion.{ion_field}'
             eq = 'equilibrium'
             time_eq = f'{eq}.time'
             ts_eq = f'{eq}.time_slice'
@@ -1655,7 +1682,7 @@ class plasma_io(io):
             rho_cs_i = f'{prof_cs}.grid.rho_tor_norm:i'
             rho_cs = f'{prof_cs}.grid.rho_tor_norm'
             ion_cs_i = f'{prof_cs}.ion:i'
-            ion_cs = f'{prof_cs}.ion.label'
+            ion_cs = f'{prof_cs}.ion.{ion_field}'
             ikwargs = {'fill_value': 'extrapolate'}
 
             cocos_out = 1   # Assumed plasma class has COCOS=1
@@ -1686,7 +1713,7 @@ class plasma_io(io):
                         data = data.isel({time_cp: time_index}).swap_dims({rho_cp_i: rho_cp}).drop_duplicates(rho_cp)
                         if ion_cp_i in data.dims and ion_cp in data:
                             data = data.swap_dims({ion_cp_i: ion_cp})
-                        coords['time'] = np.array([i], dtype=int)
+                        coords['time'] = np.atleast_1d(time.item(i))
                         coords['radius'] = data[rho_cp].to_numpy().flatten()
                         data_vars['mass_e'] = (['time'], np.atleast_1d([5.4488748e-04]))
                         data_vars['charge_e'] = (['time'], np.atleast_1d([-1.0]))
@@ -1701,7 +1728,7 @@ class plasma_io(io):
                                     types.extend(['thermal' if data[tag].sel({ion_cp: name}).sum() > 0.0 else 'fast'])
                                 ni = data[tag]
                                 data_vars['density_i'] = (['time', 'radius', 'ion'], np.expand_dims(ni.to_numpy().T, axis=0))
-                                data_vars['type'] = (['time', 'ion'], np.expand_dims(types, axis=0))
+                                data_vars['type_i'] = (['time', 'ion'], np.expand_dims(types, axis=0))
                             tag = 'core_profiles.profiles_1d.ion.temperature'
                             if tag in data:
                                 ti = data[tag]
@@ -1730,7 +1757,6 @@ class plasma_io(io):
                         if tag in data:
                             te = data[tag]
                             data_vars['temperature_e'] = (['time', 'radius'], np.expand_dims(te.to_numpy(), axis=0))
-                        # tag = 'core_profiles.profiles_1d.pressure_thermal'
                         tag = 'core_profiles.profiles_1d.q'
                         if tag in data:
                             data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * np.expand_dims(data[tag].to_numpy(), axis=0))
@@ -1740,84 +1766,67 @@ class plasma_io(io):
                         tag = 'core_profiles.profiles_1d.j_bootstrap'
                         if tag in data:
                             data_vars['jbs'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
-                        #tag = 'core_profiles.profiles_1d.momentum_tor'
-                        tag = 'core_profiles.profiles_1d.ion.velocity.toroidal'
-                        if tag in data:
-                            data_vars['vtor'] = (['n', 'rho', 'name'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy().T, axis=0))
-                        tag = 'core_profiles.profiles_1d.ion.velocity.poloidal'
-                        if tag in data:
-                            data_vars['vpol'] = (['n', 'rho', 'name'], cocos['spol'] * np.expand_dims(data[tag].to_numpy().T, axis=0))
+                        vtag = 'core_profiles.profiles_1d.ion.velocity.toroidal'
+                        ptag = 'core_profiles.profiles_1d.ion.velocity.poloidal'
+                        if 'ion' in coords:
+                            # _compute_extended_local_inputs() requires velocity_i unconditionally
+                            velocity_i = np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.directions)))
+                            if vtag in data:
+                                velocity_i[0, ..., cls.directions.index('toroidal')] = cocos['scyl'] * data[vtag].to_numpy()
+                            if ptag in data:
+                                velocity_i[0, ..., cls.directions.index('poloidal')] = cocos['spol'] * data[ptag].to_numpy()
+                            data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], velocity_i)
+                            coords['direction'] = list(cls.directions)
+                        coords['source'] = list(cls.sources)
+                        data_vars['heat_source_e'] = (['time', 'radius', 'source'], np.zeros((1, len(coords['radius']), len(cls.sources))))
+                        data_vars['particle_source_e'] = (['time', 'radius', 'source'], np.zeros((1, len(coords['radius']), len(cls.sources))))
+                        data_vars['heat_exchange_ei'] = (['time', 'radius'], np.zeros((1, len(coords['radius']))))
+                        if 'ion' in coords:
+                            data_vars['heat_source_i'] = (['time', 'radius', 'ion', 'source'], np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.sources))))
+                            data_vars['particle_source_i'] = (['time', 'radius', 'ion', 'source'], np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.sources))))
+                            data_vars['momentum_source_i'] = (['time', 'radius', 'ion', 'direction', 'source'], np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.directions), len(cls.sources))))
+                            coords['direction'] = list(cls.directions)
                         tag = 'core_profiles.profiles_1d.rotation_frequency_tor_sonic'
                         if tag in data:
                             data_vars['rotation_frequency_sonic'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
 
-                    if time_eq in data.coords and psi_eq_i in data.dims and rho_eq in data and 'rho' in coords:
+                    if time_eq in data.coords and psi_eq_i in data.dims and rho_eq in data and 'radius' in coords:
                         data = data.interp({time_eq: time.item(i)}, kwargs=ikwargs) if data[time_eq].size > 1 else data.isel({time_eq: 0})
                         data = data.swap_dims({psi_eq_i: rho_eq}).drop_duplicates(rho_eq)
-                        eqdsk_data = obj.to_eqdsk(time_index=time_index, side=side, transpose=transpose_equilibrium) if hasattr(obj, 'to_eqdsk') else {}
-                        rhovec = data.get(rho_eq, xr.DataArray()).to_numpy().flatten()
-                        psivec = None
                         tag = 'equilibrium.time_slice.profiles_1d.psi'
-                        if tag in data:
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'psi': (['rho_int'], data[tag].to_numpy().flatten())})
-                            #data_vars['polflux'] = (['n', 'rho'], np.expand_dims(ndata['psi'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            psivec = data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy()
-                            data_vars['polflux'] = (['n', 'rho'], np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * np.expand_dims(psivec, axis=0))
-                            print(psivec[0], eqdsk_data['simagx'])
-                        tag = 'equilibrium.vacuum_toroidal_field.r0'
-                        if tag in data:
-                            data_vars['rcentr'] = (['n'], np.atleast_1d(data[tag].to_numpy()))
+                        ptag = 'equilibrium.time_slice.profiles_1d.phi'
+                        if tag in data or ptag in data:
+                            magnetic_flux = np.zeros((1, len(coords['radius']), len(cls.directions)))
+                            if tag in data:
+                                psivec = data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy()
+                                magnetic_flux[0, :, cls.directions.index('poloidal')] = np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * psivec
+                            if ptag in data:
+                                phivec = data[ptag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy()
+                                magnetic_flux[0, :, cls.directions.index('toroidal')] = np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * phivec
+                            data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], magnetic_flux)
+                            coords['direction'] = list(cls.directions)
                         tag = 'equilibrium.vacuum_toroidal_field.b0'
-                        if tag in data:
-                            data_vars['bcentr'] = (['n'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
-                        tag = 'equilibrium.time_slice.profiles_1d.pressure'
-                        if tag in data and 'ptot' not in data_vars:
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'pressure': (['rho_int'], data[tag].to_numpy().flatten())})
-                            #data_vars['ptot'] = (['n', 'rho'], np.expand_dims(ndata['pressure'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['ptot'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                        tag = 'equilibrium.time_slice.profiles_1d.q'
-                        if tag in data and 'q' not in data_vars:
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'q': (['rho_int'], data[tag].to_numpy().flatten())})
-                            #data_vars['q'] = (['n', 'rho'], np.expand_dims(ndata['q'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['q'] = (['n', 'rho'], cocos['spol'] * np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                        if tag in data and 'field_axis' not in data_vars:
+                            data_vars['field_axis'] = (['time'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
                         tag = 'equilibrium.time_slice.global_quantities.ip'
-                        if tag in data:
-                            data_vars['current'] = (['n'], 1.0e-6 * cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
+                        if tag in data and 'current' not in data_vars:
+                            data_vars['current'] = (['time'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
+                        tag = 'equilibrium.time_slice.profiles_1d.q'
+                        if tag in data and 'safety_factor' not in data_vars:
+                            data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * np.expand_dims(data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
                         itag = 'equilibrium.time_slice.profiles_1d.r_inboard'
                         otag = 'equilibrium.time_slice.profiles_1d.r_outboard'
-                        if itag in data and otag in data and ('rmaj' not in data_vars or 'rmin' not in data_vars):
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={
-                            #    'r_inboard': (['rho_int'], data[itag].to_numpy().flatten()),
-                            #    'r_outboard': (['rho_int'], data[otag].to_numpy().flatten())
-                            #})
-                            #data_vars['rmin'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] - ndata['r_inboard'])).interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            #data_vars['rmaj'] = (['n', 'rho'], np.expand_dims((0.5 * (ndata['r_outboard'] + ndata['r_inboard'])).interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['rmin'] = (['n', 'rho'], np.expand_dims((0.5 * (data[otag] - data[itag])).interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['rmaj'] = (['n', 'rho'], np.expand_dims((0.5 * (data[otag] + data[itag])).interp({rho_cp: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                        #tag = 'equilibrium.time_slice.global_quantities.magnetic_axis.z'
-                        #if tag in data and 'zmag' not in data_vars:
-                        #    data_vars['zmag'] = (['n', 'rho'], np.expand_dims(np.repeat(data[tag].to_numpy().flatten(), len(coords['rho']), axis=0), axis=0))
+                        if itag in data and otag in data and ('r_minor' not in data_vars or 'r_geometric' not in data_vars):
+                            data_vars['r_minor'] = (['time', 'radius'], np.expand_dims((0.5 * (data[otag] - data[itag])).interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['r_geometric'] = (['time', 'radius'], np.expand_dims((0.5 * (data[otag] + data[itag])).interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
                         tag = 'equilibrium.time_slice.profiles_1d.elongation'
-                        if tag in data: # and 'kappa' not in data_vars:
-                            #ndata = xr.Dataset(coords={'rho_int': rhovec}, data_vars={'elongation': (['rho_int'], data[tag].to_numpy().flatten())})
-                            #data_vars['kappa'] = (['n', 'rho'], np.expand_dims(ndata['elongation'].interp({'rho_int': coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                            data_vars['kappa'] = (['n', 'rho'], np.expand_dims(data[tag].interp({rho_eq: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                        #if 'equilibrium.time_slice.profiles_1d.triangularity_upper' in data or 'equilibrium.time_slice.profiles_1d.triangularity_lower' in data and 'delta' not in data_vars:
-                            #tri = np.zeros(data['rho(-)'].shape)
-                            #itri = 0
-                            #if hasattr(time_struct.profiles_1d, 'triangularity_upper'):
-                            #    tri += time_struct.profiles_1d.triangularity_upper.flatten()
-                            #    itri += 1
-                            #if hasattr(time_struct.profiles_1d, 'triangularity_lower') and len(time_struct.profiles_1d.triangularity_lower) == data['nexp']:
-                            #    tri += time_struct.profiles_1d.triangularity_lower.flatten()
-                            #    itri += 1
-                            #data['delta(-)'] = tri / float(itri) if itri > 0 else tri
+                        if tag in data:
+                            data_vars['kappa'] = (['time', 'radius'], np.expand_dims(data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
 
+                    # NOTE: core_sources is never populated in any IMAS data this codebase generates
                     if time_cs in data.coords and src_cs_i in data.dims and src_cs in data and rho_cs_i in data.dims and rho_cs in data and 'rho' in coords:
                         data = data.interp({time_cs: time.item(i)}, kwargs=ikwargs) if data[time_cs].size > 1 else data.isel({time_cs: 0})
                         data = data.swap_dims({src_cs_i: src_cs})
-                        #if ion_cs_i in data.dims and ion_cs in data:
-                        #    data = data.swap_dims({ion_cs_i: ion_cs})
                         srclist = data[src_cs].to_numpy().tolist()
                         qrfe = np.zeros((len(coords['rho']), ))
                         qrfi = np.zeros((len(coords['rho']), ))
@@ -1882,7 +1891,6 @@ class plasma_io(io):
                             srctag = 'j_bootstrap'
                             if srctag in srclist and 'jbs' not in data_vars:
                                 data_vars['jbs'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
-                                #data_vars['jbstor'] = (['n', 'rho'], np.expand_dims(1.0e-6 * dvec, axis=0))
                             srctag = 'ec'
                             if srctag in srclist:
                                 jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
@@ -1923,7 +1931,7 @@ class plasma_io(io):
                     dsvec.append(xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs))
 
             if len(dsvec) > 0:
-                newobj.input = xr.concat(dsvec, dim='n')
+                newobj.input = xr.concat(dsvec, dim='time')
 
         return newobj
 
@@ -2248,5 +2256,215 @@ class plasma_io(io):
             coords: MutableMapping[str, Any] = {}
             data_vars: MutableMapping[str, Any] = {}
             attrs: MutableMapping[str, Any] = {}
+
+            # TORAX (via mexcal, this codebase's geometry provider) is
+            # always COCOS 2 (mexcal/cocos.py: MEXCAL_COCOS = 2, CHEASE
+            # family, e_Bp=0) -- fixed, not something read from the data
+            # the way IMAS's data_dictionary_version-tied convention is.
+            cocos = define_cocos_converter(2, 1)   # Assumed plasma class has COCOS=1
+            ikwargs = {'fill_value': 'extrapolate'}
+
+            if window is not None and len(window) >= 2 and 'time' in data.coords:
+                data = data.sel(time=slice(window[0], window[-1]))
+
+            if 'time' in data.coords and 'rho_norm' in data.coords:
+
+                coords['time'] = data['time'].to_numpy()
+                coords['radius'] = data['rho_norm'].to_numpy()
+                attrs['radius'] = 'rho_tor_norm'
+                nt = len(coords['time'])
+                nr = len(coords['radius'])
+
+                def onrad(tag: str) -> NDArray:
+                    # TORAX profiles live on one of 3 different radial grids
+                    # (rho_norm/rho_cell_norm/rho_face_norm) -- interpolate
+                    # anything not already on rho_norm onto this object's
+                    # own chosen `radius` coordinate, matching from_imas's
+                    # own single-shared-radius convention.
+                    da = data[tag]
+                    rho_dim = next(d for d in da.dims if d != 'time')
+                    if rho_dim == 'rho_norm':
+                        return da.to_numpy()
+                    return da.interp({rho_dim: coords['radius']}, kwargs=ikwargs).to_numpy()
+
+                # TORAX's own outputs are already SI (W, W/m^3, A/m^2, m^-3,
+                # Wb/rad, etc.) -- unlike GACODE/IMAS, no unit-scaling
+                # factors are needed anywhere below except keV -> eV for
+                # temperatures.
+
+                data_vars['mass_e'] = (['time'], np.full(nt, 5.4488748e-04))
+                data_vars['charge_e'] = (['time'], np.full(nt, -1.0))
+
+                # -- ion composition --
+                # TORAX's main_ion fractions are fixed (not per-radius);
+                # define_ion_species' own short_name lookup has no "He3"
+                # entry (only generic "He" -> mass 4), so main-ion species
+                # go through explicit (z, a) instead of short_name.
+                main_ion_za = {'H': (1, 1), 'D': (1, 2), 'T': (1, 3),
+                               'He3': (2, 3), 'He4': (2, 4)}
+                main_ion_names = (list(data['main_ion'].to_numpy())
+                                  if 'main_ion' in data.coords else [])
+                impurity_names = (list(data['impurity_symbol'].to_numpy())
+                                  if 'impurity_symbol' in data.coords else [])
+                if main_ion_names or impurity_names:
+                    coords['ion'] = main_ion_names + impurity_names
+                    n_ion = len(coords['ion'])
+                    mass_i = np.zeros((n_ion,))
+                    atomic_number_i = np.zeros((n_ion,))
+                    for i, name in enumerate(main_ion_names):
+                        z, a = main_ion_za.get(str(name), (1, 2))
+                        _, sa, sz = define_ion_species(z=z, a=a)
+                        mass_i[i], atomic_number_i[i] = sa, sz
+                    for j, name in enumerate(impurity_names):
+                        _, sa, sz = define_ion_species(short_name=str(name))
+                        mass_i[len(main_ion_names) + j] = sa
+                        atomic_number_i[len(main_ion_names) + j] = sz
+                    data_vars['mass_i'] = (['time', 'ion'], np.tile(mass_i, (nt, 1)))
+                    data_vars['atomic_number_i'] = (['time', 'ion'], np.tile(atomic_number_i, (nt, 1)))
+                    data_vars['type_i'] = (['time', 'ion'], np.full((nt, n_ion), 'thermal'))
+
+                    density_i = np.zeros((nt, nr, n_ion))
+                    if main_ion_names and 'n_i' in data and 'main_ion_fractions' in data:
+                        n_i_total = onrad('n_i')
+                        fractions = data['main_ion_fractions']
+                        for i, name in enumerate(main_ion_names):
+                            frac = fractions.sel(main_ion=name).to_numpy()
+                            density_i[:, :, i] = n_i_total * frac[:, None]
+                    if impurity_names and 'n_impurity_species' in data:
+                        for j, name in enumerate(impurity_names):
+                            da = data['n_impurity_species'].sel(impurity_symbol=name)
+                            rho_dim = next(d for d in da.dims if d != 'time')
+                            vals = (da.to_numpy() if rho_dim == 'rho_norm'
+                                   else da.interp({rho_dim: coords['radius']}, kwargs=ikwargs).to_numpy())
+                            density_i[:, :, len(main_ion_names) + j] = vals
+                    data_vars['density_i'] = (['time', 'radius', 'ion'], density_i)
+
+                    if 'T_i' in data:
+                        # TORAX has one bulk ion temperature, not resolved
+                        # per species -- broadcast, matching how it's
+                        # already the same physical assumption TORAX itself
+                        # makes internally.
+                        t_i = 1.0e3 * onrad('T_i')
+                        data_vars['temperature_i'] = (['time', 'radius', 'ion'],
+                                                      np.repeat(t_i[:, :, None], n_ion, axis=2))
+
+                    charge_i = np.zeros((nt, nr, n_ion))
+                    if main_ion_names and 'Z_i' in data:
+                        z_i = onrad('Z_i')
+                        for i in range(len(main_ion_names)):
+                            charge_i[:, :, i] = z_i
+                    if impurity_names and 'Z_impurity' in data:
+                        z_imp = onrad('Z_impurity')
+                        for j in range(len(impurity_names)):
+                            charge_i[:, :, len(main_ion_names) + j] = z_imp
+                    data_vars['charge_i'] = (['time', 'radius', 'ion'], charge_i)
+
+                if 'Z_eff' in data:
+                    data_vars['effective_charge'] = (['time', 'radius'], onrad('Z_eff'))
+
+                # -- kinetic profiles --
+                if 'T_e' in data:
+                    data_vars['temperature_e'] = (['time', 'radius'], 1.0e3 * onrad('T_e'))
+                if 'n_e' in data:
+                    data_vars['density_e'] = (['time', 'radius'], onrad('n_e'))
+
+                # -- magnetic geometry --
+                coords['direction'] = list(cls.directions)
+                if 'psi' in data or 'Phi' in data:
+                    magnetic_flux = np.zeros((nt, nr, len(cls.directions)))
+                    if 'psi' in data:
+                        magnetic_flux[..., cls.directions.index('poloidal')] = (
+                            np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * onrad('psi'))
+                    if 'Phi' in data:
+                        magnetic_flux[..., cls.directions.index('toroidal')] = (
+                            np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * onrad('Phi'))
+                    data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], magnetic_flux)
+                if 'q' in data:
+                    data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * onrad('q'))
+                if 'B_0' in data:
+                    data_vars['field_axis'] = (['time'], cocos['scyl'] * data['B_0'].to_numpy())
+                if 'Ip' in data:
+                    data_vars['current'] = (['time'], cocos['scyl'] * data['Ip'].to_numpy())
+                if 'R_in' in data and 'R_out' in data:
+                    r_in, r_out = onrad('R_in'), onrad('R_out')
+                    data_vars['r_minor'] = (['time', 'radius'], 0.5 * (r_out - r_in))
+                    data_vars['r_geometric'] = (['time', 'radius'], 0.5 * (r_out + r_in))
+                if 'z_magnetic_axis' in data:
+                    # TORAX doesn't expose a per-radius geometric-Z profile
+                    # (only the scalar magnetic-axis value) -- this
+                    # project's geometry is up-down symmetric (Z_major
+                    # fixed near 0), so broadcasting across radius is a
+                    # reasonable simplification, not a claim of exactness
+                    # for a non-symmetric case.
+                    z_axis = data['z_magnetic_axis'].to_numpy()
+                    data_vars['z_geometric'] = (['time', 'radius'], np.repeat(z_axis[:, None], nr, axis=1))
+                if 'elongation' in data:
+                    data_vars['kappa'] = (['time', 'radius'], onrad('elongation'))
+
+                # -- per-source arrays: real values (TORAX's own
+                # core_sources are always populated, unlike the IMAS data
+                # this codebase has produced so far) against plasma_io's
+                # fixed, cross-code `source` category list. --
+                coords['source'] = list(cls.sources)
+                heat_source_e = np.zeros((nt, nr, len(cls.sources)))
+                particle_source_e = np.zeros((nt, nr, len(cls.sources)))
+                current_source = np.zeros((nt, nr, len(cls.sources)))
+                if 'p_ohmic_e' in data:
+                    heat_source_e[..., cls.sources.index('ohmic')] += onrad('p_ohmic_e')
+                if 'p_icrh_e' in data:
+                    heat_source_e[..., cls.sources.index('ion_cyclotron')] += onrad('p_icrh_e')
+                if 'p_alpha_e' in data:
+                    heat_source_e[..., cls.sources.index('fusion')] += onrad('p_alpha_e')
+                if 'p_generic_heat_e' in data:
+                    # Always zero in every scenario this project runs today
+                    # -- mapped for generality, not verified against real
+                    # nonzero data.
+                    heat_source_e[..., cls.sources.index('electron_cyclotron')] += onrad('p_generic_heat_e')
+                data_vars['heat_source_e'] = (['time', 'radius', 'source'], heat_source_e)
+
+                if 's_gas_puff' in data:
+                    # Best-fit judgment call, not an exact category match:
+                    # plasma_io's fixed source list has no dedicated "gas
+                    # puff" entry -- puffed neutral gas ionizing at the
+                    # plasma edge is the closest physical match.
+                    particle_source_e[..., cls.sources.index('ionization')] += onrad('s_gas_puff')
+                data_vars['particle_source_e'] = (['time', 'radius', 'source'], particle_source_e)
+
+                data_vars['heat_exchange_ei'] = (['time', 'radius'],
+                                                 onrad('ei_exchange') if 'ei_exchange' in data
+                                                 else np.zeros((nt, nr)))
+
+                if 'j_ohmic' in data:
+                    current_source[..., cls.sources.index('ohmic')] += cocos['scyl'] * onrad('j_ohmic')
+                if 'j_bootstrap' in data:
+                    current_source[..., cls.sources.index('bootstrap')] += cocos['scyl'] * onrad('j_bootstrap')
+                if 'j_ecrh' in data:
+                    current_source[..., cls.sources.index('electron_cyclotron')] += cocos['scyl'] * onrad('j_ecrh')
+                data_vars['current_source'] = (['time', 'radius', 'source'], current_source)
+
+                if 'ion' in coords:
+                    # compute_derived_quantities()'s _compute_extended_local_inputs
+                    # requires velocity_i/heat_source_i/particle_source_i/
+                    # momentum_source_i unconditionally. This project
+                    # doesn't model per-ion-species heating/rotation, except
+                    # for ICRH/fusion alpha heating, which (matching
+                    # from_gacode's own "assumes all ion heat sources apply
+                    # to the first ion species only" convention) is applied
+                    # to ion index 0 -- the rest are zero-filled at the
+                    # right shape.
+                    n_ion = len(coords['ion'])
+                    heat_source_i = np.zeros((nt, nr, n_ion, len(cls.sources)))
+                    if 'p_icrh_i' in data:
+                        heat_source_i[:, :, 0, cls.sources.index('ion_cyclotron')] += onrad('p_icrh_i')
+                    if 'p_alpha_i' in data:
+                        heat_source_i[:, :, 0, cls.sources.index('fusion')] += onrad('p_alpha_i')
+                    data_vars['heat_source_i'] = (['time', 'radius', 'ion', 'source'], heat_source_i)
+                    data_vars['particle_source_i'] = (['time', 'radius', 'ion', 'source'],
+                                                      np.zeros((nt, nr, n_ion, len(cls.sources))))
+                    data_vars['momentum_source_i'] = (['time', 'radius', 'ion', 'direction', 'source'],
+                                                      np.zeros((nt, nr, n_ion, len(cls.directions), len(cls.sources))))
+                    data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'],
+                                               np.zeros((nt, nr, n_ion, len(cls.directions))))
+
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
