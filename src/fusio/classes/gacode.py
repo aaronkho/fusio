@@ -6,6 +6,7 @@ from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, 
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
+from packaging.version import Version
 
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
@@ -2015,11 +2016,13 @@ class gacode_io(io):
 
             data: xr.Dataset = obj.input if side == 'input' else obj.output
             obj_cocos = obj.input_cocos if side == 'input' else obj.output_cocos  # type: ignore[attr-defined]
+            dd_version = data.attrs.get('data_dictionary_version', None)
+            ion_field = 'name' if dd_version is None or Version(dd_version) >= Version('4.0.0') else 'label'
             time_cp = 'core_profiles.time'
             rho_cp_i = 'core_profiles.profiles_1d.grid.rho_tor_norm:i'
             rho_cp = 'core_profiles.profiles_1d.grid.rho_tor_norm'
             ion_cp_i = 'core_profiles.profiles_1d.ion:i'
-            ion_cp = 'core_profiles.profiles_1d.ion.label'
+            ion_cp = f'core_profiles.profiles_1d.ion.{ion_field}'
             time_eq = 'equilibrium.time'
             psi_eq_i = 'equilibrium.time_slice.profiles_1d.psi:i'
             psi_eq = 'equilibrium.time_slice.profiles_1d.psi'
@@ -2030,7 +2033,7 @@ class gacode_io(io):
             rho_cs_i = 'core_sources.source.profiles_1d.grid.rho_tor_norm:i'
             rho_cs = 'core_sources.source.profiles_1d.grid.rho_tor_norm'
             ion_cs_i = 'core_sources.source.profiles_1d.ion:i'
-            ion_cs = 'core_sources.source.profiles_1d.ion.label'
+            ion_cs = f'core_sources.source.profiles_1d.ion.{ion_field}'
             ikwargs = {'fill_value': 'extrapolate'}
 
             cocos_out = 2   # Assumed GACODE has COCOS=2
