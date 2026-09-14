@@ -672,7 +672,7 @@ class imas_io(io):
             psinvec = data[psin_eq].to_numpy().flatten() if psin_eq in data else None
             conversion = None
             ikwargs = {'fill_value': 'extrapolate'}
-            psin_data = None
+            psin_data = xr.Dataset()
             if psinvec is None:
                 conversion = (
                     (data['equilibrium.time_slice.profiles_1d.psi'] - data['equilibrium.time_slice.global_quantities.psi_axis']) /
