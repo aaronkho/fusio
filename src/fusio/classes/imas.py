@@ -7,6 +7,7 @@ from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import xarray as xr
 from scipy.integrate import cumulative_simpson  # type: ignore[import-untyped]
+from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 
 from packaging.version import Version
 import h5py  # type: ignore[import-untyped]
@@ -16,9 +17,11 @@ from imas.ids_structure import IDSStructure  # type: ignore[import-untyped]
 from imas.ids_struct_array import IDSStructArray  # type: ignore[import-untyped]
 from .io import io
 from ..utils.eqdsk_tools import (
+    calculate_mxh_coefficients_from_eqdsk_dict,
     convert_cocos,
     write_eqdsk,
 )
+from ..utils import plasma_tools
 
 logger = logging.getLogger('fusio')
 
@@ -811,6 +814,320 @@ class imas_io(io):
                 time_tag = int(np.rint(time * 1000))
                 eqpath = path.parent / f'{stem}_{time_tag:06d}ms_input{path.suffix}'
                 self.generate_eqdsk_file(eqpath, time_index=ii, side=side, cocos=cocos, transpose=transpose)
+
+
+    def to_cgyro_parameters(
+        self,
+        time: float | Sequence[float] | NDArray | None = None,
+        rho: float | Sequence[float] | NDArray | None = None,
+        side: str = 'output',
+        full_impurities: bool = False,
+        n_mxh_moments: int = 5,
+        n_fine: int = 201,
+    ) -> xr.Dataset:
+        """Compute local dimensionless CGYRO input parameters directly from the IMAS structure.
+
+        Mirrors the torax_io.to_cgyro_parameters() output interface (species-suffixed
+        variables with ions first and electrons last, dims (time, rho)). Physics is
+        delegated to fusio.utils.plasma_tools and geometry to the MXH contour tracing
+        in fusio.utils.eqdsk_tools via to_eqdsk().
+
+        - time=None processes every core_profiles time slice; a scalar or sequence
+          selects the nearest slice per requested time (each paired with the nearest
+          equilibrium slice).
+        - rho=None returns the internal fine grid (n_fine points); otherwise results
+          are interpolated onto the requested rho_tor_norm values.
+        - full_impurities=False lumps all non-main ions into a single effective species
+          preserving quasineutrality and Zeff; True keeps every ion separately.
+        - Q is returned with the sign convention of the source data (COCOS of the IDS).
+
+        Radial derivatives use shape-preserving PCHIP interpolants evaluated
+        analytically, which converge at the plasma edge where finite differences on
+        linearly interpolated profiles do not.
+        """
+        time_cp = 'core_profiles.time'
+        time_eq = 'equilibrium.time'
+        data = self.input if side == 'input' else self.output
+        required = (
+            time_cp,
+            time_eq,
+            'core_profiles.profiles_1d.grid.rho_tor_norm',
+            'equilibrium.time_slice.profiles_1d.rho_tor_norm',
+            'equilibrium.time_slice.profiles_1d.psi',
+            'equilibrium.time_slice.profiles_1d.phi',
+            'equilibrium.time_slice.profiles_1d.q',
+            'core_profiles.profiles_1d.electrons.temperature',
+        )
+        missing = [tag for tag in required if tag not in data]
+        if missing:
+            logger.error(f'Missing required fields for CGYRO parameter computation: {missing}')
+            return xr.Dataset()
+
+        cp_times = np.atleast_1d(data[time_cp].to_numpy()).flatten()
+        eq_times = np.atleast_1d(data[time_eq].to_numpy()).flatten()
+        if time is None:
+            cp_indices = list(range(len(cp_times)))
+        else:
+            cp_indices = []
+            for t in np.atleast_1d(np.asarray(time, dtype=float)).flatten():
+                idx = int(np.argmin(np.abs(cp_times - t)))
+                if idx not in cp_indices:
+                    cp_indices.append(idx)
+
+        rho_out = None if rho is None else np.atleast_1d(np.asarray(rho, dtype=float)).flatten()
+        slice_vars: MutableSequence[MutableMapping[str, NDArray]] = []
+        slice_attrs: MutableSequence[MutableMapping[str, NDArray]] = []
+        rho_grid = None
+        for i in cp_indices:
+            j = int(np.argmin(np.abs(eq_times - cp_times[i])))
+            svars, sattrs = self._compute_cgyro_parameters_slice(
+                data,
+                i,
+                j,
+                side=side,
+                full_impurities=full_impurities,
+                n_mxh_moments=n_mxh_moments,
+                n_fine=n_fine,
+            )
+            rho_fine = svars.pop('rho')
+            if rho_out is not None:
+                svars = {key: np.interp(rho_out, rho_fine, val) for key, val in svars.items()}
+                sattrs = {key: np.interp(rho_out, rho_fine, val) for key, val in sattrs.items()}
+                rho_grid = rho_out
+            else:
+                rho_grid = rho_fine
+            slice_vars.append(svars)
+            slice_attrs.append(sattrs)
+
+        coords: MutableMapping[str, Any] = {
+            'time': cp_times[cp_indices],
+            'rho': rho_grid,
+        }
+        data_vars: MutableMapping[str, Any] = {}
+        for key in slice_vars[0]:
+            data_vars[key] = (['time', 'rho'], np.stack([svars[key] for svars in slice_vars], axis=0))
+        attrs: MutableMapping[str, Any] = {}
+        for key in slice_attrs[0]:
+            attrs[key] = np.stack([sattrs[key] for sattrs in slice_attrs], axis=0)
+        return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
+
+
+    def _compute_cgyro_parameters_slice(
+        self,
+        data: xr.Dataset,
+        cp_index: int,
+        eq_index: int,
+        side: str = 'output',
+        full_impurities: bool = False,
+        n_mxh_moments: int = 5,
+        n_fine: int = 201,
+    ) -> tuple[MutableMapping[str, NDArray], MutableMapping[str, NDArray]]:
+        """Compute CGYRO parameters for one paired core_profiles / equilibrium time slice."""
+        c = plasma_tools.constants_si()
+        twopi = 2.0 * np.pi
+        cpd = data.isel({'core_profiles.time': cp_index})
+        eqd = data.isel({'equilibrium.time': eq_index})
+
+        def profile_interpolator(x, y):
+            srt = np.argsort(x)
+            return PchipInterpolator(x[srt], y[srt], extrapolate=True)
+
+        # --- Equilibrium 1D profiles as functions of rho_tor_norm ---
+        rho_eq = np.abs(eqd['equilibrium.time_slice.profiles_1d.rho_tor_norm'].to_numpy().flatten())
+        psi_interp = profile_interpolator(rho_eq, eqd['equilibrium.time_slice.profiles_1d.psi'].to_numpy().flatten())
+        phi_interp = profile_interpolator(rho_eq, eqd['equilibrium.time_slice.profiles_1d.phi'].to_numpy().flatten())
+        q_interp = profile_interpolator(rho_eq, eqd['equilibrium.time_slice.profiles_1d.q'].to_numpy().flatten())
+
+        # --- Flux-surface geometry from MXH contour tracing on the fine grid ---
+        rho_f = np.linspace(0.0, 1.0, n_fine)
+        psi_f = psi_interp(rho_f)
+        eqdsk = self.to_eqdsk(time_index=eq_index, side=side)
+        mxh = calculate_mxh_coefficients_from_eqdsk_dict(copy.deepcopy(eqdsk), psi_f.copy())
+        rmin = np.asarray(mxh['rmin'], dtype=float)
+        rmaj = np.asarray(mxh['rmaj'], dtype=float)
+        zmag = np.asarray(mxh['zmag'], dtype=float)
+        kappa = np.asarray(mxh['kappa'], dtype=float)
+        a = float(rmin[-1])
+        rmin_interp = PchipInterpolator(rho_f, rmin)
+        drmin_drho = rmin_interp.derivative()(rho_f)
+        drmin_drho = np.where(np.abs(drmin_drho) > 1.0e-10, drmin_drho, 1.0e-10)
+
+        def ddr(vals):
+            # radial derivative d/dr on the fine grid via chain rule through rho
+            return PchipInterpolator(rho_f, vals).derivative()(rho_f) / drmin_drho
+
+        out: MutableMapping[str, NDArray] = {}
+        out['rho'] = rho_f
+        out[r'#RHO'] = rho_f
+        out['RMIN'] = rmin / a
+        out['RMAJ'] = rmaj / a
+        out['ZMAG'] = zmag / a
+        out['SHIFT'] = ddr(rmaj)
+        out['DZMAG'] = ddr(zmag)
+        out['KAPPA'] = kappa
+        out['S_KAPPA'] = rmin * ddr(kappa) / kappa
+        for mxh_key, name in (('delta', 'DELTA'), ('zeta', 'ZETA')):
+            vals = np.asarray(mxh[mxh_key], dtype=float)
+            out[name] = vals
+            out[f'S_{name}'] = rmin * ddr(vals)
+        for nn in range(3, min(6, n_mxh_moments) + 1):
+            vals = np.asarray(mxh[f'sin{nn:d}'], dtype=float)
+            out[f'SHAPE_SIN{nn:d}'] = vals
+            out[f'SHAPE_S_SIN{nn:d}'] = rmin * ddr(vals)
+        for nn in range(0, min(6, n_mxh_moments) + 1):
+            vals = np.asarray(mxh[f'cos{nn:d}'], dtype=float)
+            out[f'SHAPE_COS{nn:d}'] = vals
+            out[f'SHAPE_S_COS{nn:d}'] = rmin * ddr(vals)
+
+        # --- Reference field B_unit = (1 / r) d(phi / 2pi)/dr ---
+        rmin_safe = np.where(rmin > 1.0e-6, rmin, 1.0e-6)
+        b_unit = np.abs(phi_interp.derivative()(rho_f) / (twopi * rmin_safe * drmin_drho))
+        b_unit[0] = 2.0 * b_unit[1] - b_unit[2]
+
+        # --- Safety factor and magnetic shear ---
+        q_f = q_interp(rho_f)
+        grad_q = q_interp.derivative()(rho_f) / drmin_drho
+        out['Q'] = q_f
+        out['S'] = plasma_tools.calc_s_from_q_and_grad_q(q_f, grad_q, rmin)
+
+        # --- Kinetic profiles (IMAS units: eV, m^-3) ---
+        rho_cp = np.abs(cpd['core_profiles.profiles_1d.grid.rho_tor_norm'].to_numpy().flatten())
+        te = profile_interpolator(rho_cp, cpd['core_profiles.profiles_1d.electrons.temperature'].to_numpy().flatten())(rho_f)
+        ne_tag = 'core_profiles.profiles_1d.electrons.density_thermal'
+        if ne_tag not in cpd:
+            ne_tag = 'core_profiles.profiles_1d.electrons.density'
+        ne = profile_interpolator(rho_cp, cpd[ne_tag].to_numpy().flatten())(rho_f)
+
+        # --- Ion species ---
+        name_tag = 'core_profiles.profiles_1d.ion.name'
+        if name_tag not in cpd:
+            name_tag = 'core_profiles.profiles_1d.ion.label'
+        ion_names = [str(name) for name in np.atleast_1d(cpd[name_tag].to_numpy()).flatten()] if name_tag in cpd else []
+        n_ion = len(ion_names)
+        ni_tag = 'core_profiles.profiles_1d.ion.density_thermal'
+        if ni_tag not in cpd:
+            ni_tag = 'core_profiles.profiles_1d.ion.density'
+        ni_all = np.atleast_2d(cpd[ni_tag].to_numpy()) if ni_tag in cpd else np.zeros((n_ion, len(rho_cp)))
+        ti_tag = 'core_profiles.profiles_1d.ion.temperature'
+        if ti_tag in cpd:
+            ti_all = np.atleast_2d(cpd[ti_tag].to_numpy())
+        else:
+            ti_all = np.repeat(np.atleast_2d(cpd['core_profiles.profiles_1d.t_i_average'].to_numpy()), n_ion, axis=0)
+        mass_tag = 'core_profiles.profiles_1d.ion.element.a'
+        mass_all = cpd[mass_tag].to_numpy().reshape(n_ion, -1)[:, 0] if mass_tag in cpd else np.full(n_ion, 2.0)
+        z1d_tag = 'core_profiles.profiles_1d.ion.z_ion_1d'
+        zion_tag = 'core_profiles.profiles_1d.ion.z_ion'
+        zn_tag = 'core_profiles.profiles_1d.ion.element.z_n'
+
+        ni_fine = np.zeros((n_ion, n_fine))
+        ti_fine = np.zeros((n_ion, n_fine))
+        zi_fine = np.zeros((n_ion, n_fine))
+        for k in range(n_ion):
+            ni_fine[k] = np.maximum(profile_interpolator(rho_cp, ni_all[k])(rho_f), 0.0)
+            ti_fine[k] = np.maximum(profile_interpolator(rho_cp, ti_all[k])(rho_f), 0.0)
+            if z1d_tag in cpd:
+                zi_fine[k] = profile_interpolator(rho_cp, np.atleast_2d(cpd[z1d_tag].to_numpy())[k])(rho_f)
+            elif zion_tag in cpd:
+                zi_fine[k] = float(np.atleast_1d(cpd[zion_tag].to_numpy()).flatten()[k])
+            elif zn_tag in cpd:
+                zi_fine[k] = float(cpd[zn_tag].to_numpy().reshape(n_ion, -1)[k, 0])
+
+        # assemble output species list: (label, mass_amu, z, n, t), electrons appended last
+        ntiny = 1.0e-12 * float(np.nanmax(ne))
+        species: MutableSequence[tuple[str, NDArray, NDArray, NDArray, NDArray]] = []
+        active = [k for k in range(n_ion) if np.nanmax(ni_fine[k]) > ntiny]
+        if full_impurities:
+            for k in active:
+                species.append((ion_names[k], np.full(n_fine, mass_all[k]), zi_fine[k], ni_fine[k], ti_fine[k]))
+        else:
+            main_ions = [k for k in active if np.nanmean(zi_fine[k]) < 1.5]
+            impurities = [k for k in active if k not in main_ions]
+            for k in main_ions:
+                species.append((ion_names[k], np.full(n_fine, mass_all[k]), zi_fine[k], ni_fine[k], ti_fine[k]))
+            if impurities:
+                # lumped impurity preserving quasineutrality and Zeff, with
+                # charge-density-weighted mass and temperature
+                s1 = np.sum([ni_fine[k] * zi_fine[k] for k in impurities], axis=0)
+                s2 = np.sum([ni_fine[k] * zi_fine[k] ** 2 for k in impurities], axis=0)
+                s1 = np.where(s1 > 0.0, s1, 1.0e-20)
+                s2 = np.where(s2 > 0.0, s2, 1.0e-20)
+                z_lump = s2 / s1
+                n_lump = s1 ** 2 / s2
+                m_lump = np.sum([ni_fine[k] * zi_fine[k] * mass_all[k] for k in impurities], axis=0) / s1
+                t_lump = np.sum([ni_fine[k] * zi_fine[k] * ti_fine[k] for k in impurities], axis=0) / s1
+                species.append(('LUMPED', m_lump, z_lump, n_lump, t_lump))
+
+        ns = 0
+        for label, mass_amu, zs, dens, temp in species:
+            ns += 1
+            dens_safe = np.maximum(dens, ntiny)
+            temp_safe = np.maximum(temp, 1.0e-3 * float(np.nanmax(te)))
+            out[f'MASS_{ns:d}'] = mass_amu * c['u'] / c['md']
+            out[f'Z_{ns:d}'] = zs
+            out[f'DENS_{ns:d}'] = dens / ne
+            out[f'TEMP_{ns:d}'] = temp / te
+            out[f'DLNNDR_{ns:d}'] = plasma_tools.calc_ak_from_grad_k(ddr(dens_safe), dens_safe, a)
+            out[f'DLNTDR_{ns:d}'] = plasma_tools.calc_ak_from_grad_k(ddr(temp_safe), temp_safe, a)
+            out[f'SDLNNDR_{ns:d}'] = np.zeros(n_fine)
+            out[f'SDLNTDR_{ns:d}'] = np.zeros(n_fine)
+            out[r'#' + f'N_{ns:d}'] = 1.0e-19 * dens
+            out[r'#' + f'T_{ns:d}'] = 1.0e-3 * temp
+        ns += 1
+        out[f'MASS_{ns:d}'] = np.full(n_fine, c['me'] / c['md'])
+        out[f'Z_{ns:d}'] = np.full(n_fine, -1.0)
+        out[f'DENS_{ns:d}'] = np.ones(n_fine)
+        out[f'TEMP_{ns:d}'] = np.ones(n_fine)
+        out[f'DLNNDR_{ns:d}'] = plasma_tools.calc_ak_from_grad_k(ddr(ne), ne, a)
+        out[f'DLNTDR_{ns:d}'] = plasma_tools.calc_ak_from_grad_k(ddr(te), te, a)
+        out[f'SDLNNDR_{ns:d}'] = np.zeros(n_fine)
+        out[f'SDLNTDR_{ns:d}'] = np.zeros(n_fine)
+        out[r'#' + f'N_{ns:d}'] = 1.0e-19 * ne
+        out[r'#' + f'T_{ns:d}'] = 1.0e-3 * te
+        out['N_SPECIES'] = np.full(n_fine, float(ns))
+
+        # --- Reference quantities and dimensionless local parameters ---
+        cs = plasma_tools.calc_vref_from_te_and_aref(te, 2.0)
+        gref = cs / a
+        rhoref = plasma_tools.calc_rhoref_from_te_and_btot(te, b_unit, 2.0)
+        out['BETAE_UNIT'] = plasma_tools.calc_beta_from_p(c['e'] * ne * te, b_unit)
+        out['NU_EE'] = plasma_tools.calc_nueenorm_from_ne_and_te(ne, te, gref)
+        out['LAMBDA_STAR'] = plasma_tools.calc_ldenorm_from_ne_te_and_rhoref(ne, te, rhoref)
+
+        # --- Rotation (zeros when absent from core_profiles) ---
+        omega_tag = 'core_profiles.profiles_1d.rotation_frequency_tor_sonic'
+        if omega_tag in cpd:
+            omega_interp = profile_interpolator(rho_cp, cpd[omega_tag].to_numpy().flatten())
+            omega = omega_interp(rho_f)
+            grad_omega = omega_interp.derivative()(rho_f) / drmin_drho
+            out['MACH'] = plasma_tools.calc_mach_from_u(omega * rmaj, cs)
+            out['GAMMA_P'] = -1.0 * rmaj * grad_omega / gref
+            out['GAMMA_E'] = -1.0 * (rmin / q_f) * grad_omega / gref
+        else:
+            out['MACH'] = np.zeros(n_fine)
+            out['GAMMA_P'] = np.zeros(n_fine)
+            out['GAMMA_E'] = np.zeros(n_fine)
+
+        # --- Dimensional back-conversion variables and attrs ---
+        zeff_tag = 'core_profiles.profiles_1d.zeff'
+        if zeff_tag in cpd:
+            zeff = profile_interpolator(rho_cp, cpd[zeff_tag].to_numpy().flatten())(rho_f)
+        else:
+            zeff = np.sum(ni_fine * zi_fine ** 2, axis=0) / ne
+        out[r'#ZEFF'] = zeff
+        roa_safe = np.where(out['RMIN'] > 1.0e-5, out['RMIN'], 1.0e-5)
+        out[r'#Q_PRIME'] = (q_f ** 2 / roa_safe ** 2) * out['S']
+        ptot = c['e'] * (ne * te + np.sum(ni_fine * ti_fine, axis=0))
+        grad_ptot = PchipInterpolator(rho_f, ptot).derivative()(rho_f) / drmin_drho
+        out[r'#P_PRIME'] = q_f * (c['mu'] / (4.0 * np.pi)) * (a / roa_safe) * grad_ptot / (b_unit ** 2)
+        b_zero_tag = 'equilibrium.vacuum_toroidal_field.b0'
+        b_zero = float(np.abs(np.atleast_1d(eqd[b_zero_tag].to_numpy()).flatten()[0])) if b_zero_tag in eqd else np.nan
+        out[r'#BUNIT_BY_BREF'] = b_unit / b_zero
+
+        attrs: MutableMapping[str, NDArray] = {
+            'b_unit': b_unit,
+            'b_zero': np.full(n_fine, b_zero),
+        }
+        return out, attrs
 
 
     @classmethod

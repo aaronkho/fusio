@@ -244,6 +244,11 @@ def calc_grad_q_from_s_and_q(s, q, r):
     grad_q = calc_grad_k_from_ak(s, q, -r)
     return grad_q
 
+def calc_s_from_q_and_grad_q(q, grad_q, r):
+    """Compute the magnetic shear s = (r / q) * dq/dr from the safety factor and its radial gradient."""
+    s = calc_ak_from_grad_k(grad_q, q, -r)
+    return s
+
 def calc_s_circular_from_grad_bp(grad_bp, bp, r):
     """Compute magnetic shear s from the radial gradient of Bp under the circular-geometry approximation."""
     s = 1.0 - r * grad_bp / bp
