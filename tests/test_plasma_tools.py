@@ -2534,14 +2534,101 @@ class TestPlasmaTools():
         zeff = pt.calc_zeff_from_nustar(nustar, q, rmin, rmaj, ne, te)
         xr.testing.assert_allclose(zeff, dimensionless_2ion_plasma_state['effective_charge'])
 
-    # def test_calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa, cos, sin, s_cos, s_sin):
+    @staticmethod
+    def _mxh_batch(n, seed=0):
+        rng = np.random.default_rng(seed)
+        geo = {
+            'rmin': rng.uniform(0.2, 0.9, n),
+            'rgeo': rng.uniform(2.0, 4.0, n),
+            'zgeo': rng.uniform(-0.1, 0.1, n),
+            'kappa': rng.uniform(1.0, 2.0, n),
+            'drgeo': rng.uniform(-0.2, 0.0, n),
+            'dzgeo': rng.uniform(-0.05, 0.05, n),
+            's_kappa': rng.uniform(0.0, 0.3, n),
+        }
+        coeffs = {
+            'cos': [rng.uniform(-0.05, 0.05, n) for _ in range(4)],
+            'sin': [np.zeros(n), np.arcsin(rng.uniform(0.0, 0.5, n)), rng.uniform(-0.1, 0.1, n)],
+            's_cos': [rng.uniform(-0.1, 0.1, n) for _ in range(4)],
+            's_sin': [np.zeros(n), rng.uniform(0.0, 0.3, n), rng.uniform(-0.1, 0.1, n)],
+        }
+        q = rng.uniform(1.0, 5.0, n)
+        return geo, coeffs, q
+
+    @staticmethod
+    def _mxh_element(geo, coeffs, idx, convert=float):
+        values = {key: convert(val[idx]) for key, val in geo.items()}
+        values.update({key: [convert(c[idx]) for c in val] for key, val in coeffs.items()})
+        return values
+
+    def test_calc_flux_surface_values_from_mxh(self):
+        # circular surface: R = R0 + r cos(theta), Z = Z0 + r sin(theta), |dl/dtheta| = r, |grad r| = 1
+        theta = np.linspace(-np.pi, np.pi, 1001)
+        r, z, l_t, grad_r = pt.calc_flux_surface_values_from_mxh(0.5, 3.0, 0.1, 1.0, 0.0, 0.0, 0.0, [0.0], [0.0], [0.0], [0.0])
+        assert r.shape == (1001, )
+        np.testing.assert_allclose(r, 3.0 + 0.5 * np.cos(theta), rtol=1.0e-12)
+        np.testing.assert_allclose(z, 0.1 + 0.5 * np.sin(theta), rtol=1.0e-12, atol=1.0e-12)
+        np.testing.assert_allclose(l_t, 0.5, rtol=1.0e-12)
+        np.testing.assert_allclose(grad_r, 1.0, rtol=1.0e-12)
+
+    def test_calc_flux_surface_values_from_mxh_scalar_types(self):
+        geo, coeffs, _ = self._mxh_batch(1)
+        ref = pt.calc_flux_surface_values_from_mxh(**self._mxh_element(geo, coeffs, 0, lambda x: np.asarray(float(x))))
+        for convert in (float, np.float64):
+            out = pt.calc_flux_surface_values_from_mxh(**self._mxh_element(geo, coeffs, 0, convert))
+            for val, ref_val in zip(out, ref):
+                assert val.shape == (1001, )
+                np.testing.assert_array_equal(val, ref_val)
+
+    def test_calc_flux_surface_values_from_mxh_unequal_harmonics(self):
+        # sin harmonics beyond len(cos) must not be dropped
+        sin = [0.0, np.arcsin(0.3), -0.05, 0.02]
+        short = pt.calc_flux_surface_values_from_mxh(0.5, 3.0, 0.0, 1.5, 0.0, 0.0, 0.0, [0.0], sin, [0.0], [0.0])
+        padded = pt.calc_flux_surface_values_from_mxh(0.5, 3.0, 0.0, 1.5, 0.0, 0.0, 0.0, [0.0] * 4, sin, [0.0] * 4, [0.0] * 4)
+        for val, ref_val in zip(short, padded):
+            np.testing.assert_allclose(val, ref_val, rtol=1.0e-14, atol=1.0e-14)
+
+    def test_calc_flux_surface_values_from_mxh_vectorized(self):
+        n = 6
+        geo, coeffs, _ = self._mxh_batch(n)
+        out = pt.calc_flux_surface_values_from_mxh(**geo, **coeffs)
+        for idx in range(n):
+            ref = pt.calc_flux_surface_values_from_mxh(**self._mxh_element(geo, coeffs, idx))
+            for val, ref_val in zip(out, ref):
+                assert val.shape == (1001, n)
+                np.testing.assert_allclose(val[:, idx], ref_val, rtol=1.0e-13, atol=1.0e-13)
+        # 2-D batches keep the batch shape behind the theta axis
+        geo_2d = {key: val.reshape(2, 3) for key, val in geo.items()}
+        coeffs_2d = {key: [c.reshape(2, 3) for c in val] for key, val in coeffs.items()}
+        out_2d = pt.calc_flux_surface_values_from_mxh(**geo_2d, **coeffs_2d)
+        for val, ref_val in zip(out_2d, out):
+            assert val.shape == (1001, 2, 3)
+            np.testing.assert_allclose(val.reshape(1001, n), ref_val, rtol=1.0e-13, atol=1.0e-13)
+        # scalars broadcast against arrays
+        mixed = dict(geo, rgeo=3.0, kappa=np.float64(1.5))
+        out_mixed = pt.calc_flux_surface_values_from_mxh(**mixed, **coeffs)
+        assert out_mixed[0].shape == (1001, n)
+
+    def test_calc_flux_surface_average_k_from_b_and_geo_vectorized(self):
+        # batched flux-surface quantities must match element-wise evaluation, including elements whose
+        # theta = -pi and pi endpoints differ by round-off (non-zero cos coefficients)
+        n = 200
+        geo, coeffs, q = self._mxh_batch(n)
+        r, z, l_t, grad_r = pt.calc_flux_surface_values_from_mxh(**geo, **coeffs)
+        assert np.any(r[0] != r[-1])
+        bt, bp, b = pt.calc_b_from_flux_surface_values(r, grad_r, l_t, geo['rmin'], q)
+        g_t = pt.calc_geo_from_flux_surface_values(r, grad_r, l_t, b, geo['rmin'], geo['rgeo'])
+        b2 = pt.calc_flux_surface_average_k_from_b_and_geo(bt ** 2 + bp ** 2, b, g_t)
+        grad_vol, surf = pt.calc_grad_vol_from_flux_surface_values(r, l_t, grad_r)
+        assert b2.shape == (n, )
+        for idx in range(n):
+            ri, zi, l_ti, grad_ri = pt.calc_flux_surface_values_from_mxh(**self._mxh_element(geo, coeffs, idx))
+            bti, bpi, bi = pt.calc_b_from_flux_surface_values(ri, grad_ri, l_ti, geo['rmin'][idx], q[idx])
+            g_ti = pt.calc_geo_from_flux_surface_values(ri, grad_ri, l_ti, bi, geo['rmin'][idx], geo['rgeo'][idx])
+            b2i = pt.calc_flux_surface_average_k_from_b_and_geo(bti ** 2 + bpi ** 2, bi, g_ti)
+            grad_voli, surfi = pt.calc_grad_vol_from_flux_surface_values(ri, l_ti, grad_ri)
+            np.testing.assert_allclose(b2[idx], b2i, rtol=1.0e-12)
+            np.testing.assert_allclose(grad_vol[idx], grad_voli, rtol=1.0e-12)
+            np.testing.assert_allclose(surf[idx], surfi, rtol=1.0e-12)
 
     # def test_calc_vol_from_contour(r, z, rgeo):
-
-    # def test_calc_b_from_flux_surface_values(r, grad_r, l_t, rmin, q):
-
-    # def test_calc_geo_from_flux_surface_values(r, grad_r, l_t, b, rmin, rgeo):
-
-    # def test_calc_grad_vol_from_flux_surface_values(r, l_t, grad_r):
-
-    # def test_calc_flux_surface_average_k_from_b_and_geo(k, b, g_t):

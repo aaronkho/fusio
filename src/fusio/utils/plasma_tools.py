@@ -1500,46 +1500,66 @@ def calc_zeff_from_nustar(nustar, q, rmin, rmaj, ne, te):
     zeff = nustar / (cl * nt * kk)
     return zeff
 
+def _has_duplicate_endpoint(*values):
+    """Check whether the first and last points along axis 0 coincide, as on a closed periodic theta grid.
+
+    Compared to round-off rather than exactly, since e.g. R at theta = -pi and pi can differ in the
+    last bit, and a single such element would otherwise disable the check for a whole batch.
+    """
+    for v in values:
+        v = np.asarray(v)
+        scale = float(np.max(np.abs(v))) if v.size else 0.0
+        if not np.allclose(v[0], v[-1], rtol=1.0e-12, atol=1.0e-12 * scale):
+            return False
+    return True
+
 def calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa, cos, sin, s_cos, s_sin):
-    """Evaluate (R, Z, arc length element, |grad r|) on a flux surface described by MXH coefficients."""
+    """Evaluate (R, Z, arc length element, |grad r|) on a flux surface described by MXH coefficients.
+
+    Inputs may be scalars (float, numpy scalar or 0-d array) or arrays; all inputs and
+    coefficients broadcast to a common shape S and the outputs have shape (n_theta, *S),
+    with theta along axis 0. cos, sin, s_cos and s_sin are sequences indexed by harmonic
+    number and may have different lengths.
+    """
     n_theta = 1001
-    theta = np.linspace(-np.pi, np.pi, n_theta)
-    #if not isinstance(kappa, float):
-    #    for d in range(kappa.ndim):
-    #        theta = np.expand_dims(theta, axis=-1)
-    a = copy.deepcopy(theta)
-    if not isinstance(kappa, float):
-        for d in range(kappa.ndim):
-            a = np.repeat(np.expand_dims(a, axis=-1), kappa.shape[d], axis=-1)
+    rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa = (
+        np.asarray(v, dtype=float) for v in (rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa)
+    )
+    cos, sin, s_cos, s_sin = ([np.asarray(v, dtype=float) for v in c] for c in (cos, sin, s_cos, s_sin))
+    shape = np.broadcast_shapes(
+        *(v.shape for v in (rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa)),
+        *(v.shape for c in (cos, sin, s_cos, s_sin) for v in c),
+    )
+
+    def expand(v):
+        return np.broadcast_to(v, shape)[np.newaxis, ...]
+
+    theta = np.linspace(-np.pi, np.pi, n_theta).reshape((n_theta,) + (1,) * len(shape))
+    a = np.broadcast_to(theta, (n_theta,) + shape).copy()
     a_t = np.ones_like(a)
     a_tt = np.zeros_like(a)
     a_r = np.zeros_like(a)
-    # Assumes coefficient inputs have same dimension as geometry inputs
-    for i in range(len(cos)):
+    for i in range(max(len(cos), len(sin), len(s_cos), len(s_sin))):
         if i < len(sin):
-            s = np.array([sin[i]]) if isinstance(sin[i], float) else sin[i]
-            a += np.expand_dims(s, axis=0) * np.sin(float(i) * theta)
-            a_t += np.expand_dims(s, axis=0) * float(i) * np.cos(float(i) * theta)
-            a_tt += np.expand_dims(s, axis=0) * float(-i * i) * np.sin(float(i) * theta)
+            a += expand(sin[i]) * np.sin(float(i) * theta)
+            a_t += expand(sin[i]) * float(i) * np.cos(float(i) * theta)
+            a_tt += expand(sin[i]) * float(-i * i) * np.sin(float(i) * theta)
         if i < len(s_sin):
-            s_s = np.array([s_sin[i]]) if isinstance(sin[i], float) else s_sin[i]
-            a_r += np.expand_dims(s_s, axis=0) * np.sin(float(i) * theta)
+            a_r += expand(s_sin[i]) * np.sin(float(i) * theta)
         if i < len(cos):
-            s = np.array([cos[i]]) if isinstance(cos[i], float) else cos[i]
-            a += np.expand_dims(s, axis=0) * np.cos(float(i) * theta)
-            a_t += np.expand_dims(s, axis=0) * float(-i) * np.sin(float(i) * theta)
-            a_tt += np.expand_dims(s, axis=0) * float(-i * i) * np.cos(float(i) * theta)
+            a += expand(cos[i]) * np.cos(float(i) * theta)
+            a_t += expand(cos[i]) * float(-i) * np.sin(float(i) * theta)
+            a_tt += expand(cos[i]) * float(-i * i) * np.cos(float(i) * theta)
         if i < len(s_cos):
-            s_s = np.array([s_cos[i]]) if isinstance(s_cos[i], float) else s_cos[i]
-            a_r += np.expand_dims(s_s, axis=0) * np.cos(float(i) * theta)
-    r = np.expand_dims(rgeo, axis=0) + np.expand_dims(rmin, axis=0) * np.cos(a)
-    r_t = np.expand_dims(-rmin, axis=0) * a_t * np.sin(a)
-    #r_tt = np.expand_dims(-rmin.to_numpy(), axis=0) * (a_t**2 * np.cos(a) + a_tt * np.sin(a))
-    r_r = np.expand_dims(drgeo, axis=0) + np.cos(a) - np.expand_dims(rmin, axis=0) * np.sin(a) * a_r
-    z = np.expand_dims(zgeo, axis=0) + np.expand_dims(kappa * rmin, axis=0) * np.sin(theta)
-    z_t = np.expand_dims(kappa * rmin, axis=0) * np.cos(theta)
-    #z_tt = np.expand_dims(-kappa * rmin, axis=0) * np.sin(theta)
-    z_r = np.expand_dims(dzgeo, axis=0) + np.expand_dims(kappa * (1.0 + s_kappa), axis=0) * np.sin(theta)
+            a_r += expand(s_cos[i]) * np.cos(float(i) * theta)
+    r = expand(rgeo) + expand(rmin) * np.cos(a)
+    r_t = expand(-rmin) * a_t * np.sin(a)
+    #r_tt = expand(-rmin) * (a_t**2 * np.cos(a) + a_tt * np.sin(a))
+    r_r = expand(drgeo) + np.cos(a) - expand(rmin) * np.sin(a) * a_r
+    z = expand(zgeo) + expand(kappa * rmin) * np.sin(theta)
+    z_t = expand(kappa * rmin) * np.cos(theta)
+    #z_tt = expand(-kappa * rmin) * np.sin(theta)
+    z_r = expand(dzgeo) + expand(kappa * (1.0 + s_kappa)) * np.sin(theta)
     l_t = (r_t ** 2 + z_t ** 2) ** 0.5
     j_r = r * (r_r * z_t - r_t * z_r)
     inv_j_r = 1.0 / np.where(np.isclose(j_r, 0.0), 0.001, j_r)
@@ -1558,7 +1578,7 @@ def calc_b_from_flux_surface_values(r, grad_r, l_t, rmin, q):
     grad_r_temp = copy.deepcopy(grad_r)
     l_t_temp = copy.deepcopy(l_t)
     n_theta = r.shape[0]
-    if np.all(r[0] == r[-1]) and np.all(grad_r[0] == grad_r[-1]) and np.all(l_t[0] == l_t[-1]):
+    if _has_duplicate_endpoint(r, grad_r, l_t):
         r_temp = r_temp[:-1]
         grad_r_temp = grad_r_temp[:-1]
         l_t_temp = l_t_temp[:-1]
@@ -1584,7 +1604,7 @@ def calc_grad_vol_from_flux_surface_values(r, l_t, grad_r):
     grad_r_temp = copy.deepcopy(grad_r)
     l_t_temp = copy.deepcopy(l_t)
     n_theta = r.shape[0]
-    if np.all(r[0] == r[-1]) and np.all(grad_r[0] == grad_r[-1]) and np.all(l_t[0] == l_t[-1]):
+    if _has_duplicate_endpoint(r, grad_r, l_t):
         r_temp = r_temp[:-1]
         grad_r_temp = grad_r_temp[:-1]
         l_t_temp = l_t_temp[:-1]
@@ -1599,7 +1619,7 @@ def calc_flux_surface_average_k_from_b_and_geo(k, b, g_t):
     k_temp = copy.deepcopy(k)
     b_temp = copy.deepcopy(b)
     g_t_temp = copy.deepcopy(g_t)
-    if np.all(k[0] == k[-1]) and np.all(b[0] == b[-1]) and np.all(g_t[0] == g_t[-1]):
+    if _has_duplicate_endpoint(k, b, g_t):
         k_temp = k_temp[:-1]
         b_temp = b_temp[:-1]
         g_t_temp = g_t_temp[:-1]
