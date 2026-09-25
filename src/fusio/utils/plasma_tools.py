@@ -1516,6 +1516,9 @@ def _has_duplicate_endpoint(*values):
 def calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_kappa, cos, sin, s_cos, s_sin):
     """Evaluate (R, Z, arc length element, |grad r|) on a flux surface described by MXH coefficients.
 
+    Radial derivatives follow the GACODE conventions: drgeo = dR0/dr and dzgeo = dZ0/dr
+    (dimensionless), s_kappa = (r / kappa) dkappa/dr, and s_cos / s_sin = r dc_n/dr, r ds_n/dr.
+
     Inputs may be scalars (float, numpy scalar or 0-d array) or arrays; all inputs and
     coefficients broadcast to a common shape S and the outputs have shape (n_theta, *S),
     with theta along axis 0. cos, sin, s_cos and s_sin are sequences indexed by harmonic
@@ -1555,7 +1558,8 @@ def calc_flux_surface_values_from_mxh(rmin, rgeo, zgeo, kappa, drgeo, dzgeo, s_k
     r = expand(rgeo) + expand(rmin) * np.cos(a)
     r_t = expand(-rmin) * a_t * np.sin(a)
     #r_tt = expand(-rmin) * (a_t**2 * np.cos(a) + a_tt * np.sin(a))
-    r_r = expand(drgeo) + np.cos(a) - expand(rmin) * np.sin(a) * a_r
+    # a_r holds r * da/dr, so the chain-rule factor r in dR/dr is already included
+    r_r = expand(drgeo) + np.cos(a) - np.sin(a) * a_r
     z = expand(zgeo) + expand(kappa * rmin) * np.sin(theta)
     z_t = expand(kappa * rmin) * np.cos(theta)
     #z_tt = expand(-kappa * rmin) * np.sin(theta)

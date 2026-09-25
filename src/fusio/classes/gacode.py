@@ -388,10 +388,10 @@ class gacode_io(io):
                 s_v = data['roa'].to_numpy() * vectorized_numpy_derivative(data['roa'].to_numpy(), data['zeta'].to_numpy())
                 newvars['s_zeta'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             if 'rmaj' in data:
-                s_v = vectorized_numpy_derivative(data['roa'].to_numpy(), data['rmaj'].to_numpy())
+                s_v = vectorized_numpy_derivative(data['rmin'].to_numpy(), data['rmaj'].to_numpy())
                 newvars['drmajdr'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             if 'zmag' in data:
-                s_v = vectorized_numpy_derivative(data['roa'].to_numpy(), data['zmag'].to_numpy())
+                s_v = vectorized_numpy_derivative(data['rmin'].to_numpy(), data['zmag'].to_numpy())
                 newvars['dzmagdr'] = (['n', 'rho'], np.where(np.isclose(s_v, 0.0), 0.0, s_v))
             n_theta = 1001
             theta = np.expand_dims(np.expand_dims(np.linspace(-np.pi, np.pi, n_theta), axis=-1), axis=-1)
@@ -443,7 +443,8 @@ class gacode_io(io):
             #! dR/dtheta
             #! d^2R/dtheta^2
             r = np.expand_dims(data['rmaj'].to_numpy(), axis=0) + np.expand_dims(data['rmin'].to_numpy(), axis=0) * np.cos(a)
-            r_r = np.expand_dims(newvars['drmajdr'][-1], axis=0) + np.cos(a) - np.expand_dims(data['rmin'].to_numpy(), axis=0) * np.sin(a) * a_r
+            # a_r holds r * da/dr, so the chain-rule factor r in dR/dr is already included
+            r_r = np.expand_dims(newvars['drmajdr'][-1], axis=0) + np.cos(a) - np.sin(a) * a_r
             r_t = np.expand_dims(-data['rmin'].to_numpy(), axis=0) * a_t * np.sin(a)
             r_tt = np.expand_dims(-data['rmin'].to_numpy(), axis=0) * (a_t**2 * np.cos(a) + a_tt * np.sin(a))
             #! Z(theta)

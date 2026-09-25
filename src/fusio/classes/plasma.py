@@ -563,10 +563,10 @@ class plasma_io(io):
             contour_z = data['contour'].sel(grid='z').to_numpy()
             #mxh_r0 = (np.nanmax(contour_r, axis=-1) + np.nanmin(contour_r, axis=-1)) / 2.0
             mxh_r0 = data['r_geometric'].to_numpy()
-            mxh_dr0 = vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_r0)
+            mxh_dr0 = vectorized_numpy_derivative(data['r_minor'].to_numpy(), mxh_r0)
             #mxh_z0 = (np.nanmax(contour_z, axis=-1) + np.nanmin(contour_z, axis=-1)) / 2.0
             mxh_z0 = data['z_geometric'].to_numpy()
-            mxh_dz0 = vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_z0)
+            mxh_dz0 = vectorized_numpy_derivative(data['r_minor'].to_numpy(), mxh_z0)
             mxh_r = (np.nanmax(contour_r, axis=-1) - np.nanmin(contour_r, axis=-1)) / 2.0
             mxh_kappa = (np.nanmax(contour_z, axis=-1) - np.nanmin(contour_z, axis=-1)) / (2.0 * mxh_r)
             mxh_kappa[..., 0] = 2.0 * mxh_kappa[..., 1] - mxh_kappa[..., 2]
@@ -648,7 +648,8 @@ class plasma_io(io):
             a_t = 1.0 + np.sum(mxh_sin * weight * np.cos(weight * theta) - mxh_cos * weight * np.sin(weight * theta), axis=-1)
             #a_tt = np.sum(-mxh_sin * weight ** 2 * np.sin(weight * theta) - mxh_cos * weight ** 2 * np.cos(weight * theta), axis=-1)
             r = np.expand_dims(mxh_r0, axis=0) + np.expand_dims(mxh_r, axis=0) * np.cos(a)
-            r_r = np.expand_dims(mxh_dr0, axis=0) + np.cos(a) - np.expand_dims(mxh_r, axis=0) * np.sin(a) * a_r
+            # a_r holds r * da/dr, so the chain-rule factor r in dR/dr is already included
+            r_r = np.expand_dims(mxh_dr0, axis=0) + np.cos(a) - np.sin(a) * a_r
             r_t = np.expand_dims(-mxh_r, axis=0) * a_t * np.sin(a)
             #r_tt = np.expand_dims(-mxh_r, axis=0) * (a_t ** 2 * np.cos(a) + a_tt * np.sin(a))
             z = np.expand_dims(mxh_z0, axis=0) + np.expand_dims(mxh_kappa * mxh_r, axis=0) * np.sin(np.squeeze(theta, axis=-1))

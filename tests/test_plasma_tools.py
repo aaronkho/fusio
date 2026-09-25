@@ -2571,6 +2571,44 @@ class TestPlasmaTools():
         np.testing.assert_allclose(l_t, 0.5, rtol=1.0e-12)
         np.testing.assert_allclose(grad_r, 1.0, rtol=1.0e-12)
 
+    def test_calc_flux_surface_values_from_mxh_radial_derivatives(self):
+        # |grad r| from GACODE-convention radial inputs must match finite differences of the surface family
+        profiles = {
+            'rgeo': lambda x: 3.0 - 0.1 * x ** 2,
+            'zgeo': lambda x: 0.05 * x ** 2,
+            'kappa': lambda x: 1.4 + 0.3 * x ** 2,
+            'cos0': lambda x: 0.02 * x,
+            'cos1': lambda x: 0.03 * x ** 2,
+            'sin1': lambda x: np.arcsin(0.4 * x),
+            'sin2': lambda x: -0.1 * x ** 2,
+            'sin3': lambda x: 0.01 * x,
+        }
+
+        def surface(x):
+            v = {key: f(x) for key, f in profiles.items()}
+            return pt.calc_flux_surface_values_from_mxh(
+                x, v['rgeo'], v['zgeo'], v['kappa'], 0.0, 0.0, 0.0,
+                [v['cos0'], v['cos1']], [0.0, v['sin1'], v['sin2'], v['sin3']], [0.0], [0.0],
+            )
+
+        r0, h = 0.6, 1.0e-5
+        deriv = {key: (f(r0 + h) - f(r0 - h)) / (2.0 * h) for key, f in profiles.items()}
+        val = {key: f(r0) for key, f in profiles.items()}
+        _, _, l_t, grad_r = pt.calc_flux_surface_values_from_mxh(
+            r0, val['rgeo'], val['zgeo'], val['kappa'], deriv['rgeo'], deriv['zgeo'], r0 * deriv['kappa'] / val['kappa'],
+            [val['cos0'], val['cos1']], [0.0, val['sin1'], val['sin2'], val['sin3']],
+            [r0 * deriv['cos0'], r0 * deriv['cos1']], [0.0, r0 * deriv['sin1'], r0 * deriv['sin2'], r0 * deriv['sin3']],
+        )
+        theta = np.linspace(-np.pi, np.pi, 1001)
+        r, z, _, _ = surface(r0)
+        rp, zp, _, _ = surface(r0 + h)
+        rm, zm, _, _ = surface(r0 - h)
+        r_r, z_r = (rp - rm) / (2.0 * h), (zp - zm) / (2.0 * h)
+        r_t, z_t = np.gradient(r, theta, edge_order=2), np.gradient(z, theta, edge_order=2)
+        grad_r_ref = r * np.hypot(r_t, z_t) / (r * (r_r * z_t - r_t * z_r))
+        np.testing.assert_allclose(grad_r, grad_r_ref, rtol=1.0e-4)
+        np.testing.assert_allclose(l_t, np.hypot(r_t, z_t), rtol=1.0e-4)
+
     def test_calc_flux_surface_values_from_mxh_scalar_types(self):
         geo, coeffs, _ = self._mxh_batch(1)
         ref = pt.calc_flux_surface_values_from_mxh(**self._mxh_element(geo, coeffs, 0, lambda x: np.asarray(float(x))))
