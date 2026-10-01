@@ -200,3 +200,24 @@ class TestPlasmaToGacodeConversion:
 
     def test_z_eff_not_less_than_one(self, plasma_as_gacode):
         assert np.all(plasma_as_gacode.input['z_eff'].to_numpy() >= 1.0)
+
+
+class TestDerivedGeometry:
+
+    def test_mxh_dvolume_dr_matches_contour_volume(self, gacode_file_path):
+        # dV/dr from the MXH metric (uses mxh_dr0, mxh_dz0, mxh_s_*) must match the radial derivative
+        # of the volume enclosed by the input contours
+        from fusio.utils.math_tools import vectorized_numpy_derivative
+        p = plasma_io.from_gacode(gacode_io(input=gacode_file_path), side='input')
+        p.compute_derived_quantities(side='input')
+        d = p.input
+        r = d['contour'].sel(grid='r').to_numpy()
+        z = d['contour'].sel(grid='z').to_numpy()
+        vol = np.pi * np.abs(np.sum(0.5 * (r[..., 1:] ** 2 + r[..., :-1] ** 2) * np.diff(z, axis=-1), axis=-1))
+        dvdr = vectorized_numpy_derivative(d['r_minor'].to_numpy(), vol)
+        x = d['r_minor_norm'].to_numpy()
+        mask = (x > 0.1) & (x < 0.95)
+        err = np.abs(d['mxh_dvolume_dr'].to_numpy() / dvdr - 1.0)[mask]
+        assert np.median(err) < 1.0e-3
+        assert np.max(err) < 1.0e-2
+

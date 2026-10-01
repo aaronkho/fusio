@@ -157,3 +157,31 @@ class TestGacodeToPlasmaConversion:
 
     def test_temperature_i_positive(self, gacode_as_plasma):
         assert np.all(gacode_as_plasma.input['temperature_i'].to_numpy() > 0)
+
+
+def _contour_volume(r, z, axis):
+    """Enclosed volume of closed (R, Z) contours, V = pi * |closed integral of R^2 dZ|."""
+    r, z = np.moveaxis(r, axis, -1), np.moveaxis(z, axis, -1)
+    return np.pi * np.abs(np.sum(0.5 * (r[..., 1:] ** 2 + r[..., :-1] ** 2) * np.diff(z, axis=-1), axis=-1))
+
+
+class TestDerivedGeometry:
+
+    def test_volp_miller_matches_contour_volume(self, gacode_file_path):
+        # dV/dr from the Miller metric (uses the radial derivatives drmajdr, dzmagdr, s_*) must match
+        # the radial derivative of the volume enclosed by the reconstructed contours
+        from fusio.utils.math_tools import vectorized_numpy_derivative
+        g = gacode_io(input=gacode_file_path)
+        # compute_derived_quantities fails later on this file (nu_ni), so run the geometry steps only
+        g._compute_derived_coordinates(side='input')
+        g._compute_derived_reference_quantities(side='input')
+        g._compute_derived_geometry(side='input')
+        d = g.input
+        vol = _contour_volume(d['r_surface'].to_numpy(), d['z_surface'].to_numpy(), axis=0)
+        dvdr = vectorized_numpy_derivative(d['rmin'].to_numpy(), vol)
+        roa = d['roa'].to_numpy()
+        mask = (roa > 0.1) & (roa < 0.95)
+        err = np.abs(d['volp_miller'].to_numpy() / dvdr - 1.0)[mask]
+        assert np.median(err) < 1.0e-3
+        assert np.max(err) < 1.0e-2
+
