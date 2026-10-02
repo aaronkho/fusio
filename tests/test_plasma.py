@@ -326,13 +326,6 @@ class TestCocos:
         from fusio.utils.eqdsk_tools import read_eqdsk, detect_psi_per_radian
         assert detect_psi_per_radian(read_eqdsk(Path(__file__).parent / 'data' / name)) is per_radian
 
-    def test_current_in_amps_from_gacode(self, gacode_file_path):
-        g = gacode_io(input=gacode_file_path)
-        p = plasma_io.from_gacode(g, side='input')
-        np.testing.assert_allclose(p.input['current'].to_numpy(), 1.0e6 * g.input['current'].to_numpy(), rtol=1e-12)
-        back = p.to('gacode', side='input')
-        np.testing.assert_allclose(back.input['current'].to_numpy(), g.input['current'].to_numpy(), rtol=1e-12)
-
     def test_eqdsk_insertion_independent_of_source_cocos(self, gacode_file_path):
         # The same equilibrium given per radian (COCOS 2) and in Wb (COCOS 11) must produce the same plasma state
         states = []
@@ -340,5 +333,50 @@ class TestCocos:
             p = plasma_io.from_gacode(gacode_io(input=gacode_file_path), side='input')
             p.add_geometry_from_eqdsk(gacode_file_path.parent / name, side='input')
             states.append(p.input)
-        for var in ['magnetic_flux', 'safety_factor', 'contour', 'r_minor']:
+        for var in ['magnetic_flux', 'safety_factor', 'contour', 'r_minor', 'poloidal_flux_map']:
             np.testing.assert_allclose(states[1][var].to_numpy(), states[0][var].to_numpy(), rtol=1.0e-8, atol=1.0e-8 * float(np.max(np.abs(states[0][var]))), err_msg=var)
+
+    def test_current_in_amps_from_gacode(self, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        p = plasma_io.from_gacode(g, side='input')
+        np.testing.assert_allclose(p.input['current'].to_numpy(), 1.0e6 * g.input['current'].to_numpy(), rtol=1e-12)
+        back = p.to('gacode', side='input')
+        np.testing.assert_allclose(back.input['current'].to_numpy(), g.input['current'].to_numpy(), rtol=1e-12)
+
+    def test_eqdsk_field_current_and_profiles(self, gacode_file_path):
+        from fusio.utils.eqdsk_tools import read_eqdsk
+        eqdsk = gacode_file_path.parent / 'sample_cocos02_input.geqdsk'
+        eq = read_eqdsk(eqdsk)
+        p = plasma_io.from_gacode(gacode_io(input=gacode_file_path), side='input')
+        p.add_geometry_from_eqdsk(eqdsk, side='input')
+        # Field and its reference radius come together, and the current in A
+        assert np.isclose(float(np.atleast_1d(p.input.attrs['rcentr'])[0]), eq['rcentr'])
+        assert np.isclose(abs(p.input['field_axis'].isel(time=0).item()), abs(eq['bcentr']))
+        assert np.isclose(abs(p.input['current'].isel(time=0).item()), abs(eq['cpasma']))
+        # F, p, FF' and p' follow the EQDSK from axis to boundary
+        f = p.input['diamagnetic_function'].isel(time=0).to_numpy()
+        pres = p.input['pressure_equilibrium'].isel(time=0).to_numpy()
+        assert np.isclose(abs(f[0]), abs(eq['fpol'][0]), rtol=1e-6) and np.isclose(abs(f[-1]), abs(eq['fpol'][-1]), rtol=1e-6)
+        assert np.isclose(pres[0], eq['pres'][0], rtol=1e-6) and np.isclose(pres[-1], eq['pres'][-1], rtol=1e-6, atol=1e-6 * eq['pres'][0])
+        for var in ['f_df_dpsi', 'dpressure_dpsi']:
+            assert np.all(np.isfinite(p.input[var].to_numpy())), var
+
+    def test_poloidal_flux_map_overwrite(self, gacode_file_path):
+        eqdsk = gacode_file_path.parent / 'sample_cocos02_input.geqdsk'
+        p = plasma_io.from_gacode(gacode_io(input=gacode_file_path), side='input')
+        p.add_geometry_from_eqdsk(eqdsk, side='input')
+        psimap = p.input['poloidal_flux_map'].to_numpy().copy()
+        assert psimap.shape == (1, p.input['r_map'].size, p.input['z_map'].size)
+        assert np.all(np.isfinite(psimap))
+        # Flux at the traced magnetic axis matches the axis value of the 1D poloidal flux
+        psi_axis = p.input['magnetic_flux'].sel(direction='poloidal').isel(time=0, radius=0).item()
+        r_axis = p.input['contour'].sel(grid='r').isel(time=0, radius=0, poloidal_index=0).item()
+        z_axis = p.input['contour'].sel(grid='z').isel(time=0, radius=0, poloidal_index=0).item()
+        psi_at_axis = p.input['poloidal_flux_map'].isel(time=0).interp(r_map=r_axis, z_map=z_axis, method='cubic').item()
+        psi_span = abs(p.input['magnetic_flux'].sel(direction='poloidal').isel(time=0, radius=-1).item() - psi_axis)
+        assert abs(psi_at_axis - psi_axis) < 1.0e-3 * psi_span
+        p.update_input_data_vars({'poloidal_flux_map': (['time', 'r_map', 'z_map'], np.full(psimap.shape, 7.0))})
+        p.add_geometry_from_eqdsk(eqdsk, side='input', overwrite=False)
+        assert np.all(p.input['poloidal_flux_map'].to_numpy() == 7.0)
+        p.add_geometry_from_eqdsk(eqdsk, side='input')
+        np.testing.assert_array_equal(p.input['poloidal_flux_map'].to_numpy(), psimap)
