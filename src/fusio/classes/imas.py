@@ -1,4 +1,5 @@
 import copy
+import re
 import logging
 from pathlib import Path
 from .io import Any, Final, Self
@@ -258,16 +259,19 @@ class imas_io(io):
             ids: IDSBase,
             components: list[str],
             data: Any,
+            shape: Any = None,
         ) -> None:
             if len(components) > 0:
                 if isinstance(ids, IDSStructArray):
                     for ii in range(ids.size):
                         if isinstance(data, np.ndarray) and ii < data.shape[0]:
-                            _expanded_data_insertion(ids[ii], components, data[ii])
+                            _expanded_data_insertion(ids[ii], components, data[ii], shape[ii] if isinstance(shape, np.ndarray) and shape.ndim > 1 else shape)
                         elif not isinstance(data, np.ndarray):
-                            _expanded_data_insertion(ids[ii], components, data)
+                            _expanded_data_insertion(ids[ii], components, data, shape)
                 elif len(components) == 1:
                     val = data if not isinstance(data, bytes) else data.decode('utf-8')
+                    if isinstance(val, np.ndarray) and shape is not None and val.ndim == np.size(shape):
+                        val = val[tuple(slice(0, int(n)) for n in np.atleast_1d(shape))]  # Remove padding of ragged arrays
                     if isinstance(val, np.ndarray):
                         if val.dtype in self.int_types:
                             val = np.where(val == self.empty_int, np.nan, val)
@@ -279,7 +283,7 @@ class imas_io(io):
                             val = val.item()
                     ids[f'{components[0]}'] = val
                 else:
-                    _expanded_data_insertion(ids[f'{components[0]}'], components[1:], data)
+                    _expanded_data_insertion(ids[f'{components[0]}'], components[1:], data, shape)
 
         dd_version: Any = None
         if f'ids_properties{delimiter}version_put{delimiter}data_dictionary' in data:
@@ -309,10 +313,15 @@ class imas_io(io):
                 data.pop(key)
         for key in sorted(shape_data.keys(), key=len):
             _recursive_resize_struct_array(ids_struct, key.replace('[]', '').split(delimiter), shape_data[key])
+        # imas-python to_xarray() pads ragged arrays (e.g. profiles_2d grids of different sizes) to a common size, recording
+        # the true size of each in a '<name>:shape' variable along a helper dimension named '1D', '2D', ...
+        ragged_shapes = {key[:-len(':shape')]: data.pop(key) for key in list(data.keys()) if key.endswith(':shape')}
+        for key in [key for key in data.keys() if re.fullmatch(r'\d+D', key)]:
+            data.pop(key)
         for key in data:
             if isinstance(data[key], np.ndarray) and data[key].dtype.kind == 'S' and data[key].size == 1 and data[key].item() == b'':
                 continue  # imas-python >= 2.1 to_xarray() emits empty placeholder variables for structure nodes
-            _expanded_data_insertion(ids_struct, key.replace('[]', '').split(delimiter), data[key])
+            _expanded_data_insertion(ids_struct, key.replace('[]', '').split(delimiter), data[key], ragged_shapes.get(key, None))
 
         return ids_struct
 
@@ -689,14 +698,15 @@ class imas_io(io):
             tag = 'equilibrium.time_slice.profiles_2d.grid.dim1'
             if tag in data:
                 rvec = data[tag].to_numpy().flatten()
+                rvec = rvec[np.isfinite(rvec)]  # Grids are padded with NaN when profiles_2d entries differ in size
                 eqdata['nr'] = rvec.size
                 eqdata['rdim'] = float(np.nanmax(rvec) - np.nanmin(rvec))
                 eqdata['rleft'] = float(np.nanmin(rvec))
-                if psinvec is None:
-                    psinvec = np.linspace(0.0, 1.0, len(rvec)).flatten()
+                psinvec = np.linspace(0.0, 1.0, len(rvec)).flatten()  # EQDSK profiles are on nr uniformly spaced psi points
             tag = 'equilibrium.time_slice.profiles_2d.grid.dim2'
             if tag in data:
                 zvec = data[tag].to_numpy().flatten()
+                zvec = zvec[np.isfinite(zvec)]
                 eqdata['nz'] = zvec.size
                 eqdata['zdim'] = float(np.nanmax(zvec) - np.nanmin(zvec))
                 eqdata['zmid'] = float(np.nanmax(zvec) + np.nanmin(zvec)) / 2.0
@@ -758,6 +768,8 @@ class imas_io(io):
                 if transpose:
                     do_transpose = bool(not do_transpose)
                 eqdata['psi'] = data[tag].to_numpy().T if do_transpose else data[tag].to_numpy()
+                if 'nr' in eqdata and 'nz' in eqdata:
+                    eqdata['psi'] = eqdata['psi'][:eqdata['nz'], :eqdata['nr']]
             tag = 'equilibrium.time_slice.profiles_1d.q'
             if tag in data:
                 if conversion is None:
@@ -1403,6 +1415,17 @@ class imas_io(io):
                         ts.profiles_1d.q = s_q * _get('safety_factor', i)
                     if 'magnetic_shear' in data:
                         ts.profiles_1d.magnetic_shear = _get('magnetic_shear', i)
+                    # Equilibrium profiles side-loaded from an EQDSK, with F following the toroidal field and the psi derivatives 1 / psi
+                    for var, field, scale in [
+                        ('diamagnetic_function', 'f', s_tor),
+                        ('pressure_equilibrium', 'pressure', 1.0),
+                        ('f_df_dpsi', 'f_df_dpsi', 1.0 / psi_scale),
+                        ('dpressure_dpsi', 'dpressure_dpsi', 1.0 / psi_scale),
+                    ]:
+                        if var in data:
+                            values = _get(var, i)
+                            if np.all(np.isfinite(values)):
+                                setattr(ts.profiles_1d, field, scale * values)
                     # Per-surface shape, standard IMAS definitions
                     if 'r_geometric' in data and 'r_minor' in data:
                         rgeo = _get('r_geometric', i)
@@ -1414,6 +1437,21 @@ class imas_io(io):
                             ts.profiles_1d.geometric_axis.z = _get('z_geometric', i)
                     if 'mxh_kappa' in data:
                         ts.profiles_1d.elongation = _get('mxh_kappa', i)
+                    # Poloidal flux map on its rectangular (R, Z) grid, written first as most equilibrium readers expect
+                    if 'poloidal_flux_map' in data:
+                        psimap = data['poloidal_flux_map'].isel(time=i).to_numpy()
+                        if np.all(np.isfinite(psimap)):
+                            rvec = data['r_map'].to_numpy()
+                            zvec = data['z_map'].to_numpy()
+                            ts.profiles_2d.resize(len(ts.profiles_2d) + 1, keep=True)
+                            p2d = ts.profiles_2d[-1]
+                            p2d.grid_type = imas.identifiers.poloidal_plane_coordinates_identifier.rectangular
+                            p2d.grid.dim1 = rvec
+                            p2d.grid.dim2 = zvec
+                            rmesh, zmesh = np.meshgrid(rvec, zvec, indexing='ij')
+                            p2d.r = rmesh
+                            p2d.z = zmesh
+                            p2d.psi = psi_scale * psimap
                     if 'contour' in data and 'r_geometric' in data and 'r_minor' in data:
                         rc = _get('contour', i, grid='r')
                         zc = _get('contour', i, grid='z')
@@ -1428,8 +1466,8 @@ class imas_io(io):
                         theta = np.arctan2(zc - zc[0, 0], rc - rc[0, 0])  # Polar angle about the magnetic axis (axis surface is a point)
                         theta = np.unwrap(theta, axis=-1)
                         theta[0, :] = np.linspace(0.0, 2.0 * np.pi, theta.shape[-1])
-                        ts.profiles_2d.resize(1)
-                        p2d = ts.profiles_2d[0]
+                        ts.profiles_2d.resize(len(ts.profiles_2d) + 1, keep=True)
+                        p2d = ts.profiles_2d[-1]
                         p2d.grid_type = imas.identifiers.poloidal_plane_coordinates_identifier.inverse_rhotornorm_polar
                         p2d.grid.dim1 = rho
                         p2d.grid.dim2 = np.linspace(0.0, 2.0 * np.pi, rc.shape[-1])

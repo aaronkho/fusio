@@ -66,6 +66,11 @@ class plasma_io(io):
         'current_source',
         'heat_exchange_ei',
         'contour',
+        'poloidal_flux_map',
+        'diamagnetic_function',
+        'pressure_equilibrium',
+        'f_df_dpsi',
+        'dpressure_dpsi',
     ]
     units: Final[Mapping[str, str]] = {
         'field_axis': 'T',
@@ -87,6 +92,11 @@ class plasma_io(io):
         'current_source': 'A/m^2',
         'heat_exchange_ei': 'W/m^3',
         'contour': 'm',
+        'poloidal_flux_map': 'Wb/radian',
+        'diamagnetic_function': 'T*m',
+        'pressure_equilibrium': 'Pa',
+        'f_df_dpsi': 'T^2*m^2*radian/Wb',
+        'dpressure_dpsi': 'Pa*radian/Wb',
     }
     constants: Final[Mapping[str, float]] = {
         'e_si': 1.60218e-19,  # C
@@ -320,13 +330,18 @@ class plasma_io(io):
         trace_last: bool = True,
         add_field: bool = True,
         add_current: bool = True,
+        overwrite: bool = True,
     ) -> None:
         '''Trace flux surfaces from an EQDSK file and add MXH shape data.
+
+        The poloidal flux map and the F, p, FF' and p' profiles of the EQDSK are stored alongside the traced geometry.
 
         Args:
             path: Path to the EQDSK file.
             side: ``'input'`` or ``'output'`` dataset to populate.
-            overwrite: If ``True``, overwrite existing shape data.
+            add_field: If ``True``, take the vacuum field and its reference radius (``rcentr`` attribute) from the EQDSK.
+            add_current: If ``True``, take the plasma current from the EQDSK.
+            overwrite: If ``True``, replace any poloidal flux map already stored with the one from this EQDSK, otherwise keep the existing map.
         '''
         data = self.input if side == 'input' else self.output
         newcoords: MutableMapping[str, Any] = {}
@@ -374,10 +389,22 @@ class plasma_io(io):
                 q = np.interp(orient * psip, orient * psivec, qpsi)
                 safety_factor.loc[dict(time=t)] = q
                 newvars['safety_factor'] = (['time', 'radius'], safety_factor.to_numpy())
+            # Equilibrium profiles of the EQDSK, as functions of psi in the convention of this plasma state
+            for key, var in [('fpol', 'diamagnetic_function'), ('pres', 'pressure_equilibrium'), ('ffprime', 'f_df_dpsi'), ('pprime', 'dpressure_dpsi')]:
+                if key in eqdsk_data and len(eqdsk_data[key]) == len(psivec):
+                    values = data[var].to_numpy().copy() if var in data else np.full((len(data['time']), len(data['radius'])), np.nan)
+                    values[time_index] = np.interp(orient * psip, orient * psivec, eqdsk_data[key])
+                    newvars[var] = (['time', 'radius'], values)
+            rcentr = data.attrs.get('rcentr', None)
             if add_field:
                 baxis = data['field_axis']
                 baxis.loc[dict(time=t)] = eqdsk_data['bcentr']
                 newvars['field_axis'] = (['time'], baxis.to_numpy())
+                # The field is given at the EQDSK reference radius, which then becomes that of this time slice
+                rlist = np.atleast_1d(rcentr if rcentr is not None else eqdsk_data['rcentr']).astype(float)
+                rlist = rlist if len(rlist) == len(data['time']) else np.full(len(data['time']), float(rlist[0]))
+                rlist[time_index] = float(eqdsk_data['rcentr'])
+                rcentr = float(rlist[0]) if len(rlist) == 1 else [float(r) for r in rlist]
             if add_current:
                 cur = data['current']
                 cur.loc[dict(time=t)] = eqdsk_data['cpasma']
@@ -449,6 +476,19 @@ class plasma_io(io):
                     if rmin_arr[it, ir] <= rmin_arr[it, ir - 1]:
                         rmin_arr[it, ir] = rmin_arr[it, ir - 1] + 1.0e-6
             newvars['r_minor'] = (['time', 'radius'], rmin_arr)
+            # Keep the poloidal flux map itself, already in the convention of this plasma state, on its rectangular (R, Z) grid
+            if overwrite or 'poloidal_flux_map' not in data:
+                if 'poloidal_flux_map' in data:
+                    data = data.drop_vars(['poloidal_flux_map', 'r_map', 'z_map'])  # Grid may differ, so replace the map outright
+                    if side == 'input':
+                        self.input = data
+                    else:
+                        self.output = data
+                psimap = np.full((len(data['time']), len(rvec), len(zvec)), np.nan)
+                psimap[time_index] = eqdsk_data['psi'].T  # EQDSK stores psi as (nz, nr)
+                newcoords['r_map'] = rvec
+                newcoords['z_map'] = zvec
+                newvars['poloidal_flux_map'] = (['time', 'r_map', 'z_map'], psimap)
         if newvars:
             if side == 'input':
                 self.update_input_coords(newcoords)
@@ -456,6 +496,13 @@ class plasma_io(io):
             else:
                 self.update_output_coords(newcoords)
                 self.update_output_data_vars(newvars)
+            if add_field and rcentr is not None:
+                data = self.input if side == 'input' else self.output
+                data.attrs['rcentr'] = rcentr
+                if side == 'input':
+                    self.input = data
+                else:
+                    self.output = data
 
 
     def add_safety_factor_profile(
