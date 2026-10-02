@@ -136,10 +136,11 @@ class TestPlasmaToGacodeConversion:
             rtol=1e-10,
         )
 
-    def test_current_preserved(self, plasma_state, plasma_as_gacode):
+    def test_current_unit_conversion(self, plasma_state, plasma_as_gacode):
+        # plasma_io holds the current in A, GACODE in MA
         np.testing.assert_allclose(
             plasma_as_gacode.input['current'].to_numpy(),
-            plasma_state.input['current'].to_numpy(),
+            1.0e-6 * plasma_state.input['current'].to_numpy(),
             rtol=1e-10,
         )
 
@@ -324,6 +325,13 @@ class TestCocos:
         from pathlib import Path
         from fusio.utils.eqdsk_tools import read_eqdsk, detect_psi_per_radian
         assert detect_psi_per_radian(read_eqdsk(Path(__file__).parent / 'data' / name)) is per_radian
+
+    def test_current_in_amps_from_gacode(self, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        p = plasma_io.from_gacode(g, side='input')
+        np.testing.assert_allclose(p.input['current'].to_numpy(), 1.0e6 * g.input['current'].to_numpy(), rtol=1e-12)
+        back = p.to('gacode', side='input')
+        np.testing.assert_allclose(back.input['current'].to_numpy(), g.input['current'].to_numpy(), rtol=1e-12)
 
     def test_eqdsk_insertion_independent_of_source_cocos(self, gacode_file_path):
         # The same equilibrium given per radian (COCOS 2) and in Wb (COCOS 11) must produce the same plasma state

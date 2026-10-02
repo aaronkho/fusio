@@ -1247,7 +1247,7 @@ class plasma_io(io):
             #if 'mach' in data:
             #    newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['dvolume_dr']).to_numpy(), data['r_minor'].to_numpy())[:, -1] / vol[:, -1])
             newvars['pressure_total_vol_norm_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] / (data['field_axis'] ** 2)).to_numpy())
-            newvars['beta_n_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] * 100.0 * data['r_minor_lcfs'] / np.abs(data['field_axis'] * data['current'])).to_numpy())  # pc
+            newvars['beta_n_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] * 100.0 * data['r_minor_lcfs'] / np.abs(data['field_axis'] * 1.0e-6 * data['current'])).to_numpy())  # pc, current in MA
 
             field_squared_vol = vectorized_numpy_integration(
                 np.transpose((data['field_squared'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
@@ -1256,7 +1256,7 @@ class plasma_io(io):
             newvars['field_squared_vol'] = (['time', 'field_direction'], field_squared_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
             newvars['pressure_total_vol_norm_field'] = (['time', 'field_direction'], np.expand_dims((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1], axis=-1) * 2.0 * self.constants['mu_si'] / field_squared_vol[..., -1])
             newvars['pressure_total_vol_norm'] = (['time'], (pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] * 2.0 * self.constants['mu_si'] / np.sum(field_squared_vol, axis=1)[..., -1])
-            newvars['beta_n'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] * 2.0 * self.constants['mu_si'] / np.sum(field_squared_vol, axis=1)[..., -1]) * (100.0 * data['r_minor_lcfs'] * np.abs(data['field_axis'] / data['current'])).to_numpy())  # pc
+            newvars['beta_n'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] * 2.0 * self.constants['mu_si'] / np.sum(field_squared_vol, axis=1)[..., -1]) * (100.0 * data['r_minor_lcfs'] * np.abs(data['field_axis'] / (1.0e-6 * data['current']))).to_numpy())  # pc, current in MA
 
             confinement_time_energy = np.where(np.isclose(heating_source_vol[..., -1], 0.0), np.inf, (energy_e_vol + energy_thermal_i_vol)[..., -1] / heating_source_vol[..., -1])
             confinement_time_particle = np.where(np.isclose(np.sum(particle_source_e_vol, axis=-1)[..., -1], 0.0), np.inf, density_e_vol[..., -1] / np.sum(particle_source_e_vol, axis=-1)[..., -1])
@@ -1279,7 +1279,9 @@ class plasma_io(io):
         newvars: MutableMapping[str, Any] = {}
         if 'current' in data and 'bcentr' in data:
 
-            greenwald_density = (1.0e14 * np.abs(data['current']) / (np.pi * data['r_minor_lcfs'] ** 2))
+            current_ma = 1.0e-6 * np.abs(data['current'])  # Empirical scalings take the current in MA
+
+            greenwald_density = (1.0e14 * current_ma / (np.pi * data['r_minor_lcfs'] ** 2))
             newvars['greenwald_density'] = (['time'], greenwald_density.to_numpy())
             newvars['greenwald_fraction'] = (['time'], (data['density_e_vol'] / greenwald_density).to_numpy())
             #newvars['greenwald_density_local'] = (['time', 'radius'], (data['density_e'] / greenwald_density).to_numpy())
@@ -1288,7 +1290,7 @@ class plasma_io(io):
 
             newvars['confinement_time_scaling_h98'] = (['time'], (
                 0.0562
-                * np.abs(data['current']) ** (0.93)
+                * current_ma ** (0.93)
                 * data['r_geometric_lcfs'] ** (1.97)
                 * data['kappa'].isel(radius=-1) ** (0.78)
                 * data['epsilon_lcfs'] ** (0.58)
@@ -1299,7 +1301,7 @@ class plasma_io(io):
             ).to_numpy())
             newvars['confinement_time_scaling_h89'] = (['time'], (
                 0.048
-                * np.abs(data['current']) ** (0.85)
+                * current_ma ** (0.85)
                 * data['r_geometric_lcfs'] ** (1.50)
                 * data['kappa'].isel(radius=-1) ** (0.50)
                 * data['epsilon_lcfs'] ** (0.30)
@@ -1310,7 +1312,7 @@ class plasma_io(io):
             ).to_numpy())
             newvars['confinement_time_scaling_l97'] = (['time'], (
                 0.023
-                * np.abs(data['current']) ** (0.96)
+                * current_ma ** (0.96)
                 * data['r_geometric_lcfs'] ** (1.83)
                 * data['kappa'].isel(radius=-1) ** (0.64)
                 * data['epsilon_lcfs'] ** (0.06)
@@ -1322,7 +1324,7 @@ class plasma_io(io):
 
             lh_nmin = (
                 1.0e19 * 0.07
-                * np.abs(data['current']) ** (0.34)
+                * current_ma ** (0.34)
                 * np.abs(data['field_axis']) ** (0.62)
                 * data['r_minor_lcfs'] ** (-0.95)
                 * data['epsilon_lcfs'] ** (0.4)
@@ -1361,14 +1363,14 @@ class plasma_io(io):
                 2.5
                 * data['r_geometric_lcfs']
                 * data['epsilon_lcfs'] ** 2
-                * np.abs(data['field_axis'] / data['current'])
+                * np.abs(data['field_axis']) / current_ma
                 * uckan_shaping
             ).to_numpy())
             newvars['qstar_iter'] = (['time'], (
                 2.5
                 * data['r_geometric_lcfs']
                 * data['epsilon_lcfs'] ** 2
-                * np.abs(data['field_axis'] / data['current'])
+                * np.abs(data['field_axis']) / current_ma
                 * iter_shaping
             ).to_numpy())
 
@@ -2039,7 +2041,6 @@ class plasma_io(io):
                 'masse': 'mass_e',
                 'ze': 'charge_e',
                 'bcentr': 'field_axis',
-                'current': 'current',
             }
             direct_time_ion_map = {
                 'mass': 'mass_i',
@@ -2095,6 +2096,8 @@ class plasma_io(io):
                 for key, nkey in direct_time_rho_ion_map.items():
                     if key in data and 'name' in data:
                         data_vars[nkey] = (['time', 'radius', 'ion'], data[key].to_numpy())
+                if 'current' in data:
+                    data_vars['current'] = (['time'], 1.0e6 * data['current'].to_numpy())  # MA -> A
                 if 'ne' in data:
                     data_vars['density_e'] = (['time', 'radius'], 1.0e19 * data['ne'].to_numpy())
                 if 'te' in data:

@@ -1585,7 +1585,6 @@ class gacode_io(io):
                 'mass_e': 'masse',
                 'charge_e': 'ze',
                 'field_axis': 'bcentr',
-                'current': 'current',
             }
             direct_time_ion_map = {
                 'mass_i': 'mass',
@@ -1639,6 +1638,8 @@ class gacode_io(io):
                 for key, nkey in direct_time_map.items():
                     if key in data:
                         data_vars[nkey] = (['n'], data[key].to_numpy())
+                if 'current' in data:
+                    data_vars['current'] = (['n'], 1.0e-6 * data['current'].to_numpy())  # A -> MA
                 for key, nkey in direct_time_ion_map.items():
                     if key in data and 'name' in coords:
                         data_vars[nkey] = (['n', 'name'], data[key].to_numpy())
