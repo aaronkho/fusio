@@ -319,3 +319,18 @@ class TestCocos:
         assert 'cocos' not in p.input.attrs
         assert p.input_cocos == expected
 
+    @pytest.mark.parametrize('name, per_radian', [('sample_cocos02_input.geqdsk', True), ('sample_cocos11_input.geqdsk', False)])
+    def test_psi_per_radian_detected_from_ampere_law(self, name, per_radian):
+        from pathlib import Path
+        from fusio.utils.eqdsk_tools import read_eqdsk, detect_psi_per_radian
+        assert detect_psi_per_radian(read_eqdsk(Path(__file__).parent / 'data' / name)) is per_radian
+
+    def test_eqdsk_insertion_independent_of_source_cocos(self, gacode_file_path):
+        # The same equilibrium given per radian (COCOS 2) and in Wb (COCOS 11) must produce the same plasma state
+        states = []
+        for name in ['sample_cocos02_input.geqdsk', 'sample_cocos11_input.geqdsk']:
+            p = plasma_io.from_gacode(gacode_io(input=gacode_file_path), side='input')
+            p.add_geometry_from_eqdsk(gacode_file_path.parent / name, side='input')
+            states.append(p.input)
+        for var in ['magnetic_flux', 'safety_factor', 'contour', 'r_minor']:
+            np.testing.assert_allclose(states[1][var].to_numpy(), states[0][var].to_numpy(), rtol=1.0e-8, atol=1.0e-8 * float(np.max(np.abs(states[0][var]))), err_msg=var)
