@@ -221,3 +221,101 @@ class TestDerivedGeometry:
         assert np.median(err) < 1.0e-3
         assert np.max(err) < 1.0e-2
 
+
+
+def _plasma_with_flipped_signs(gacode_file_path, keys):
+    g = gacode_io(input=gacode_file_path)
+    d = g.input
+    for k in keys:
+        if k in d:
+            d[k] = -d[k]
+    g.input = d
+    p = plasma_io.from_gacode(g, side='input')
+    p.compute_derived_quantities(side='input')
+    return p
+
+
+@pytest.fixture(scope='module')
+def derived_reference(gacode_file_path):
+    return _plasma_with_flipped_signs(gacode_file_path, []).input
+
+
+SIGN_FLIPS = {
+    'all': ['polflux', 'q', 'current', 'bcentr', 'torfluxa'],
+    'current': ['current', 'polflux'],
+    'field': ['bcentr', 'torfluxa'],
+    'safety_factor': ['q'],
+    'poloidal_flux': ['polflux'],
+}
+
+
+class TestSignAgnostic:
+    # plasma_io retains the input field signs, while every derived magnitude stays independent of them
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_input_signs_retained(self, gacode_file_path, keys):
+        g = gacode_io(input=gacode_file_path).input
+        d = _plasma_with_flipped_signs(gacode_file_path, keys).input
+        flipped = lambda k: -1.0 if k in keys else 1.0
+        assert np.sign(d['magnetic_flux'].sel(direction='poloidal').isel(radius=-1)).item() == flipped('polflux') * np.sign(g['polflux'].isel(rho=-1)).item()
+        assert np.sign(d['magnetic_flux'].sel(direction='toroidal').isel(radius=-1)).item() == flipped('torfluxa') * np.sign(g['torfluxa']).item()
+        assert np.sign(d['safety_factor'].isel(radius=-1)).item() == flipped('q') * np.sign(g['q'].isel(rho=-1)).item()
+        assert np.sign(d['field_axis']).item() == flipped('bcentr') * np.sign(g['bcentr']).item()
+        assert np.sign(d['current']).item() == flipped('current') * np.sign(g['current']).item()
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_derived_magnitudes_unchanged(self, gacode_file_path, derived_reference, keys):
+        d = _plasma_with_flipped_signs(gacode_file_path, keys).input
+        for var in derived_reference.data_vars:
+            if derived_reference[var].dtype.kind != 'f':
+                continue
+            ref = np.abs(derived_reference[var].to_numpy())
+            new = np.abs(d[var].to_numpy())
+            np.testing.assert_array_equal(np.isfinite(new), np.isfinite(ref), err_msg=var)
+            mask = np.isfinite(ref)
+            np.testing.assert_allclose(new[mask], ref[mask], rtol=1.0e-9, atol=1.0e-12 * np.max(ref[mask], initial=0.0), err_msg=var)
+
+    def test_normalized_flux_ignores_axis_offset(self, derived_reference):
+        flux_norm = derived_reference['magnetic_flux_norm'].to_numpy()
+        assert np.allclose(flux_norm[:, 0, :], 0.0)
+        assert np.allclose(flux_norm[:, -1, :], 1.0)
+        assert np.all(np.isfinite(derived_reference['rho_norm'].to_numpy()))
+
+
+class TestCocos:
+    # Convention implied by the signs of Ip, B0, the outward change in psi and q, assuming right-handed (R, phi, Z):
+    # sigma_Bp = sign(dpsi) * sign(Ip) and sigma_rhothetaphi = sign(q) * sign(Ip) * sign(B0)
+    COCOS_FROM_SIGMAS = {(1, 1): 1, (-1, -1): 3, (1, -1): 5, (-1, 1): 7}
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_cocos_recorded_from_gacode_signs(self, gacode_file_path, keys):
+        g = gacode_io(input=gacode_file_path).input
+        flip = lambda k: -1 if k in keys else 1
+        s_ip = flip('current') * np.sign(g['current'].isel(n=0)).item()
+        s_bt = flip('bcentr') * np.sign(g['bcentr'].isel(n=0)).item()
+        s_psi = flip('polflux') * np.sign((g['polflux'].isel(n=0, rho=-1) - g['polflux'].isel(n=0, rho=0))).item()
+        s_q = flip('q') * np.sign(g['q'].isel(n=0, rho=-1)).item()
+        expected = self.COCOS_FROM_SIGMAS[(int(s_psi * s_ip), int(s_q * s_ip * s_bt))]
+        assert _plasma_with_flipped_signs(gacode_file_path, keys).input_cocos == expected
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_toroidal_flux_follows_field_without_reference(self, gacode_file_path, keys):
+        # Without torfluxa, Phi is rebuilt from q and psi with the COCOS sign, which must follow the sign of B0
+        g = gacode_io(input=gacode_file_path)
+        d = g.input
+        for k in keys:
+            d[k] = -d[k]
+        g.input = d.drop_vars('torfluxa')
+        p = plasma_io.from_gacode(g, side='input')
+        phi = p.input['magnetic_flux'].sel(direction='toroidal').isel(time=0, radius=-1)
+        assert np.sign(phi).item() == np.sign(p.input['field_axis'].isel(time=0)).item()
+
+    def test_cocos_inferred_when_not_recorded(self, gacode_file_path, derived_reference):
+        expected = _plasma_with_flipped_signs(gacode_file_path, []).input_cocos
+        ds = derived_reference.copy()
+        ds.attrs = {k: v for k, v in derived_reference.attrs.items() if k != 'cocos'}
+        p = plasma_io()
+        p.input = ds
+        assert 'cocos' not in p.input.attrs
+        assert p.input_cocos == expected
+
