@@ -35,6 +35,14 @@ def vectorized_numpy_integration(
     """Compute the cumulative integral of y(x) along the last axis using Simpson's rule."""
     return cumulative_simpson(y, x=x, axis=-1, initial=0.0)
 
+def vectorized_numpy_oriented_integration(
+    y: NDArray,
+    x: NDArray,
+) -> NDArray:
+    """Compute the cumulative integral of y(x) along the last axis, allowing x to be monotonically decreasing (e.g. flux in any sign convention)."""
+    orient = np.expand_dims(np.where(x[..., -1] < x[..., 0], -1.0, 1.0), axis=-1)
+    return orient * vectorized_numpy_integration(y, orient * x)
+
 def vectorized_numpy_interpolation(
     v: float | NDArray,
     x: NDArray,
