@@ -153,7 +153,7 @@ class imas_io(io):
         'database',
         'gaussian',
     ]
-    default_version: Final[str] = '4.0.0' #imas.dd_zip.latest_dd_version()
+    default_version: Final[str] = imas.dd_zip.latest_dd_version()
     default_cocos_3: Final[int] = 11
     default_cocos_4: Final[int] = 17
 
@@ -296,11 +296,10 @@ class imas_io(io):
                 vector = data.pop(key)
                 index_data[f'{key[:-2]}'] = vector.size
         for key in sorted(index_data.keys(), key=len):
-            zeros = np.array([0])
-            prev_key = delimiter.join(key.split(delimiter)[:-1]) if delimiter in key else ''
-            if prev_key in index_data and f'{prev_key}{delimiter}AOS_SHAPE' in data:
-                zeros = np.repeat(np.expand_dims(np.zeros(np.array(data[f'{prev_key}{delimiter}AOS_SHAPE']).shape), axis=-1), index_data[key], axis=-1)
-            data[f'{key}{delimiter}AOS_SHAPE'] = zeros.astype(int) + index_data[key]
+            # One entry per element of every enclosing array of structures, not just the immediate parent
+            parts = key.split(delimiter)
+            ancestor_sizes = tuple(index_data[delimiter.join(parts[:n])] for n in range(1, len(parts)) if delimiter.join(parts[:n]) in index_data)
+            data[f'{key}{delimiter}AOS_SHAPE'] = np.full(ancestor_sizes + (1, ), index_data[key]).astype(int)
         shape_data = {}
         for key in list(data.keys()):
             if key.endswith(f'{delimiter}AOS_SHAPE'):
@@ -310,6 +309,8 @@ class imas_io(io):
         for key in sorted(shape_data.keys(), key=len):
             _recursive_resize_struct_array(ids_struct, key.replace('[]', '').split(delimiter), shape_data[key])
         for key in data:
+            if isinstance(data[key], np.ndarray) and data[key].dtype.kind == 'S' and data[key].size == 1 and data[key].item() == b'':
+                continue  # imas-python >= 2.1 to_xarray() emits empty placeholder variables for structure nodes
             _expanded_data_insertion(ids_struct, key.replace('[]', '').split(delimiter), data[key])
 
         return ids_struct
