@@ -25,6 +25,7 @@ from ..utils.eqdsk_tools import (
     define_cocos,
     define_cocos_converter,
     determine_cocos_from_signs,
+    detect_psi_per_radian,
     convert_cocos,
     trace_contour_with_megpy,
     convert_mxh_to_contour_megpy,
@@ -333,8 +334,12 @@ class plasma_io(io):
         if isinstance(path, (str, Path)) and 'magnetic_flux' in data:
             t = data['time'].sel(time=time, method='nearest').to_numpy().item(0) if isinstance(time, (float, int)) else data['time'].isel(time=0).to_numpy().item(0)
             eqdsk_data = read_eqdsk(path)
-            # Bring the EQDSK into the COCOS convention already used by this plasma state, so the state never mixes conventions
-            eqdsk_cocos = determine_cocos_from_signs(eqdsk_data['cpasma'], eqdsk_data['bcentr'], eqdsk_data['sibdry'] - eqdsk_data['simagx'], eqdsk_data['qpsi'][-1])
+            # Bring the EQDSK into the COCOS convention already used by this plasma state, so the state never mixes conventions,
+            # including the per radian normalization of psi, which is identified from Ampere's law around the boundary
+            per_radian = detect_psi_per_radian(eqdsk_data)
+            if per_radian is None:
+                logger.warning(f'Could not determine whether psi in {path} is per radian, assuming it is')
+            eqdsk_cocos = determine_cocos_from_signs(eqdsk_data['cpasma'], eqdsk_data['bcentr'], eqdsk_data['sibdry'] - eqdsk_data['simagx'], eqdsk_data['qpsi'][-1], per_radian=per_radian is not False)
             if eqdsk_cocos:
                 eqdsk_data = convert_cocos(eqdsk_data, eqdsk_cocos, self._get_cocos(data))
             time_index = list(data['time'].values).index(t)

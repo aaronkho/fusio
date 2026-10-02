@@ -6,6 +6,7 @@ from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, 
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import contourpy
+from scipy.interpolate import RectBivariateSpline  # type: ignore[import-untyped]
 from shapely import Point, Polygon  # type: ignore[import-untyped]
 from megpy import contour as contour_tracer  # type: ignore[import-untyped]
 from megpy.fluxsurface import FluxSurface  # type: ignore[import-untyped]
@@ -78,6 +79,30 @@ def determine_cocos(sign_dict: MutableMapping[str, int]) -> int:
     return cocos_number
 
 
+def detect_psi_per_radian(eqdsk: MutableMapping[str, Any]) -> bool | None:
+    """Determine whether psi is per radian (COCOS 1-8) or not (COCOS 11-18) from Ampere's law around the plasma boundary; returns None if undeterminable."""
+    keys = ['psi', 'nr', 'nz', 'rleft', 'rdim', 'zmid', 'zdim', 'rbdry', 'zbdry', 'cpasma']
+    if any(eqdsk.get(key, None) is None for key in keys) or len(eqdsk['rbdry']) < 3 or eqdsk['cpasma'] == 0.0:
+        return None
+    rvec = np.linspace(eqdsk['rleft'], eqdsk['rleft'] + eqdsk['rdim'], eqdsk['nr'])
+    zvec = np.linspace(eqdsk['zmid'] - 0.5 * eqdsk['zdim'], eqdsk['zmid'] + 0.5 * eqdsk['zdim'], eqdsk['nz'])
+    spline = RectBivariateSpline(zvec, rvec, eqdsk['psi'])
+    rb = np.asarray(eqdsk['rbdry'], dtype=float)
+    zb = np.asarray(eqdsk['zbdry'], dtype=float)
+    if rb[-1] != rb[0] or zb[-1] != zb[0]:
+        rb = np.concatenate([rb, rb[:1]])
+        zb = np.concatenate([zb, zb[:1]])
+    rm = 0.5 * (rb[1:] + rb[:-1])
+    zm = 0.5 * (zb[1:] + zb[:-1])
+    dl = np.hypot(np.diff(rb), np.diff(zb))
+    grad_psi = np.hypot(spline.ev(zm, rm, dx=1), spline.ev(zm, rm, dy=1))
+    # mu0 * Ip = loop integral of Bp dl, with Bp = |grad psi| / R if per radian and |grad psi| / (2 pi R) otherwise
+    ratio = np.sum(grad_psi / rm * dl) / (4.0e-7 * np.pi * np.abs(eqdsk['cpasma']))
+    if not np.isfinite(ratio) or ratio <= 0.0:
+        return None
+    return bool(ratio < np.sqrt(2.0 * np.pi))
+
+
 def detect_cocos(eqdsk: MutableMapping[str, Any]) -> int:
     """Auto-detect the COCOS convention of an EQDSK dict by inspecting the signs of Ip, Bt, psi, and q."""
     sign_dict = {}
@@ -85,7 +110,8 @@ def detect_cocos(eqdsk: MutableMapping[str, Any]) -> int:
     sBt = int(np.sign(eqdsk['bcentr'])) if 'bcentr' in eqdsk else 0
     if sIp != 0 and sBt != 0:
         sign_dict['scyl'] = 0
-        sign_dict['eBp'] = -1
+        per_radian = detect_psi_per_radian(eqdsk)
+        sign_dict['eBp'] = -1 if per_radian is None else (0 if per_radian else 1)
         sign_dict['srel'] = 0
         if 'sibdry' in eqdsk and 'simagx' in eqdsk:
             sign_dict['sBp'] = int(np.sign(eqdsk['sibdry'] - eqdsk['simagx'])) * sIp
