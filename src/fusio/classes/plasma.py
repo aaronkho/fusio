@@ -1727,7 +1727,8 @@ class plasma_io(io):
                                 types = []
                                 for name in coords['ion']:
                                     types.extend(['thermal' if data[tag].sel({ion_cp: name}).sum() > 0.0 else 'fast'])
-                                ni = data[tag]
+                                # Total density, so that fast species are not dropped, with the thermal part only defining the type
+                                ni = data['core_profiles.profiles_1d.ion.density'] if 'core_profiles.profiles_1d.ion.density' in data else data[tag]
                                 data_vars['density_i'] = (['time', 'radius', 'ion'], np.expand_dims(ni.to_numpy().T, axis=0))
                                 data_vars['type_i'] = (['time', 'ion'], np.expand_dims(types, axis=0))
                             tag = 'core_profiles.profiles_1d.ion.temperature'
@@ -1773,9 +1774,9 @@ class plasma_io(io):
                             # _compute_extended_local_inputs() requires velocity_i unconditionally
                             velocity_i = np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.directions)))
                             if vtag in data:
-                                velocity_i[0, ..., cls.directions.index('toroidal')] = cocos['scyl'] * data[vtag].to_numpy()
+                                velocity_i[0, ..., cls.directions.index('toroidal')] = cocos['scyl'] * data[vtag].to_numpy().T
                             if ptag in data:
-                                velocity_i[0, ..., cls.directions.index('poloidal')] = cocos['spol'] * data[ptag].to_numpy()
+                                velocity_i[0, ..., cls.directions.index('poloidal')] = cocos['spol'] * data[ptag].to_numpy().T
                             data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], velocity_i)
                             coords['direction'] = list(cls.directions)
                         coords['source'] = list(cls.sources)
