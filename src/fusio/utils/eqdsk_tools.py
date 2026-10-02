@@ -94,6 +94,15 @@ def detect_cocos(eqdsk: MutableMapping[str, Any]) -> int:
     return determine_cocos(sign_dict)
 
 
+def determine_cocos_from_signs(ip: float, bt: float, dpsi: float, q: float, per_radian: bool = True) -> int:
+    """Infer the COCOS number from the signs of Ip, Bt, the outward change in poloidal flux, and q, assuming right-handed (R, phi, Z); returns 0 if any sign is undetermined."""
+    signs = [int(np.sign(v)) for v in (ip, bt, dpsi, q)]
+    if 0 in signs:
+        return 0
+    sIp, sBt, sPsi, sq = signs
+    return determine_cocos({'eBp': 0 if per_radian else 1, 'sBp': sPsi * sIp, 'scyl': 1, 'spol': sq * sIp * sBt, 'srel': 1})
+
+
 def convert_cocos(eqdsk: MutableMapping[str, Any], cocos_in: int, cocos_out: int, bt_sign_out: int | None = None, ip_sign_out: int | None = None) -> MutableMapping[str, Any]:
     """Apply a COCOS convention transformation to all fields in an EQDSK dict, optionally enforcing Bt/Ip sign."""
     out = {
