@@ -19,6 +19,7 @@ from .io import io
 from ..utils.eqdsk_tools import (
     calculate_mxh_coefficients_from_eqdsk_dict,
     convert_cocos,
+    define_cocos_converter,
     write_eqdsk,
 )
 from ..utils import plasma_tools
@@ -1165,17 +1166,17 @@ class imas_io(io):
         newobj = cls()
         if isinstance(obj, io):
             source_mapping = {
-                'ohmic': ('ohmic', 0),
-                'neutral_beam': ('nbi', 1),
-                'ion_cyclotron': ('ic', 2),
-                'electron_cyclotron': ('ec', 3),
-                'synchrotron': ('synchrotron_radiation', 4),
-                'bremsstrahlung': ('bremsstrahlung', 5),
-                'line_radiation': ('line_radiation', 6),
-                'ionization': ('ionisation', 7),
-                'charge_exchange': ('charge_exchange', 8),
-                'bootstrap': ('bootstrap_current', 9),
-                'fusion': ('fusion', 10),
+                'ohmic': 'ohmic',
+                'neutral_beam': 'nbi',
+                'ion_cyclotron': 'ic',
+                'electron_cyclotron': 'ec',
+                'synchrotron': 'synchrotron_radiation',
+                'bremsstrahlung': 'bremsstrahlung',
+                'line_radiation': 'line_radiation',
+                'ionization': 'ionisation',
+                'charge_exchange': 'charge_exchange',
+                'bootstrap': 'bootstrap_current',
+                'fusion': 'fusion',
             }
             data = obj.input if side == 'input' else obj.output
             dsvec = []
@@ -1184,6 +1185,17 @@ class imas_io(io):
             if isinstance(dd_version, str) and 'data_dictionary_version' not in attrs:
                 attrs['data_dictionary_version'] = dd_version
             factory = imas.IDSFactory(version=dd_version)
+            ion_field = 'name' if Version(dd_version) >= Version('4.0.0') else 'label'
+            # Explicit conversion from the COCOS convention of the plasma state to that of the data dictionary
+            imas_cocos = newobj.default_cocos_3 if Version(dd_version) < Version('4') else newobj.default_cocos_4
+            plasma_cocos = getattr(obj, 'input_cocos' if side == 'input' else 'output_cocos', 1)
+            cocos = define_cocos_converter(plasma_cocos, imas_cocos)
+            psi_scale = np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * cocos['scyl']  # plasma magnetic_flux is in Wb/radian
+            phi_scale = 2.0 * np.pi * cocos['scyl']  # IMAS toroidal flux is always in Wb, never per radian
+            s_tor = cocos['scyl']  # Toroidal components, field and current
+            s_pol = cocos['spol'] * cocos['scyl']  # Poloidal components
+            s_q = cocos['spol']
+            mu0 = 4.0e-7 * np.pi
             idsmap = {}
             if 'time' in data and 'radius' in data:
                 cp = factory.core_profiles()
@@ -1191,161 +1203,267 @@ class imas_io(io):
                 eq = factory.equilibrium()
                 sm = factory.summary()
                 time_orig = data['time'].to_numpy()
-                time_window = [float(time_orig[-1])]
+                time_window = [time_orig[-1]]
                 if window is not None and len(window) >= 2:
                     window_mask = (time_orig >= window[0]) & (time_orig <= window[-1])
                     if np.any(window_mask):
-                        time_window = [float(t) for t in time_orig[window_mask]]
+                        time_window = [t for t in time_orig[window_mask]]
                 data = data.sel(time=time_window, method='nearest').drop_duplicates('time')  # Fine because data is a copy
+                time = data['time'].to_numpy().astype(float)
+                rho = data['radius'].to_numpy()
+                ions = data['ion'].to_numpy() if 'ion' in data.coords else np.array([])
+                sources = [s for s in data['source'].to_numpy() if s in source_mapping] if 'source' in data.coords else []
+
+                def _get(key, i, **sel):
+                    da = data[key].isel(time=i, drop=True)
+                    if sel:
+                        da = da.sel(sel, drop=True)
+                    return da.to_numpy()
+
+                def _set_ion_identity(ion, i, s):
+                    setattr(ion, ion_field, str(s))
+                    if 'atomic_number_i' in data or 'mass_i' in data:
+                        ion.element.resize(1)
+                        ion.element[0].atoms_n = 1
+                        if 'atomic_number_i' in data:
+                            ion.element[0].z_n = float(_get('atomic_number_i', i, ion=s).item())
+                        if 'mass_i' in data:
+                            ion.element[0].a = float(_get('mass_i', i, ion=s).item())
+
+                r0 = data.attrs.get('rcentr', None)
+                if r0 is not None:
+                    r0 = float(np.mean(np.atleast_1d(r0)))  # Stored per time slice by from_gacode, scalar when read from file
+                if r0 is None and 'r_geometric' in data:
+                    r0 = float(data['r_geometric'].isel(radius=0).mean('time').to_numpy())
+                b0 = s_tor * data['field_axis'].to_numpy() if 'field_axis' in data else None
+                for ids_struct in [cp, cs, eq]:
+                    ids_struct.ids_properties.homogeneous_time = imas.ids_defs.IDS_TIME_MODE_HOMOGENEOUS
+                    ids_struct.time = time
+                    if r0 is not None and b0 is not None:
+                        ids_struct.vacuum_toroidal_field.r0 = float(r0)
+                        ids_struct.vacuum_toroidal_field.b0 = b0
+
                 # Fill core profiles IDS
-                cp.time = data['time'].to_numpy()
-                if 'field_axis' in data and 'r_geometric' in data:
-                    cp.vacuum_toroidal_field.r0 = float(data['r_geometric'].isel(radius=0).mean('time').to_numpy())
-                    cp.vacuum_toroidal_field.b0 = data['field_axis'].to_numpy()
-                cp.profiles_1d.resize(len(cp.time))
-                for i, t in enumerate(cp.time):
-                    rho_cp = data['radius'].to_numpy()
+                cp.profiles_1d.resize(len(time))
+                for i, t in enumerate(time):
+                    p1d = cp.profiles_1d[i]
+                    p1d.time = t
+                    p1d.grid.rho_tor_norm = rho
                     if 'magnetic_flux' in data:
-                        cp.profiles_1d[i].grid.psi = data['magnetic_flux'].sel(direction='poloidal', drop=True).isel(time=i, drop=True).to_numpy()
-                        cp.profiles_1d[i].grid.rho_pol_norm = (data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)).sel(direction='poloidal', drop=True).isel(time=i, drop=True).to_numpy() ** 0.5
-                        cp.profiles_1d[i].grid.rho_tor_norm = (data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)).sel(direction='toroidal', drop=True).isel(time=i, drop=True).to_numpy() ** 0.5
-                        if 'field_axis' in data:
-                            cp.profiles_1d[i].grid.rho_tor = (data['magnetic_flux'] / (np.pi * data['field_axis'])).sel(direction='toroidal', drop=True).isel(time=i, drop=True).to_numpy() ** 0.5
+                        psi = psi_scale * _get('magnetic_flux', i, direction='poloidal')
+                        phi = phi_scale * _get('magnetic_flux', i, direction='toroidal')
+                        p1d.grid.psi = psi
+                        p1d.grid.psi_magnetic_axis = psi[0]
+                        p1d.grid.psi_boundary = psi[-1]
+                        p1d.grid.rho_pol_norm = np.sqrt(np.clip((psi - psi[0]) / (psi[-1] - psi[0]), 0.0, None))
+                        if b0 is not None:
+                            p1d.grid.rho_tor = np.sqrt(np.abs(phi) / (np.pi * np.abs(b0[i])))
                     if 'volume' in data:
-                        cp.profiles_1d[i].grid.volume = data['volume'].isel(time=i, drop=True).to_numpy()
-                    if 'cross_section_area' in data:
-                        cp.profiles_1d[i].grid.area = data['cross_sectional_area'].isel(time=i, drop=True).to_numpy()
+                        p1d.grid.volume = _get('volume', i)
+                    if 'cross_sectional_area' in data:
+                        p1d.grid.area = _get('cross_sectional_area', i)
+                    if 'surface_area' in data:
+                        p1d.grid.surface = _get('surface_area', i)
                     if 'safety_factor' in data:
-                        cp.profiles_1d[i].q = data['safety_factor'].isel(time=i, drop=True).to_numpy()
+                        p1d.q = s_q * _get('safety_factor', i)
                     if 'magnetic_shear' in data:
-                        cp.profiles_1d[i].magnetic_shear = data['magnetic_shear'].isel(time=i, drop=True).to_numpy()
+                        p1d.magnetic_shear = _get('magnetic_shear', i)
                     if 'effective_charge' in data:
-                        cp.profiles_1d[i].zeff = data['effective_charge'].isel(time=i, drop=True).to_numpy()
-                    if 'pressure_total' in data:
-                        cp.profiles_1d[i] = data['pressure_total'].isel(time=i, drop=True).to_numpy()
+                        p1d.zeff = _get('effective_charge', i)
+                    if 'pressure_thermal_total' in data:
+                        p1d.pressure_thermal = _get('pressure_thermal_total', i)
                     if 'density_e' in data:
-                        cp.profiles_1d[i].electrons.density_thermal = data['density_e'].isel(time=i, drop=True).to_numpy()
-                        cp.profiles_1d[i].electrons.density = data['density_e'].isel(time=i, drop=True).to_numpy()
+                        p1d.electrons.density_thermal = _get('density_e', i)
+                        p1d.electrons.density = _get('density_e', i)
                     if 'temperature_e' in data:
-                        cp.profiles_1d[i].electrons.temperature = data['temperature_e'].isel(time=i, drop=True).to_numpy()
-                    if 'ion' in data:
-                        cp.profiles_1d[i].ion.resize(len(data['ion']))
-                        ni_thermal = np.zeros_like(rho_cp)
-                        ti_average = np.zeros_like(rho_cp)
-                        for j, s in enumerate(data['ion'].to_numpy()):
+                        p1d.electrons.temperature = _get('temperature_e', i)
+                    if 'pressure_e' in data:
+                        p1d.electrons.pressure_thermal = _get('pressure_e', i)
+                    if len(ions) > 0:
+                        p1d.ion.resize(len(ions))
+                        ni_thermal = np.zeros_like(rho)
+                        niti_thermal = np.zeros_like(rho)
+                        for j, s in enumerate(ions):
+                            ion = p1d.ion[j]
+                            _set_ion_identity(ion, i, s)
+                            thermal = ('type_i' not in data) or (str(_get('type_i', i, ion=s).item()) == 'thermal')
                             if 'density_i' in data:
-                                cp.profiles_1d[i].ion[j].name = data['ion'].sel(ion=s, drop=True).to_numpy().item()
-                                cp.profiles_1d[i].ion[j].density_thermal = data['density_i'].isel(time=i, drop=True).sel(name=s, drop=True).to_numpy()
-                                cp.profiles_1d[i].ion[j].density = data['density_i'].isel(time=i, drop=True).sel(name=s, drop=True).to_numpy()
-                                ni_thermal += data['density_i'].isel(time=i, drop=True).sel(name=s, drop=True).to_numpy()
+                                ni = _get('density_i', i, ion=s)
+                                ion.density = ni
+                                # Both always filled, ragged arrays of structures are not round-trippable
+                                ion.density_thermal = ni if thermal else np.zeros_like(ni)
+                                ion.density_fast = np.zeros_like(ni) if thermal else ni
+                                if thermal:
+                                    ni_thermal += ni
                             if 'temperature_i' in data:
-                                cp.profiles_1d[i].ion[j].temperature = data['temperature_i'].isel(time=i, drop=True).sel(name=s, drop=True).to_numpy()
-                                ti_average += data['temperature_i'].isel(time=i, drop=True).sel(name=s, drop=True).to_numpy()
+                                ti = _get('temperature_i', i, ion=s)
+                                ion.temperature = ti
+                                if thermal and 'density_i' in data:
+                                    niti_thermal += _get('density_i', i, ion=s) * ti
+                            if 'pressure_i' in data:
+                                ion.pressure = _get('pressure_i', i, ion=s)
                             if 'velocity_i' in data:
-                                cp.profiles_1d[i].ion[j].velocity.poloidal = data['velocity_i'].sel(direction='poloidal', drop=True).isel(time=i, drop=True).sel(name=s, drop=True).to_numpy()
-                                cp.profiles_1d[i].ion[j].velocity.toroidal = data['velocity_i'].sel(direction='toroidal', drop=True).isel(time=i, drop=True).sel(name=s, drop=True).to_numpy()
-                            if 'atomic_number_i' in data:
-                                if len(cp.profiles_1d[i].ion[j].element) < 1:
-                                    cp.profiles_1d[i].ion[j].element.resize(1)
-                                cp.profiles_1d[i].ion[j].element[0].z_n = int(data['atomic_number_i'].isel(time=i, drop=True).sel(name=s, drop=True).to_numpy().item())
-                            if 'mass_i' in data:
-                                if len(cp.profiles_1d[i].ion[j].element) < 1:
-                                    cp.profiles_1d[i].ion[j].element.resize(1)
-                                cp.profiles_1d[i].ion[j].element[0].a = float(data['mass_i'].isel(time=i, drop=True).sel(name=s, drop=True).to_numpy().item())
+                                ion.velocity.toroidal = s_tor * _get('velocity_i', i, ion=s, direction='toroidal')
+                                ion.velocity.poloidal = s_pol * _get('velocity_i', i, ion=s, direction='poloidal')
                             if 'charge_i' in data:
-                                cp.profiles_1d[i].ion[j].z_ion_1d = data['charge_i'].isel(time=i, drop=True).sel(name=s, drop=True).to_numpy()
-                        if np.sum(ni_thermal) > 0.0:
-                            cp.profiles[i].n_i_thermal_total = copy.deepcopy(ni_thermal)
-                        if np.sum(ti_average) > 0.0:
-                            cp.profiles[i].t_i_average = copy.deepcopy(ti_average)
+                                ion.z_ion_1d = _get('charge_i', i, ion=s)
+                                ion.z_ion = float(ion.z_ion_1d[0])
+                        if np.any(ni_thermal > 0.0):
+                            p1d.n_i_thermal_total = ni_thermal
+                            p1d.t_i_average = np.where(ni_thermal > 0.0, niti_thermal / np.where(ni_thermal > 0.0, ni_thermal, 1.0), 0.0)
                     if 'rotation_frequency_sonic' in data:
-                        cp.profiles_1d[i].rotation_frequency_tor_sonic = data['rotation_frequency_sonic'].sel(direction='toroidal', drop=True).to_numpy()
+                        p1d.rotation_frequency_tor_sonic = s_tor * _get('rotation_frequency_sonic', i)
                     if 'current_source' in data:
-                        cp.profiles_1d[i].j_ohmic = data['current_source'].isel(time=i, drop=True).sel(source='ohmic', drop=True).to_numpy()
-                        cp.profiles_1d[i].j_bootstrap = data['current_source'].isel(time=i, drop=True).sel(source='bootstrap', drop=True).to_numpy()
-                        cp.profiles_1d[i].j_non_inductive = data['current_source'].isel(time=i, drop=True).sel(source=['neutral_beam', 'ion_cyclotron', 'electron_cyclotron']).sum('source').to_numpy()
-                idsmap['core_profiles'] = cp
-                # Fill core sources IDS
-                cs.time = data['time'].to_numpy()
-                if 'field_axis' in data and 'r_geometric' in data:
-                    cs.vacuum_toroidal_field.r0 = float(data['r_geometric'].isel(radius=0).mean('time').to_numpy())
-                    cs.vacuum_toroidal_field.b0 = data['field_axis'].to_numpy()
-                len_sources = len(obj.sources) if hasattr(obj, 'sources') else 0
-                cs.source.resize(len_sources)
-                for i, (k, v) in enumerate(source_mapping.items()):
-                    cs.source[i].identifier.name = v[0]
-                    cs.source[i].identifier.index = v[1]
-                    cs.source[i].global_quantities.resize(len(cs.time))
-                    cs.source[i].profiles_1d.resize(len(cs.time))
-                for i, t in enumerate(cs.time):
-                    rho_cs = data['radius'].to_numpy()
-                    if 'heat_source_e' in data:
-                        cs.source[0].profiles_1d[i].electrons.energy = data['heat_source_e'].sel(source='ohmic', drop=True).to_numpy()
-                        cs.source[i]['qbeame'] = (['n', 'rho'], data['heat_source_e'].sel(source='neutral_beam', drop=True).to_numpy())
-                        cs.source[i]['qrfe'] = (['n', 'rho'], data['heat_source_e'].sel(source=['ion_cyclotron', 'electron_cyclotron']).sum('source').to_numpy())
-                        cs.source[i]['qsync'] = (['n', 'rho'], data['heat_source_e'].sel(source='synchrotron', drop=True).to_numpy())
-                        cs.source[i]['qbrem'] = (['n', 'rho'], data['heat_source_e'].sel(source='bremsstrahlung', drop=True).to_numpy())
-                        cs.source[i]['qline'] = (['n', 'rho'], data['heat_source_e'].sel(source='line_radiation', drop=True).to_numpy())
-                        cs.source[i]['qione'] = (['n', 'rho'], data['heat_source_e'].sel(source='ionization', drop=True).to_numpy())
-                        cs.source[i]['qfuse'] = (['n', 'rho'], data['heat_source_e'].sel(source='fusion', drop=True).to_numpy())
-                    if 'heat_source_i' in data:
-                        cs.source[i]['qohmi'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='ohmic', drop=True).to_numpy())
-                        cs.source[i]['qbeami'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='neutral_beam', drop=True).to_numpy())
-                        cs.source[i]['qrfi'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source=['ion_cyclotron', 'electron_cyclotron']).sum('source').to_numpy())
-                        cs.source[i]['qioni'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='ionization', drop=True).to_numpy())
-                        cs.source[i]['qfusi'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='fusion', drop=True).to_numpy())
-                        cs.source[i]['qcxi'] = (['n', 'rho', 'name'], data['heat_source_i'].sel(source='charge_exchange', drop=True).to_numpy())
-                    if 'heat_exchange_ei' in data:
-                        cs.source[i]['qei'] = (['n', 'rho'], data['heat_exchange_ei'].to_numpy())
-                    if 'current_source' in data:
-                        cs.source[i]['johm'] = (['n', 'rho'], data['current_source'].sel(source='ohmic', drop=True).to_numpy())
-                        cs.source[i]['jbs'] = (['n', 'rho'], data['current_source'].sel(source='bootstrap', drop=True).to_numpy())
-                        cs.source[i]['jnb'] = (['n', 'rho'], data['current_source'].sel(source='neutral_beam', drop=True).to_numpy())
-                        cs.source[i]['jrf'] = (['n', 'rho'], data['current_source'].sel(source=['ion_cyclotron', 'electron_cyclotron']).sum('source').to_numpy())
-                    if 'particle_source_e' in data:
-                        cs.source[i]['qpar_beam'] = (['n', 'rho'], data['particle_source_e'].sel(source='neutral_beam', drop=True).to_numpy())
-                        cs.source[i]['qpar_wall'] = (['n', 'rho'], data['particle_source_e'].sel(source=['ionization', 'charge_exchange']).sum('source').to_numpy())
-                    if 'momentum_source_i' in data:
-                        cs.source[i]['qmom'] = (['n', 'rho'], data['momentum_source_i'].sel(direction='toroidal', drop=True).sel(source=['neutral_beam', 'ionization', 'charge_exchange']).sum('source').isel(ion=0).to_numpy())
-                idsmap['core_sources'] = cs
-                # Fill equilibrium IDS
-                eq.time = data['time'].to_numpy()
-                if 'field_axis' in data and 'r_geometric' in data:
-                    eq.vacuum_toroidal_field.r0 = float(data['r_geometric'].isel(radius=0).mean('time').to_numpy())
-                    eq.vacuum_toroidal_field.b0 = data['field_axis'].to_numpy()
-                eq.time_slice.resize(len(eq.time))
-                for i, t in enumerate(eq.time):
-                    rho_eq = data['radius'].to_numpy()
-                    if 'magnetic_flux' in data:
-                        eq.time_slice[i].profiles_1d.psi = data['magnetic_flux'].sel(direction='poloidal', drop=True).isel(time=i, drop=True).to_numpy()
-                        eq.time_slice[i].profiles_1d.psi_norm = (data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)).sel(direction='poloidal', drop=True).isel(time=i, drop=True).to_numpy()
-                        eq.time_slice[i].profiles_1d.rho_pol_norm = (data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)).sel(direction='poloidal', drop=True).isel(time=i, drop=True).to_numpy() ** 0.5
-                        eq.time_slice[i].profiles_1d.phi = data['magnetic_flux'].sel(direction='toroidal', drop=True).isel(time=i, drop=True).to_numpy()
-                        eq.time_slice[i].profiles_1d.rho_tor_norm = (data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)).sel(direction='toroidal', drop=True).isel(time=i, drop=True).to_numpy() ** 0.5
-                        if 'field_axis' in data:
-                            eq.time_slice[i].profiles_1d.rho_tor = (data['magnetic_flux'] / (np.pi * data['field_axis'])).sel(direction='toroidal', drop=True).isel(time=i, drop=True).to_numpy() ** 0.5
-                    if 'volume' in data:
-                        eq.time_slice[i].profiles_1d.volume = data['volume'].isel(time=i, drop=True).to_numpy()
-                    if 'cross_section_area' in data:
-                        eq.time_slice[i].profiles_1d.area = data['cross_sectional_area'].isel(time=i, drop=True).to_numpy()
-                    if 'mxh_kappa' in data:
-                        eq.time_slice[i].profiles_1d.elongation = data['mxh_kappa'].isel(time=i, drop=True).to_numpy()
-                    if 'mxh_delta' in data:
-                        eq.time_slice[i].profiles_1d.triangularity_upper = data['mxh_delta'].isel(time=i, drop=True).to_numpy()
-                        eq.time_slice[i].profiles_1d.triangularity_lower = data['mxh_delta'].isel(time=i, drop=True).to_numpy()
-                    if 'mxh_zeta' in data:
-                        eq.time_slice[i].profiles_1d.squareness_upper_inner = data['mxh_zeta'].isel(time=i, drop=True).to_numpy()
-                        eq.time_slice[i].profiles_1d.squareness_upper_outer = data['mxh_zeta'].isel(time=i, drop=True).to_numpy()
-                        eq.time_slice[i].profiles_1d.squareness_lower_inner = data['mxh_zeta'].isel(time=i, drop=True).to_numpy()
-                        eq.time_slice[i].profiles_1d.squareness_lower_outer = data['mxh_zeta'].isel(time=i, drop=True).to_numpy()
-                idsmap['equilibrium'] = eq
-                # Fill summary IDS
-                sm.time = data['time'].to_numpy()
+                        jsrc = s_tor * data['current_source'].isel(time=i, drop=True)
+                        p1d.j_ohmic = jsrc.sel(source='ohmic', drop=True).to_numpy()
+                        p1d.j_bootstrap = jsrc.sel(source='bootstrap', drop=True).to_numpy()
+                        p1d.j_non_inductive = jsrc.sel(source=['neutral_beam', 'ion_cyclotron', 'electron_cyclotron', 'bootstrap']).sum('source').to_numpy()
+                        p1d.j_total = jsrc.sum('source').to_numpy()
                 if 'current' in data:
-                    sm.global_quantities.ip.value = data['current'].to_numpy()
-                if 'pressure_total_volume_average' in data:
-                    if 'volume' in data and 'current' in data:
-                        sm.global_quantities.beta_pol.value = (4.0 * data['pressure_total_volume_average'] * data['volume'] / (data['r_geometric'].isel(radius=0) * data['current'] ** 2)).isel(time=i, drop=True).to_numpy()
+                    cp.global_quantities.ip = s_tor * data['current'].to_numpy()
+                idsmap['core_profiles'] = cp
+
+                # Fill core sources IDS
+                entries = [(source_mapping[s], s) for s in sources]
+                if 'heat_exchange_ei' in data:
+                    entries.append(('collisional_equipartition', None))
+                cs.source.resize(len(entries))
+                for k, (imas_name, src) in enumerate(entries):
+                    cs.source[k].identifier = imas.identifiers.core_source_identifier[imas_name]
+                    cs.source[k].profiles_1d.resize(len(time))
+                    for i, t in enumerate(time):
+                        sp = cs.source[k].profiles_1d[i]
+                        sp.time = t
+                        sp.grid.rho_tor_norm = rho
+                        if 'volume' in data:
+                            sp.grid.volume = _get('volume', i)
+                        if src is None:
+                            # Same field layout as the other sources, ragged arrays of structures are not round-trippable
+                            qei = _get('heat_exchange_ei', i)
+                            zeros = np.zeros_like(rho)
+                            sp.electrons.energy = -qei  # heat_exchange_ei > 0 means electrons heat ions, mirrors plasma_io.from_imas
+                            sp.electrons.particles = zeros
+                            sp.j_parallel = zeros
+                            sp.momentum_phi = zeros
+                            sp.total_ion_energy = qei  # Per-species split not available, only the total is stored
+                            sp.ion.resize(len(ions))
+                            for j, s in enumerate(ions):
+                                _set_ion_identity(sp.ion[j], i, s)
+                                sp.ion[j].energy = zeros
+                                sp.ion[j].particles = zeros
+                                sp.ion[j].momentum.toroidal = zeros
+                            continue
+                        if 'heat_source_e' in data:
+                            sp.electrons.energy = _get('heat_source_e', i, source=src)
+                        if 'particle_source_e' in data:
+                            sp.electrons.particles = _get('particle_source_e', i, source=src)
+                        if 'current_source' in data:
+                            sp.j_parallel = s_tor * _get('current_source', i, source=src)
+                        if len(ions) > 0 and any(key in data for key in ['heat_source_i', 'particle_source_i', 'momentum_source_i']):
+                            sp.ion.resize(len(ions))
+                            for j, s in enumerate(ions):
+                                _set_ion_identity(sp.ion[j], i, s)
+                                if 'heat_source_i' in data:
+                                    sp.ion[j].energy = _get('heat_source_i', i, ion=s, source=src)
+                                if 'particle_source_i' in data:
+                                    sp.ion[j].particles = _get('particle_source_i', i, ion=s, source=src)
+                                if 'momentum_source_i' in data:
+                                    sp.ion[j].momentum.toroidal = s_tor * _get('momentum_source_i', i, ion=s, source=src, direction='toroidal')
+                            if 'heat_source_i' in data:
+                                sp.total_ion_energy = data['heat_source_i'].isel(time=i, drop=True).sel(source=src, drop=True).sum('ion').to_numpy()
+                        if 'momentum_source_i' in data:
+                            sp.momentum_phi = s_tor * data['momentum_source_i'].isel(time=i, drop=True).sel(source=src, direction='toroidal', drop=True).sum('ion').to_numpy()
+                idsmap['core_sources'] = cs
+
+                # Fill equilibrium IDS
+                eq.time_slice.resize(len(time))
+                for i, t in enumerate(time):
+                    ts = eq.time_slice[i]
+                    ts.time = t
+                    ts.profiles_1d.rho_tor_norm = rho
+                    if 'magnetic_flux' in data:
+                        psi = psi_scale * _get('magnetic_flux', i, direction='poloidal')
+                        phi = phi_scale * _get('magnetic_flux', i, direction='toroidal')
+                        ts.profiles_1d.psi = psi
+                        ts.profiles_1d.psi_norm = (psi - psi[0]) / (psi[-1] - psi[0])
+                        ts.profiles_1d.phi = phi
+                        ts.global_quantities.psi_axis = psi[0]
+                        ts.global_quantities.psi_boundary = psi[-1]
+                        if b0 is not None:
+                            ts.profiles_1d.rho_tor = np.sqrt(np.abs(phi) / (np.pi * np.abs(b0[i])))
+                    if 'current' in data:
+                        ts.global_quantities.ip = s_tor * float(_get('current', i))
+                    if 'volume' in data:
+                        ts.profiles_1d.volume = _get('volume', i)
+                    if 'cross_sectional_area' in data:
+                        ts.profiles_1d.area = _get('cross_sectional_area', i)
+                    if 'surface_area' in data:
+                        ts.profiles_1d.surface = _get('surface_area', i)
+                    if 'safety_factor' in data:
+                        ts.profiles_1d.q = s_q * _get('safety_factor', i)
+                    if 'magnetic_shear' in data:
+                        ts.profiles_1d.magnetic_shear = _get('magnetic_shear', i)
+                    # Per-surface shape, standard IMAS definitions
+                    if 'r_geometric' in data and 'r_minor' in data:
+                        rgeo = _get('r_geometric', i)
+                        rmin = _get('r_minor', i)
+                        ts.profiles_1d.geometric_axis.r = rgeo
+                        ts.profiles_1d.r_inboard = rgeo - rmin
+                        ts.profiles_1d.r_outboard = rgeo + rmin
+                        if 'z_geometric' in data:
+                            ts.profiles_1d.geometric_axis.z = _get('z_geometric', i)
+                    if 'mxh_kappa' in data:
+                        ts.profiles_1d.elongation = _get('mxh_kappa', i)
+                    if 'contour' in data and 'r_geometric' in data and 'r_minor' in data:
+                        rc = _get('contour', i, grid='r')
+                        zc = _get('contour', i, grid='z')
+                        iu = np.argmax(zc, axis=-1)
+                        il = np.argmin(zc, axis=-1)
+                        r_upper = np.take_along_axis(rc, iu[:, np.newaxis], axis=-1)[:, 0]
+                        r_lower = np.take_along_axis(rc, il[:, np.newaxis], axis=-1)[:, 0]
+                        rmin_safe = np.where(rmin > 0.0, rmin, 1.0)
+                        ts.profiles_1d.triangularity_upper = np.where(rmin > 0.0, (rgeo - r_upper) / rmin_safe, 0.0)
+                        ts.profiles_1d.triangularity_lower = np.where(rmin > 0.0, (rgeo - r_lower) / rmin_safe, 0.0)
+                        # Full flux-surface contours on an inverse (rho_tor_norm, poloidal index) grid
+                        theta = np.arctan2(zc - zc[0, 0], rc - rc[0, 0])  # Polar angle about the magnetic axis (axis surface is a point)
+                        theta = np.unwrap(theta, axis=-1)
+                        theta[0, :] = np.linspace(0.0, 2.0 * np.pi, theta.shape[-1])
+                        ts.profiles_2d.resize(1)
+                        p2d = ts.profiles_2d[0]
+                        p2d.grid_type = imas.identifiers.poloidal_plane_coordinates_identifier.inverse_rhotornorm_polar
+                        p2d.grid.dim1 = rho
+                        p2d.grid.dim2 = np.linspace(0.0, 2.0 * np.pi, rc.shape[-1])
+                        p2d.r = rc
+                        p2d.z = zc
+                        p2d.theta = theta
+                        if 'magnetic_flux' in data:
+                            p2d.psi = np.repeat(psi[:, np.newaxis], rc.shape[-1], axis=-1)
+                        ts.boundary.outline.r = rc[-1]
+                        ts.boundary.outline.z = zc[-1]
+                        ts.boundary.geometric_axis.r = float(rgeo[-1])
+                        ts.boundary.minor_radius = float(rmin[-1])
+                        ts.boundary.triangularity_upper = float(ts.profiles_1d.triangularity_upper[-1])
+                        ts.boundary.triangularity_lower = float(ts.profiles_1d.triangularity_lower[-1])
+                        ts.boundary.triangularity = 0.5 * (ts.boundary.triangularity_upper + ts.boundary.triangularity_lower)
+                        if 'z_geometric' in data:
+                            ts.boundary.geometric_axis.z = float(_get('z_geometric', i)[-1])
+                        if 'mxh_kappa' in data:
+                            ts.boundary.elongation = float(_get('mxh_kappa', i)[-1])
+                        ts.global_quantities.magnetic_axis.r = float(rc[0, 0])
+                        ts.global_quantities.magnetic_axis.z = float(zc[0, 0])
+                    elif 'mxh_delta' in data:
+                        ts.profiles_1d.triangularity_upper = _get('mxh_delta', i)
+                        ts.profiles_1d.triangularity_lower = _get('mxh_delta', i)
+                idsmap['equilibrium'] = eq
+
+                # Fill summary IDS
+                sm.ids_properties.homogeneous_time = imas.ids_defs.IDS_TIME_MODE_HOMOGENEOUS
+                sm.time = time
+                if 'current' in data:
+                    sm.global_quantities.ip.value = s_tor * data['current'].to_numpy()
+                    if 'pressure_total_volume_average' in data and 'volume' in data and r0 is not None:
+                        volume_lcfs = data['volume'].isel(radius=-1).to_numpy()
+                        sm.global_quantities.beta_pol.value = 4.0 * data['pressure_total_volume_average'].to_numpy() * volume_lcfs / (mu0 * float(r0) * data['current'].to_numpy() ** 2)
                 idsmap['summary'] = sm
             for ids, ids_struct in idsmap.items():
                 if ids_struct.has_value:
