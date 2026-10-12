@@ -599,7 +599,7 @@ class plasma_io(io):
             magnetic_flux_axis = data['magnetic_flux'].isel(radius=0)
             magnetic_flux_norm = ((data['magnetic_flux'] - magnetic_flux_axis) / (magnetic_flux_lcfs - magnetic_flux_axis)).clip(min=0.0)
             newvars['magnetic_flux_norm'] = (['time', 'radius', 'direction'], magnetic_flux_norm.to_numpy())
-            newvars['rho'] = (['time', 'radius', 'direction'], ((np.abs(data['magnetic_flux'] - magnetic_flux_axis) / (0.5 * np.abs(data['field_axis']))) ** 0.5).to_numpy())
+            newvars['rho'] = (['time', 'radius', 'direction'], ((abs(data['magnetic_flux'] - magnetic_flux_axis) / (0.5 * abs(data['field_axis']))) ** 0.5).to_numpy())
             newvars['rho_norm'] = (['time', 'radius', 'direction'], (magnetic_flux_norm ** 0.5).to_numpy())
             #contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
             #contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()

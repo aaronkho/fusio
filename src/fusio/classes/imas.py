@@ -961,7 +961,7 @@ class imas_io(io):
         rho_out = None if rho is None else np.atleast_1d(np.asarray(rho, dtype=float)).flatten()
         slice_vars: MutableSequence[MutableMapping[str, NDArray]] = []
         slice_attrs: MutableSequence[MutableMapping[str, NDArray]] = []
-        rho_grid = None
+        rho_grid: NDArray | None = None
         for i in cp_indices:
             j = int(np.argmin(np.abs(eq_times - cp_times[i])))
             svars, sattrs = self._compute_cgyro_parameters_slice(
