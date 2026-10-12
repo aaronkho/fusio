@@ -748,9 +748,11 @@ class gacode_io(io):
             #newvars['ni_th'] = data['ni'].isel(name=thermal_species)
             newvars['ni_th_all'] = (['n', 'rho'], data['ni'].isel(name=thermal_species).sum('name').to_numpy())
             newvars['ni_all'] = (['n', 'rho'], data['ni'].sum('name').to_numpy())
-            pressure_e = 1.0e16 * e_si * data['te'] * data['ne']  # MPa
-            pressure_i = 1.0e16 * e_si * data['ti'] * data['ni']  # MPa
-            pressure_i_th = pressure_i.isel(name=thermal_species)  # MPa
+            # Stored in Pa, matching the ptot field and the plasma class, from te in keV
+            # and ne in 10^19 m^-3
+            pressure_e = 1.0e22 * e_si * data['te'] * data['ne']  # Pa
+            pressure_i = 1.0e22 * e_si * data['ti'] * data['ni']  # Pa
+            pressure_i_th = pressure_i.isel(name=thermal_species)  # Pa
             newvars['pressure_e'] = (['n', 'rho'], pressure_e.to_numpy())
             newvars['pressure_i'] = (['n', 'rho', 'name'], pressure_i.to_numpy())
             newvars['pressure_i_th'] = (['n', 'rho'], pressure_i_th.sum('name').to_numpy())
@@ -892,12 +894,12 @@ class gacode_io(io):
                 if 'c_s' in data and 'a' in data:
                     newvars['gamma_exb_norm'] = (['n', 'rho'], newvars['gamma_exb'][-1] * (data['a'] / data['c_s']).to_numpy())
         if 'pressure_e' in data and 'bp2' in data and 'bt2' in data:
-            beta_e_p = 1.0e6 * data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
-            beta_e_t = 1.0e6 * data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
+            beta_e_p = data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
+            beta_e_t = data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
             newvars['beta_e'] = (['n', 'rho'], 1.0 / (beta_e_p ** (-1) + beta_e_t ** (-1)).to_numpy())
         if 'pressure_i_th' in data and 'bp2' in data and 'bt2' in data:
-            beta_i_th_p = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
-            beta_i_th_t = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
+            beta_i_th_p = data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
+            beta_i_th_t = data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
             newvars['beta_i_th'] = (['n', 'rho'], 1.0 / (beta_i_th_p ** (-1) + beta_i_th_t ** (-1)).to_numpy())
         if 'debye_e' in data and 'debye_i' in data:
             debye = (data['debye_e'] ** (-2) + (data['debye_i'] ** (-2)).sum('name')) ** (-0.5)
@@ -996,7 +998,9 @@ class gacode_io(io):
             n_e_vol = vectorized_numpy_integration((data['ne'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             t_e_vol = vectorized_numpy_integration((data['te'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             p_e_vol = vectorized_numpy_integration((data['pressure_e'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
-            w_e_vol = vectorized_numpy_integration((1.5 * data['pressure_e'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            # The 1e-6 keeps the stored energies in MJ now that the pressures are in Pa, which
+            # taue below requires against the power integrals in MW
+            w_e_vol = vectorized_numpy_integration((1.0e-6 * 1.5 * data['pressure_e'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             n_i_vol = vectorized_numpy_integration(
                 np.transpose((data['ni'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
@@ -1010,12 +1014,12 @@ class gacode_io(io):
                 np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
             )
             w_i_vol = vectorized_numpy_integration(
-                np.transpose((1.5 * data['pressure_i'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((1.0e-6 * 1.5 * data['pressure_i'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
             )
             #n_i_th_vol = vectorized_numpy_integration((data['ni'].isel(name=thermal_species).sum('name') * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             p_i_th_vol = vectorized_numpy_integration((data['pressure_i_th'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
-            w_i_th_vol = vectorized_numpy_integration((1.5 * data['pressure_i_th'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            w_i_th_vol = vectorized_numpy_integration((1.0e-6 * 1.5 * data['pressure_i_th'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             newvars['vol'] = (['n'], vol[:, -1])
             #newvars['n_e'] = (['n'], n_e_vol[:, -1])
             #newvars['n_i'] = (['n', 'name'], n_i_vol[:, :, -1])
@@ -1063,13 +1067,13 @@ class gacode_io(io):
             if 'mach' in data:
                 newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
 
-            newvars['beta_zero'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / (data['b_zero'] ** 2).to_numpy())
+            newvars['beta_zero'] = (['n'], newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / (data['b_zero'] ** 2).to_numpy())
             newvars['beta_n_eng'] = newvars['beta_zero'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy()  # pc
 
             newvars['bp2_vol'] = (['n'], vectorized_numpy_integration((data['bp2'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
             newvars['bt2_vol'] = (['n'], vectorized_numpy_integration((data['bt2'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
-            newvars['beta_p'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bp2_vol'][-1])
-            newvars['beta_t'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bt2_vol'][-1])
+            newvars['beta_p'] = (['n'], newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bp2_vol'][-1])
+            newvars['beta_t'] = (['n'], newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bt2_vol'][-1])
             newvars['beta'] = (['n'], 1.0 / (newvars['beta_p'][-1] ** (-1) + newvars['beta_t'][-1] ** (-1)))
             newvars['beta_n'] = (['n'], newvars['beta'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy())  # pc
 
@@ -1166,7 +1170,7 @@ class gacode_io(io):
 
             newvars['lq_brunner'] = (['n'], (
                 0.91
-                * (data['pressure_tot_derived_vol'] / 0.101325) ** (-0.48)
+                * (data['pressure_tot_derived_vol'] / 1.01325e5) ** (-0.48)
             ).to_numpy())
             newvars['lq_eich14'] = (['n'], (
                 0.63
