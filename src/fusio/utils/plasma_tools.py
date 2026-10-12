@@ -65,8 +65,25 @@ def constants_si():
     }
 
 
-def define_ion_species(z=None, a=None, short_name=None, long_name=None, user_mass=False):
-    """Look up element symbol, mass number, and charge number for a plasma ion species."""
+fast_species_suffix = '_fast'
+
+
+def define_ion_species(z=None, a=None, short_name=None, long_name=None, user_mass=False, fast=False):
+    """Look up element symbol, mass number, and charge number for a plasma ion species.
+
+    Fast, non-thermal species are tagged by appending fast_species_suffix to the returned
+    element symbol, requested either by passing fast=True or by passing a short_name which
+    already carries the tag. The tag is stripped before the lookup and reapplied afterwards,
+    so a fast species returns the mass and charge numbers of its element and a tagged name
+    resolves back to itself. Keeping the thermal and fast populations of one element under
+    distinct names matters because fusio carries the species name as an xarray coordinate,
+    where a duplicate label breaks selection.
+    """
+
+    is_fast = bool(fast)
+    if isinstance(short_name, string_types) and short_name.endswith(fast_species_suffix):
+        short_name = short_name[:-len(fast_species_suffix)]
+        is_fast = True
 
     specieslist = {
          "e":  (  0.000544617, -1.0), "n":  (  1.000866492,  0.0),
@@ -156,6 +173,9 @@ def define_ion_species(z=None, a=None, short_name=None, long_name=None, user_mas
         for key, val in specieslist.items():
             if sa == int(np.rint(val[0])) and sz == int(np.rint(val[1])):
                 sname = key
+
+    if sname is not None and is_fast:
+        sname = f'{sname}{fast_species_suffix}'
 
     return sname, sa, sz
 
