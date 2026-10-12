@@ -11,7 +11,7 @@ from packaging.version import Version
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
-from ..utils.plasma_tools import define_ion_species
+from ..utils.plasma_tools import define_ion_species, define_fastran_ion_species
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
     read_eqdsk,
@@ -2436,61 +2436,7 @@ class gacode_io(io):
 
                 # FASTRAN carries a lumped main ion, a thermal helium ash species and an arbitrary
                 # number of impurities, all of which share the single ion temperature profile
-                ti = data['ti'].to_numpy() if 'ti' in data else copy.deepcopy(zeros)
-                amain = data['amain'].to_numpy().flatten() if 'amain' in data else 2.0 * ones
-                zmain = data['zmain'].to_numpy().flatten() if 'zmain' in data else 1.0 * ones
-                mname, _, _ = define_ion_species(z=float(zmain[-1]), a=float(amain[-1]))
-                species: list[tuple[str, str, NDArray, NDArray, NDArray, NDArray]] = []
-                if 'ni' in data:
-                    species.append((f'{mname}', '[therm]', amain, zmain, data['ni'].to_numpy(), ti))
-                if 'nhe' in data:
-                    species.append(('He', '[therm]', 4.0 * ones, 2.0 * ones, data['nhe'].to_numpy(), ti))
-                if 'nz' in data and 'aimp' in data and 'zimp' in data and 'imp' in data.coords:
-                    aimp = data['aimp'].to_numpy().flatten()
-                    zimp = data['zimp'].to_numpy().flatten()
-                    for k in range(len(data.coords['imp'])):
-                        zname, _, _ = define_ion_species(z=float(zimp[k]), a=float(aimp[k]))
-                        species.append((f'{zname}', '[therm]', aimp[k] * ones, zimp[k] * ones, data['nz'].isel(imp=k).to_numpy(), ti))
-                # Fast species are only taken when populated, since FASTRAN writes their profiles
-                # even when the corresponding heating or fusion source is switched off
-                for dkey, wkey, fname, fmass, fcharge in [
-                    ('nbeam', 'wbeam', f'{mname}', amain, zmain),
-                    ('nalpha', 'walp', 'He', 4.0 * ones, 2.0 * ones),
-                ]:
-                    if dkey in data and np.any(data[dkey].to_numpy() > 0.0):
-                        nfast = data[dkey].to_numpy()
-                        tfast = copy.deepcopy(ti)
-                        if wkey in data:
-                            # FASTRAN stores the fast ion energy density as n * (eperp + epll) * 1.602e-3,
-                            # inverted here into the equivalent temperature (2 / 3) * (eperp + epll)
-                            tfast = np.where(
-                                nfast > 0.0,
-                                (2.0 / 3.0) * data[wkey].to_numpy() / np.where(nfast > 0.0, nfast, 1.0) / 1.602e-3,
-                                tfast,
-                            )
-                        species.append((fname, '[fast]', fmass, fcharge, nfast, tfast))
-                names: list[str] = []
-                types: list[str] = []
-                masses: list[NDArray] = []
-                charges: list[NDArray] = []
-                densities: list[NDArray] = []
-                temperatures: list[NDArray] = []
-                for sname, stype, smass, scharge, sdensity, stemperature in species:
-                    newname = f'{sname}'
-                    if newname in names and stype == '[fast]':
-                        newname = f'{sname}_fast'
-                    if newname in names:
-                        # Species resolving to the same name necessarily share a charge, so summing their
-                        # densities preserves both quasi-neutrality and the effective charge
-                        logger.warning(f'Multiple {newname} species found in {obj.format} data, merging their densities...')
-                        densities[names.index(newname)] = densities[names.index(newname)] + sdensity
-                        continue
-                    names.append(newname)
-                    types.append(stype)
-                    masses.append(smass)
-                    charges.append(scharge)
-                    densities.append(sdensity)
-                    temperatures.append(stemperature)
+                names, types, masses, charges, densities, temperatures = define_fastran_ion_species(data)
                 if len(names) > 0:
                     coords['name'] = np.array(names)
                     data_vars['nion'] = (['n'], np.atleast_1d([len(names)] * len(coords['n'])).astype(int))
