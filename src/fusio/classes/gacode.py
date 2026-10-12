@@ -748,9 +748,11 @@ class gacode_io(io):
             #newvars['ni_th'] = data['ni'].isel(name=thermal_species)
             newvars['ni_th_all'] = (['n', 'rho'], data['ni'].isel(name=thermal_species).sum('name').to_numpy())
             newvars['ni_all'] = (['n', 'rho'], data['ni'].sum('name').to_numpy())
-            pressure_e = 1.0e16 * e_si * data['te'] * data['ne']  # MPa
-            pressure_i = 1.0e16 * e_si * data['ti'] * data['ni']  # MPa
-            pressure_i_th = pressure_i.isel(name=thermal_species)  # MPa
+            # Stored in Pa, matching the ptot field and the plasma class, from te in keV
+            # and ne in 10^19 m^-3
+            pressure_e = 1.0e22 * e_si * data['te'] * data['ne']  # Pa
+            pressure_i = 1.0e22 * e_si * data['ti'] * data['ni']  # Pa
+            pressure_i_th = pressure_i.isel(name=thermal_species)  # Pa
             newvars['pressure_e'] = (['n', 'rho'], pressure_e.to_numpy())
             newvars['pressure_i'] = (['n', 'rho', 'name'], pressure_i.to_numpy())
             newvars['pressure_i_th'] = (['n', 'rho'], pressure_i_th.sum('name').to_numpy())
@@ -892,12 +894,12 @@ class gacode_io(io):
                 if 'c_s' in data and 'a' in data:
                     newvars['gamma_exb_norm'] = (['n', 'rho'], newvars['gamma_exb'][-1] * (data['a'] / data['c_s']).to_numpy())
         if 'pressure_e' in data and 'bp2' in data and 'bt2' in data:
-            beta_e_p = 1.0e6 * data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
-            beta_e_t = 1.0e6 * data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
+            beta_e_p = data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
+            beta_e_t = data['pressure_e'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
             newvars['beta_e'] = (['n', 'rho'], 1.0 / (beta_e_p ** (-1) + beta_e_t ** (-1)).to_numpy())
         if 'pressure_i_th' in data and 'bp2' in data and 'bt2' in data:
-            beta_i_th_p = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
-            beta_i_th_t = 1.0e6 * data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
+            beta_i_th_p = data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bp2']
+            beta_i_th_t = data['pressure_i_th'] * 2.0 * 4.0e-7 * np.pi / data['bt2']
             newvars['beta_i_th'] = (['n', 'rho'], 1.0 / (beta_i_th_p ** (-1) + beta_i_th_t ** (-1)).to_numpy())
         if 'debye_e' in data and 'debye_i' in data:
             debye = (data['debye_e'] ** (-2) + (data['debye_i'] ** (-2)).sum('name')) ** (-0.5)
@@ -996,7 +998,9 @@ class gacode_io(io):
             n_e_vol = vectorized_numpy_integration((data['ne'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             t_e_vol = vectorized_numpy_integration((data['te'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             p_e_vol = vectorized_numpy_integration((data['pressure_e'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
-            w_e_vol = vectorized_numpy_integration((1.5 * data['pressure_e'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            # The 1e-6 keeps the stored energies in MJ now that the pressures are in Pa, which
+            # taue below requires against the power integrals in MW
+            w_e_vol = vectorized_numpy_integration((1.0e-6 * 1.5 * data['pressure_e'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             n_i_vol = vectorized_numpy_integration(
                 np.transpose((data['ni'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
@@ -1010,12 +1014,12 @@ class gacode_io(io):
                 np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
             )
             w_i_vol = vectorized_numpy_integration(
-                np.transpose((1.5 * data['pressure_i'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
+                np.transpose((1.0e-6 * 1.5 * data['pressure_i'] * data['volp_miller']).to_numpy(), axes=(0, 2, 1)),
                 np.repeat(np.expand_dims(data['rmin'].to_numpy(), axis=1), len(data['name']), axis=1),
             )
             #n_i_th_vol = vectorized_numpy_integration((data['ni'].isel(name=thermal_species).sum('name') * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             p_i_th_vol = vectorized_numpy_integration((data['pressure_i_th'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
-            w_i_th_vol = vectorized_numpy_integration((1.5 * data['pressure_i_th'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
+            w_i_th_vol = vectorized_numpy_integration((1.0e-6 * 1.5 * data['pressure_i_th'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())
             newvars['vol'] = (['n'], vol[:, -1])
             #newvars['n_e'] = (['n'], n_e_vol[:, -1])
             #newvars['n_i'] = (['n', 'name'], n_i_vol[:, :, -1])
@@ -1063,13 +1067,13 @@ class gacode_io(io):
             if 'mach' in data:
                 newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
 
-            newvars['beta_zero'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / (data['b_zero'] ** 2).to_numpy())
+            newvars['beta_zero'] = (['n'], newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / (data['b_zero'] ** 2).to_numpy())
             newvars['beta_n_eng'] = newvars['beta_zero'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy()  # pc
 
             newvars['bp2_vol'] = (['n'], vectorized_numpy_integration((data['bp2'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
             newvars['bt2_vol'] = (['n'], vectorized_numpy_integration((data['bt2'] * data['volp_miller']).to_numpy(), data['rmin'].to_numpy())[:, -1] / vol[:, -1])
-            newvars['beta_p'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bp2_vol'][-1])
-            newvars['beta_t'] = (['n'], 1.0e6 * newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bt2_vol'][-1])
+            newvars['beta_p'] = (['n'], newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bp2_vol'][-1])
+            newvars['beta_t'] = (['n'], newvars['pressure_tot_derived_vol'][-1] * 2.0 * 4.0e-7 * np.pi / newvars['bt2_vol'][-1])
             newvars['beta'] = (['n'], 1.0 / (newvars['beta_p'][-1] ** (-1) + newvars['beta_t'][-1] ** (-1)))
             newvars['beta_n'] = (['n'], newvars['beta'][-1] * (100.0 * data['a'] * data['b_zero'] / data['current']).to_numpy())  # pc
 
@@ -1166,7 +1170,7 @@ class gacode_io(io):
 
             newvars['lq_brunner'] = (['n'], (
                 0.91
-                * (data['pressure_tot_derived_vol'] / 0.101325) ** (-0.48)
+                * (data['pressure_tot_derived_vol'] / 1.01325e5) ** (-0.48)
             ).to_numpy())
             newvars['lq_eich14'] = (['n'], (
                 0.63
@@ -1641,6 +1645,13 @@ class gacode_io(io):
                     data_vars['polflux'] = (['n', 'rho'], data['magnetic_flux'].sel(direction='poloidal', drop=True).to_numpy())
                 if 'r_geometric' in data:
                     data_vars['rcentr'] = (['n'], data['r_geometric'].isel(radius=0).to_numpy())
+                if 'rcentr' in data.attrs:
+                    # The reference major radius is not recoverable from the flux surface geometry,
+                    # so it is taken from the attribute the converters preserve it in when the
+                    # number of stored values still matches the requested time window
+                    rcentr = np.atleast_1d(data.attrs['rcentr']).flatten()
+                    if len(rcentr) == len(coords['n']):
+                        data_vars['rcentr'] = (['n'], rcentr)
                 if 'safety_factor' in data:
                     data_vars['q'] = (['n', 'rho'], data['safety_factor'].to_numpy())
                 if 'effective_charge' in data:
@@ -1648,7 +1659,9 @@ class gacode_io(io):
                 elif 'density_e' in data and 'density_i' in data and 'charge_i' in data:
                     data_vars['z_eff'] = (['n', 'rho'], (data['density_i'] * (data['charge_i'] ** 2.0) / data['density_e']).sum('ion').to_numpy())
                 if 'pressure_total' in data:
-                    data_vars['ptot'] = (['n', 'rho'], data['pressure_thermal_total'].to_numpy())
+                    # The total pressure includes the fast ion populations, consistent with the
+                    # all-species sum used in the fallback below and by ptot_derived
+                    data_vars['ptot'] = (['n', 'rho'], data['pressure_total'].to_numpy())
                 elif 'temperature_e' in data and 'density_e' in data and 'temperature_i' in data and 'density_i' in data:
                     #thermal_species_mask = data['type_i'].isin(['thermal']).to_numpy().flatten()
                     #thermal_species = [i for i in range(len(thermal_species_mask)) if thermal_species_mask[i]]
@@ -2365,4 +2378,120 @@ class gacode_io(io):
                     data_vars['ti'] = (['n', 'rho'], np.expand_dims(data['ti'].to_numpy().flatten(), axis=0))
                 attrs['header'] = [newobj.make_file_header()] * len(coords['n'])
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+        return newobj
+
+    @classmethod
+    def from_fastran(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[int | float] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input if side == 'input' else obj.output
+            if 'rho' in data.coords and 'time' in data.coords:
+                time = data['time'].to_numpy()
+                time_window = [float(time[-1])]
+                if window is not None and len(window) >= 2:
+                    window_mask = (time >= window[0]) & (time <= window[-1])
+                    if np.any(window_mask):
+                        time_window = [float(t) for t in time[window_mask]]
+                data = data.sel(time=time_window, method='nearest').drop_duplicates('time')  # Fine because data is a copy
+                coords: MutableMapping[str, Any] = {}
+                data_vars: MutableMapping[str, Any] = {}
+                attrs: MutableMapping[str, Any] = {}
+                coords['n'] = np.arange(len(data['time'])).astype(int)
+                coords['rho'] = data.coords['rho'].to_numpy().flatten()  # FASTRAN already uses the normalized toroidal flux coordinate
+                ones = np.ones(len(coords['n']))
+                zeros = np.repeat(np.expand_dims(np.zeros_like(coords['rho']), axis=0), len(coords['n']), axis=0)
+                data_vars['time'] = (['n'], data['time'].to_numpy())
+                data_vars['nexp'] = (['n'], np.array([len(coords['rho'])] * len(coords['n'])).astype(int))
+                data_vars['shot'] = (['n'], np.atleast_1d([0] * len(coords['n'])).astype(int))
+                data_vars['masse'] = (['n'], np.atleast_1d([5.4488748e-04] * len(coords['n'])))
+                data_vars['ze'] = (['n'], np.atleast_1d([-1.0] * len(coords['n'])))
+                if 'r0' in data:
+                    data_vars['rcentr'] = (['n'], data['r0'].to_numpy().flatten())
+                if 'b0' in data:
+                    data_vars['bcentr'] = (['n'], data['b0'].to_numpy().flatten())
+                if 'ip' in data:
+                    data_vars['current'] = (['n'], data['ip'].to_numpy().flatten())  # Already in MA
+                if 'rhob' in data and 'b0' in data:
+                    # FASTRAN defines its radial coordinate as rhob = sqrt(phi / pi / b0), such that the
+                    # enclosed toroidal flux is phi = pi * rhob**2 * b0, converted here into Wb/radian
+                    data_vars['torfluxa'] = (['n'], 0.5 * (data['rhob'].isel(rho=-1) ** 2.0 * data['b0']).to_numpy().flatten())
+                if 'fpol' in data:
+                    # Holds the poloidal flux in Wb, rather than the poloidal current function
+                    # suggested by its name, converted here into Wb/radian
+                    data_vars['polflux'] = (['n', 'rho'], data['fpol'].to_numpy() / (2.0 * np.pi))
+                if 'q' in data:
+                    data_vars['q'] = (['n', 'rho'], data['q'].to_numpy())
+                if 'aminor' in data:
+                    data_vars['rmin'] = (['n', 'rho'], data['aminor'].to_numpy())
+                if 'rmajor' in data:
+                    data_vars['rmaj'] = (['n', 'rho'], data['rmajor'].to_numpy())
+                data_vars['zmag'] = (['n', 'rho'], copy.deepcopy(zeros))  # Vertical position not provided by FASTRAN
+                if 'kappa' in data:
+                    data_vars['kappa'] = (['n', 'rho'], data['kappa'].to_numpy())
+                if 'delta' in data:
+                    data_vars['delta'] = (['n', 'rho'], data['delta'].to_numpy())
+                if 'zeff' in data:
+                    data_vars['z_eff'] = (['n', 'rho'], data['zeff'].to_numpy())
+                if 'ne' in data:
+                    data_vars['ne'] = (['n', 'rho'], data['ne'].to_numpy())  # Already in 10^19 m^-3
+                if 'te' in data:
+                    data_vars['te'] = (['n', 'rho'], data['te'].to_numpy())  # Already in keV
+                if 'pmhd' in data:
+                    data_vars['ptot'] = (['n', 'rho'], data['pmhd'].to_numpy())
+                if 'omega' in data:
+                    data_vars['omega0'] = (['n', 'rho'], data['omega'].to_numpy())
+
+                # FASTRAN carries a lumped main ion, a thermal helium ash species and an arbitrary
+                # number of impurities, all of which share the single ion temperature profile
+                # Resolved by the source class, which owns the FASTRAN-specific field layout;
+                # duck-typed on obj as the input and output properties above already are
+                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data)  # type: ignore[attr-defined]
+                if len(names) > 0:
+                    coords['name'] = np.array(names)
+                    data_vars['nion'] = (['n'], np.atleast_1d([len(names)] * len(coords['n'])).astype(int))
+                    data_vars['type'] = (['n', 'name'], np.repeat(np.expand_dims(np.array(types), axis=0), len(coords['n']), axis=0))
+                    data_vars['mass'] = (['n', 'name'], np.stack(masses, axis=-1))
+                    data_vars['z'] = (['n', 'name'], np.stack(charges, axis=-1))
+                    data_vars['ni'] = (['n', 'rho', 'name'], np.stack(densities, axis=-1))  # Already in 10^19 m^-3
+                    data_vars['ti'] = (['n', 'rho', 'name'], np.stack(temperatures, axis=-1))  # Already in keV
+
+                # FASTRAN power densities are already in MW/m^3 and current densities in MA/m^2
+                direct_source_map = {
+                    'p_ohm': 'qohme',
+                    'pe_nb': 'qbeame',
+                    'pi_nb': 'qbeami',
+                    'pe_rf': 'qrfe',
+                    'pi_rf': 'qrfi',
+                    'pe_fus': 'qfuse',
+                    'pi_fus': 'qfusi',
+                    'pe_ionization': 'qione',
+                    'pi_ionization': 'qioni',
+                    'pi_cx': 'qcxi',
+                    'j_oh': 'johm',
+                    'j_bs': 'jbs',
+                    'j_nb': 'jnb',
+                    'j_rf': 'jrf',
+                    'torque_nb': 'qmom',
+                }
+                for key, nkey in direct_source_map.items():
+                    if key in data:
+                        data_vars[nkey] = (['n', 'rho'], data[key].to_numpy())
+                if 'p_ei' in data:
+                    # FASTRAN defines this transfer from the ions to the electrons, opposite to GACODE
+                    data_vars['qei'] = (['n', 'rho'], -data['p_ei'].to_numpy())
+                if 'p_rad' in data:
+                    # FASTRAN does not separate the radiation channels, so the total is placed into the
+                    # line radiation channel, and is negated since GACODE stores radiated power as a sink
+                    data_vars['qline'] = (['n', 'rho'], -data['p_rad'].to_numpy())
+                if 'sion' in data:
+                    # FASTRAN lumps the beam, ionization and pellet particle sources together
+                    data_vars['qpar_wall'] = (['n', 'rho'], 1.0e19 * data['sion'].to_numpy())
+                attrs['header'] = [newobj.make_file_header()] * len(coords['n'])
+                newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj

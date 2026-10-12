@@ -2469,3 +2469,185 @@ class plasma_io(io):
 
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
         return newobj
+
+
+    @classmethod
+    def from_fastran(
+        cls,
+        obj: io,
+        side: str = 'output',
+        window: Sequence[int | float] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        newobj = cls()
+        if isinstance(obj, io):
+            data = obj.input if side == 'input' else obj.output
+            coords: MutableMapping[str, Any] = {}
+            data_vars: MutableMapping[str, Any] = {}
+            attrs: MutableMapping[str, Any] = {}
+            if 'rho' in data.coords and 'time' in data.coords:
+                time = data['time'].to_numpy()
+                time_window = [float(time[-1])]
+                if window is not None and len(window) >= 2:
+                    window_mask = (time >= window[0]) & (time <= window[-1])
+                    if np.any(window_mask):
+                        time_window = [float(t) for t in time[window_mask]]
+                data = data.sel(time=time_window, method='nearest').drop_duplicates('time')  # Fine because data is a copy
+                coords['time'] = data['time'].to_numpy()
+                coords['radius'] = data.coords['rho'].to_numpy().flatten()  # FASTRAN already uses the normalized toroidal flux coordinate
+                coords['direction'] = np.array(cls.directions)
+                coords['source'] = np.array(cls.sources)
+                attrs['radius'] = 'rho_tor_norm'
+                nt = len(coords['time'])
+                nr = len(coords['radius'])
+                ones = np.ones(nt)
+                zeros = np.zeros((nt, nr))
+                data_vars['mass_e'] = (['time'], 5.4488748e-04 * ones)
+                data_vars['charge_e'] = (['time'], -1.0 * ones)
+                if 'b0' in data:
+                    data_vars['field_axis'] = (['time'], data['b0'].to_numpy().flatten())
+                if 'ip' in data:
+                    # Converted from the MA FASTRAN writes into the A this class stores
+                    data_vars['current'] = (['time'], 1.0e6 * data['ip'].to_numpy().flatten())
+                if 'r0' in data:
+                    attrs['rcentr'] = [float(r) for r in data['r0'].to_numpy().flatten()]
+                if 'aminor' in data:
+                    data_vars['r_minor'] = (['time', 'radius'], data['aminor'].to_numpy())
+                if 'rmajor' in data:
+                    data_vars['r_geometric'] = (['time', 'radius'], data['rmajor'].to_numpy())
+                data_vars['z_geometric'] = (['time', 'radius'], copy.deepcopy(zeros))  # Vertical position not provided by FASTRAN
+                if 'ne' in data:
+                    data_vars['density_e'] = (['time', 'radius'], 1.0e19 * data['ne'].to_numpy())
+                if 'te' in data:
+                    data_vars['temperature_e'] = (['time', 'radius'], 1.0e3 * data['te'].to_numpy())
+                if 'zeff' in data:
+                    data_vars['effective_charge'] = (['time', 'radius'], data['zeff'].to_numpy())
+                if 'q' in data:
+                    data_vars['safety_factor'] = (['time', 'radius'], data['q'].to_numpy())
+                if 'omega' in data:
+                    data_vars['rotation_frequency_sonic'] = (['time', 'radius'], data['omega'].to_numpy())
+
+                # FASTRAN defines its radial coordinate as rhob = sqrt(phi / pi / b0), so the enclosed
+                # toroidal flux follows analytically as phi = pi * rhob**2 * b0. It is taken directly
+                # here, rather than integrated from the safety factor as from_gacode has to do, which
+                # also avoids the strict monotonicity requirement that integration imposes on the
+                # poloidal flux, see the fastran_io class notes
+                flux = np.zeros((nt, nr, len(coords['direction'])))
+                if 'rhob' in data and 'b0' in data:
+                    flux[..., cls.directions.index('toroidal')] = 0.5 * (data['rhob'] ** 2.0 * data['b0']).to_numpy()
+                if 'fpol' in data:
+                    # Holds the poloidal flux in Wb, converted here into Wb/radian
+                    flux[..., cls.directions.index('poloidal')] = data['fpol'].to_numpy() / (2.0 * np.pi)
+                data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
+
+                # FASTRAN carries a lumped main ion, a thermal helium ash species and an arbitrary
+                # number of impurities, all of which share the single ion temperature profile
+                # Resolved by the source class, which owns the FASTRAN-specific field layout;
+                # duck-typed on obj as the input and output properties above already are
+                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data)  # type: ignore[attr-defined]
+                ni = len(names)
+                if ni > 0:
+                    coords['ion'] = np.array(names)
+                    data_vars['type_i'] = (['time', 'ion'], np.repeat(np.expand_dims(np.where(np.array(types) == '[therm]', 'thermal', 'fast'), axis=0), nt, axis=0))
+                    # Masses come from the file rather than from the resolved element symbol, so that
+                    # the lumped main ion keeps its non-integer mass number
+                    data_vars['mass_i'] = (['time', 'ion'], np.stack(masses, axis=-1))
+                    data_vars['atomic_number_i'] = (['time', 'ion'], np.stack(charges, axis=-1))
+                    data_vars['charge_i'] = (['time', 'radius', 'ion'], np.repeat(np.expand_dims(np.stack(charges, axis=-1), axis=1), nr, axis=1))
+                    data_vars['density_i'] = (['time', 'radius', 'ion'], 1.0e19 * np.stack(densities, axis=-1))
+                    data_vars['temperature_i'] = (['time', 'radius', 'ion'], 1.0e3 * np.stack(temperatures, axis=-1))
+                    data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], np.zeros((nt, nr, ni, len(coords['direction']))))
+
+                if 'p_ei' in data:
+                    # FASTRAN defines this transfer from the ions to the electrons, opposite to the
+                    # sign convention this class shares with GACODE
+                    data_vars['heat_exchange_ei'] = (['time', 'radius'], -1.0e6 * data['p_ei'].to_numpy())
+                else:
+                    data_vars['heat_exchange_ei'] = (['time', 'radius'], copy.deepcopy(zeros))
+
+                # Source densities are stored signed in SI units, so sinks are negative. FASTRAN
+                # writes p_rad already negative but the ionization and charge exchange channels as
+                # positive losses, and it does not separate the radiation channels, so the total
+                # goes into line radiation as the impurity radiation catch-all
+                electron_heat_map = {
+                    'p_ohm': ('ohmic', 1.0),
+                    'pe_nb': ('neutral_beam', 1.0),
+                    'pe_rf': ('ion_cyclotron', 1.0),
+                    'pe_fus': ('fusion', 1.0),
+                    'p_rad': ('line_radiation', 1.0),
+                    'pe_ionization': ('ionization', -1.0),
+                }
+                heat_source_e = np.zeros((nt, nr, len(coords['source'])))
+                for key, (skey, sign) in electron_heat_map.items():
+                    if key in data:
+                        heat_source_e[..., cls.sources.index(skey)] = sign * 1.0e6 * data[key].to_numpy()
+                data_vars['heat_source_e'] = (['time', 'radius', 'source'], heat_source_e)
+
+                ion_heat_map = {
+                    'pi_nb': ('neutral_beam', 1.0),
+                    'pi_rf': ('ion_cyclotron', 1.0),
+                    'pi_fus': ('fusion', 1.0),
+                    'pi_ionization': ('ionization', -1.0),
+                    'pi_cx': ('charge_exchange', -1.0),
+                }
+                if ni > 0:
+                    # Assumes all ion heat sources apply to the first ion species only
+                    heat_source_i = np.zeros((nt, nr, ni, len(coords['source'])))
+                    for key, (skey, sign) in ion_heat_map.items():
+                        if key in data:
+                            heat_source_i[:, :, 0, cls.sources.index(skey)] = sign * 1.0e6 * data[key].to_numpy()
+                    data_vars['heat_source_i'] = (['time', 'radius', 'ion', 'source'], heat_source_i)
+
+                current_map = {
+                    'j_oh': 'ohmic',
+                    'j_nb': 'neutral_beam',
+                    'j_rf': 'electron_cyclotron',
+                    'j_bs': 'bootstrap',
+                }
+                current_source = np.zeros((nt, nr, len(coords['source'])))
+                for key, skey in current_map.items():
+                    if key in data:
+                        current_source[..., cls.sources.index(skey)] = 1.0e6 * data[key].to_numpy()
+                data_vars['current_source'] = (['time', 'radius', 'source'], current_source)
+
+                # FASTRAN lumps the beam, ionization and pellet particle sources together
+                particle_source_e = np.zeros((nt, nr, len(coords['source'])))
+                if 'sion' in data:
+                    particle_source_e[..., cls.sources.index('ionization')] = 1.0e19 * data['sion'].to_numpy()
+                data_vars['particle_source_e'] = (['time', 'radius', 'source'], particle_source_e)
+                if ni > 0:
+                    # Assumes all ion particle and momentum sources apply to the first ion species only
+                    particle_source_i = np.zeros((nt, nr, ni, len(coords['source'])))
+                    if 'sion' in data:
+                        particle_source_i[:, :, 0, cls.sources.index('ionization')] = 1.0e19 * data['sion'].to_numpy()
+                    data_vars['particle_source_i'] = (['time', 'radius', 'ion', 'source'], particle_source_i)
+                    momentum_source_i = np.zeros((nt, nr, ni, len(coords['direction']), len(coords['source'])))
+                    if 'torque_nb' in data:
+                        momentum_source_i[:, :, 0, cls.directions.index('toroidal'), cls.sources.index('neutral_beam')] = data['torque_nb'].to_numpy()
+                    data_vars['momentum_source_i'] = (['time', 'radius', 'ion', 'direction', 'source'], momentum_source_i)
+
+                # FASTRAN provides only the elongation and triangularity, which are passed through as
+                # the corresponding Miller extended harmonic terms rather than refitted from the
+                # contour, keeping them exact. The first sine coefficient inverts the convention used
+                # by _compute_derived_geometry, which recovers the triangularity as sin of that term
+                kappa = data['kappa'].to_numpy() if 'kappa' in data else np.ones((nt, nr))
+                delta = data['delta'].to_numpy() if 'delta' in data else copy.deepcopy(zeros)
+                data_vars['mxh_kappa'] = (['time', 'radius'], kappa)
+                data_vars['mxh_delta'] = (['time', 'radius'], delta)
+                if 'rmajor' in data and 'aminor' in data:
+                    r0 = data['rmajor'].to_numpy()
+                    z0 = copy.deepcopy(zeros)
+                    r = data['aminor'].to_numpy()
+                    sin_coeffs = [np.zeros_like(kappa), np.arcsin(delta)]
+                    theta = np.linspace(0.0, 2.0 * np.pi, 501)
+                    theta_z = np.repeat(np.expand_dims(np.repeat(np.expand_dims(theta, axis=0), nr, axis=0), axis=0), nt, axis=0)
+                    theta_r = copy.deepcopy(theta_z)
+                    for i in range(len(sin_coeffs)):
+                        theta_r += np.expand_dims(sin_coeffs[i], axis=-1) * np.sin(i * theta_z)
+                    r_contour = np.expand_dims(r0, axis=-1) + np.expand_dims(r, axis=-1) * np.cos(theta_r)
+                    z_contour = np.expand_dims(z0, axis=-1) + np.expand_dims(r * kappa, axis=-1) * np.sin(theta_z)
+                    coords['poloidal_index'] = [i for i in range(len(theta))]
+                    coords['grid'] = ['r', 'z']
+                    data_vars['contour'] = (['time', 'radius', 'grid', 'poloidal_index'], np.stack([r_contour, z_contour], axis=2))
+            newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
+        return newobj
