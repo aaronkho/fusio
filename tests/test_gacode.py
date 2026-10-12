@@ -185,3 +185,29 @@ class TestDerivedGeometry:
         assert np.median(err) < 1.0e-3
         assert np.max(err) < 1.0e-2
 
+
+
+class TestFixtureSelfConsistency:
+
+    # rho is the normalized toroidal flux coordinate, so Phi(rho) = torfluxa * rho^2 and
+    # q = dPhi/dpolflux. The fixture's torfluxa was once 277x too small, which left
+    # gacode_io's b_unit, and everything normalized by it, wrong by the same factor,
+    # while plasma_io was unaffected because from_gacode rebuilds the toroidal flux
+    # from q and polflux. Only this identity catches that.
+    def test_safety_factor_follows_from_torfluxa_and_polflux(self, gacode_file_path):
+        from fusio.utils.math_tools import vectorized_numpy_derivative
+        d = gacode_io(input=gacode_file_path).input
+        rho = d['rho'].to_numpy()
+        phi = np.ravel(d['torfluxa'].to_numpy())[-1] * rho ** 2
+        q_implied = vectorized_numpy_derivative(d['polflux'].to_numpy(), phi[None, :])[0]
+        q = d['q'].to_numpy()[0]
+        # Skipping the innermost points, where the finite difference is least accurate
+        np.testing.assert_allclose(q_implied[5:], q[5:], rtol=2.0e-3)
+
+    def test_toroidal_flux_matches_the_field_through_the_cross_section(self, gacode_file_path):
+        d = gacode_io(input=gacode_file_path).input
+        a = d['rmin'].to_numpy()[0, -1]
+        area = np.pi * a ** 2 * d['kappa'].to_numpy()[0, -1]
+        flux_estimate = abs(float(d['bcentr'].to_numpy()[0])) * area
+        # A flux-surface-averaged 1/R estimate, so only good to order ten percent
+        assert 0.5 < abs(float(d['torfluxa'].to_numpy()[0])) / flux_estimate < 2.0
