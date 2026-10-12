@@ -19,6 +19,7 @@ Format conversion is done via:
 | `imas_io` | `classes/imas.py` | IMAS data dictionary (NetCDF or HDF5, via `imas-python`) |
 | `omas_io` | `classes/omas.py` | OMAS (Ordered Multidimensional Array Structure) |
 | `torax_io` | `classes/torax.py` | TORAX (Google's JAX-based transport solver) JSON format |
+| `fastran_io` | `classes/fastran.py` | FASTRAN (Oak Ridge National Laboratory / IPS) `fastran.nc` output files | output only
 | `transp_io` | `classes/transp.py` | TRANSP (Princeton) CDF/netcdf output files | incomplete
 | `astra_io` | `classes/astra.py` | ASTRA transport code output | incomplete
 | `jintrac_io` | `classes/jintrac.py` | JINTRAC (JET integrated modelling) binary output | incomplete
