@@ -1641,6 +1641,13 @@ class gacode_io(io):
                     data_vars['polflux'] = (['n', 'rho'], data['magnetic_flux'].sel(direction='poloidal', drop=True).to_numpy())
                 if 'r_geometric' in data:
                     data_vars['rcentr'] = (['n'], data['r_geometric'].isel(radius=0).to_numpy())
+                if 'rcentr' in data.attrs:
+                    # The reference major radius is not recoverable from the flux surface geometry,
+                    # so it is taken from the attribute the converters preserve it in when the
+                    # number of stored values still matches the requested time window
+                    rcentr = np.atleast_1d(data.attrs['rcentr']).flatten()
+                    if len(rcentr) == len(coords['n']):
+                        data_vars['rcentr'] = (['n'], rcentr)
                 if 'safety_factor' in data:
                     data_vars['q'] = (['n', 'rho'], data['safety_factor'].to_numpy())
                 if 'effective_charge' in data:
