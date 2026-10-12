@@ -1655,7 +1655,9 @@ class gacode_io(io):
                 elif 'density_e' in data and 'density_i' in data and 'charge_i' in data:
                     data_vars['z_eff'] = (['n', 'rho'], (data['density_i'] * (data['charge_i'] ** 2.0) / data['density_e']).sum('ion').to_numpy())
                 if 'pressure_total' in data:
-                    data_vars['ptot'] = (['n', 'rho'], data['pressure_thermal_total'].to_numpy())
+                    # The total pressure includes the fast ion populations, consistent with the
+                    # all-species sum used in the fallback below and by ptot_derived
+                    data_vars['ptot'] = (['n', 'rho'], data['pressure_total'].to_numpy())
                 elif 'temperature_e' in data and 'density_e' in data and 'temperature_i' in data and 'density_i' in data:
                     #thermal_species_mask = data['type_i'].isin(['thermal']).to_numpy().flatten()
                     #thermal_species = [i for i in range(len(thermal_species_mask)) if thermal_species_mask[i]]
