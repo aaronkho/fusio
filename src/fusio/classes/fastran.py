@@ -239,7 +239,7 @@ class fastran_io(io):
                     unset = ~np.isfinite(time) | (np.abs(time) >= self.netcdf_fill_tolerance)
                     if np.any(unset):
                         logger.warning(f'{self.format} output file does not define a plasma time, using slice index instead...')
-                        time = np.where(unset, np.arange(len(time)).astype(float), time)
+                        time = np.where(unset, np.arange(len(time)).astype(float), time)  # type: ignore[assignment]
                 coords['time'] = (['time'], time, {'units': self.dim_vars['time'][0], 'description': self.dim_vars['time'][1]})
                 if 'rho' in temp_data:
                     coords['rho'] = (['rho'], temp_data['rho'].to_numpy(), {'units': self.dim_vars['rho'][0], 'description': self.dim_vars['rho'][1]})
