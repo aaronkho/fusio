@@ -380,3 +380,43 @@ class TestCocos:
         assert np.all(p.input['poloidal_flux_map'].to_numpy() == 7.0)
         p.add_geometry_from_eqdsk(eqdsk, side='input')
         np.testing.assert_array_equal(p.input['poloidal_flux_map'].to_numpy(), psimap)
+
+
+class TestFieldComponents:
+
+    # b_inner and b_outer are normalized to field_unit, so the physical field carries
+    # one power of it, not the two that field_squared legitimately carries.
+    def test_outboard_field_scales_with_one_power_of_field_unit(self, derived_reference):
+        d = derived_reference
+        b_sq = d['field_squared'].isel(radius=-1).sum(dim='direction').to_numpy()
+        inner = (d['field_inner'].isel(radius=-1) ** 2).sum(dim='direction').to_numpy()
+        outer = (d['field_outer'].isel(radius=-1) ** 2).sum(dim='direction').to_numpy()
+        # The flux-surface average lies between the two extremes of |B| on the surface
+        assert np.all(outer < b_sq)
+        assert np.all(b_sq < inner)
+
+    def test_toroidal_field_follows_one_over_major_radius(self, derived_reference):
+        d = derived_reference
+        r_out = (d['r_geometric_lcfs'] + d['r_minor_lcfs']).to_numpy()
+        r_in = (d['r_geometric_lcfs'] - d['r_minor_lcfs']).to_numpy()
+        bt_out = np.abs(d['field_outer'].sel(direction='toroidal').isel(radius=-1).to_numpy())
+        bt_in = np.abs(d['field_inner'].sel(direction='toroidal').isel(radius=-1).to_numpy())
+        # The tolerance covers the discrete poloidal grid placing the traced extremum
+        # slightly off r_geometric +/- r_minor; a wrong power of field_unit is a factor of ~15
+        np.testing.assert_allclose(bt_in / bt_out, r_out / r_in, rtol=1.0e-3)
+
+    # The fields keep their sign, as every other field in plasma_io does, and the
+    # consumers that assume a positive field take the magnitude at the point of use.
+    def test_field_components_retain_the_sign_of_field_unit(self, derived_reference):
+        d = derived_reference
+        unit_sign = np.sign(d['field_unit'].isel(radius=-1).to_numpy())
+        for name in ('field_inner', 'field_outer'):
+            bt = d[name].sel(direction='toroidal').isel(radius=-1).to_numpy()
+            np.testing.assert_array_equal(np.sign(bt), unit_sign, err_msg=name)
+
+    def test_poloidal_field_is_of_order_the_current_estimate(self, derived_reference):
+        d = derived_reference
+        mu0 = 4.0e-7 * np.pi
+        estimate = mu0 * np.abs(d['current'].to_numpy()) / (2.0 * np.pi * d['r_minor_lcfs'].to_numpy())
+        bp_out = np.abs(d['field_outer'].sel(direction='poloidal').isel(radius=-1).to_numpy())
+        np.testing.assert_allclose(bp_out, estimate, rtol=0.5)

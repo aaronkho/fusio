@@ -842,8 +842,11 @@ class plasma_io(io):
             newvars['mxh_mass_main_average'] = (['time'], mxh_mass_ave)
 
             newvars['field_squared'] = (['time', 'radius', 'direction'], b2 * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
-            newvars['field_inner'] = (['time', 'radius', 'direction'], b_inner * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
-            newvars['field_outer'] = (['time', 'radius', 'direction'], b_outer * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
+            # b_inner and b_outer are normalized to field_unit, so the physical field carries one
+            # power of it, unlike field_squared above. The sign is retained, as it is for every other
+            # field in this class; consumers that assume a positive field take the magnitude there.
+            newvars['field_inner'] = (['time', 'radius', 'direction'], b_inner * np.expand_dims(data['field_unit'].to_numpy(), axis=-1))
+            newvars['field_outer'] = (['time', 'radius', 'direction'], b_outer * np.expand_dims(data['field_unit'].to_numpy(), axis=-1))
 
             if side == 'output':
                 self.update_output_coords(newcoords)
