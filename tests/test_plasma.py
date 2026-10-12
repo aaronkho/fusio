@@ -136,10 +136,11 @@ class TestPlasmaToGacodeConversion:
             rtol=1e-10,
         )
 
-    def test_current_preserved(self, plasma_state, plasma_as_gacode):
+    def test_current_unit_conversion(self, plasma_state, plasma_as_gacode):
+        # plasma_io holds the current in A, GACODE in MA
         np.testing.assert_allclose(
             plasma_as_gacode.input['current'].to_numpy(),
-            plasma_state.input['current'].to_numpy(),
+            1.0e-6 * plasma_state.input['current'].to_numpy(),
             rtol=1e-10,
         )
 
@@ -221,3 +222,270 @@ class TestDerivedGeometry:
         assert np.median(err) < 1.0e-3
         assert np.max(err) < 1.0e-2
 
+
+
+def _plasma_with_flipped_signs(gacode_file_path, keys):
+    g = gacode_io(input=gacode_file_path)
+    d = g.input
+    for k in keys:
+        if k in d:
+            d[k] = -d[k]
+    g.input = d
+    p = plasma_io.from_gacode(g, side='input')
+    p.compute_derived_quantities(side='input')
+    return p
+
+
+@pytest.fixture(scope='module')
+def derived_reference(gacode_file_path):
+    return _plasma_with_flipped_signs(gacode_file_path, []).input
+
+
+SIGN_FLIPS = {
+    'all': ['polflux', 'q', 'current', 'bcentr', 'torfluxa'],
+    'current': ['current', 'polflux'],
+    'field': ['bcentr', 'torfluxa'],
+    'safety_factor': ['q'],
+    'poloidal_flux': ['polflux'],
+}
+
+
+class TestSignAgnostic:
+    # plasma_io retains the input field signs, while every derived magnitude stays independent of them
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_input_signs_retained(self, gacode_file_path, keys):
+        g = gacode_io(input=gacode_file_path).input
+        d = _plasma_with_flipped_signs(gacode_file_path, keys).input
+        flipped = lambda k: -1.0 if k in keys else 1.0
+        assert np.sign(d['magnetic_flux'].sel(direction='poloidal').isel(radius=-1)).item() == flipped('polflux') * np.sign(g['polflux'].isel(rho=-1)).item()
+        assert np.sign(d['magnetic_flux'].sel(direction='toroidal').isel(radius=-1)).item() == flipped('torfluxa') * np.sign(g['torfluxa']).item()
+        assert np.sign(d['safety_factor'].isel(radius=-1)).item() == flipped('q') * np.sign(g['q'].isel(rho=-1)).item()
+        assert np.sign(d['field_axis']).item() == flipped('bcentr') * np.sign(g['bcentr']).item()
+        assert np.sign(d['current']).item() == flipped('current') * np.sign(g['current']).item()
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_derived_magnitudes_unchanged(self, gacode_file_path, derived_reference, keys):
+        d = _plasma_with_flipped_signs(gacode_file_path, keys).input
+        for var in derived_reference.data_vars:
+            if derived_reference[var].dtype.kind != 'f':
+                continue
+            ref = np.abs(derived_reference[var].to_numpy())
+            new = np.abs(d[var].to_numpy())
+            np.testing.assert_array_equal(np.isfinite(new), np.isfinite(ref), err_msg=var)
+            mask = np.isfinite(ref)
+            np.testing.assert_allclose(new[mask], ref[mask], rtol=1.0e-9, atol=1.0e-12 * np.max(ref[mask], initial=0.0), err_msg=var)
+
+    def test_normalized_flux_ignores_axis_offset(self, derived_reference):
+        flux_norm = derived_reference['magnetic_flux_norm'].to_numpy()
+        assert np.allclose(flux_norm[:, 0, :], 0.0)
+        assert np.allclose(flux_norm[:, -1, :], 1.0)
+        assert np.all(np.isfinite(derived_reference['rho_norm'].to_numpy()))
+
+
+class TestCocos:
+    # Convention implied by the signs of Ip, B0, the outward change in psi and q, assuming right-handed (R, phi, Z):
+    # sigma_Bp = sign(dpsi) * sign(Ip) and sigma_rhothetaphi = sign(q) * sign(Ip) * sign(B0)
+    COCOS_FROM_SIGMAS = {(1, 1): 1, (-1, -1): 3, (1, -1): 5, (-1, 1): 7}
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_cocos_recorded_from_gacode_signs(self, gacode_file_path, keys):
+        g = gacode_io(input=gacode_file_path).input
+        flip = lambda k: -1 if k in keys else 1
+        s_ip = flip('current') * np.sign(g['current'].isel(n=0)).item()
+        s_bt = flip('bcentr') * np.sign(g['bcentr'].isel(n=0)).item()
+        s_psi = flip('polflux') * np.sign((g['polflux'].isel(n=0, rho=-1) - g['polflux'].isel(n=0, rho=0))).item()
+        s_q = flip('q') * np.sign(g['q'].isel(n=0, rho=-1)).item()
+        expected = self.COCOS_FROM_SIGMAS[(int(s_psi * s_ip), int(s_q * s_ip * s_bt))]
+        assert _plasma_with_flipped_signs(gacode_file_path, keys).input_cocos == expected
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_toroidal_flux_follows_field_without_reference(self, gacode_file_path, keys):
+        # Without torfluxa, Phi is rebuilt from q and psi with the COCOS sign, which must follow the sign of B0
+        g = gacode_io(input=gacode_file_path)
+        d = g.input
+        for k in keys:
+            d[k] = -d[k]
+        g.input = d.drop_vars('torfluxa')
+        p = plasma_io.from_gacode(g, side='input')
+        phi = p.input['magnetic_flux'].sel(direction='toroidal').isel(time=0, radius=-1)
+        assert np.sign(phi).item() == np.sign(p.input['field_axis'].isel(time=0)).item()
+
+    def test_cocos_inferred_when_not_recorded(self, gacode_file_path, derived_reference):
+        expected = _plasma_with_flipped_signs(gacode_file_path, []).input_cocos
+        ds = derived_reference.copy()
+        ds.attrs = {k: v for k, v in derived_reference.attrs.items() if k != 'cocos'}
+        p = plasma_io()
+        p.input = ds
+        assert 'cocos' not in p.input.attrs
+        assert p.input_cocos == expected
+
+    @pytest.mark.parametrize('name, per_radian', [('sample_cocos02_input.geqdsk', True), ('sample_cocos11_input.geqdsk', False)])
+    def test_psi_per_radian_detected_from_ampere_law(self, name, per_radian):
+        from pathlib import Path
+        from fusio.utils.eqdsk_tools import read_eqdsk, detect_psi_per_radian
+        assert detect_psi_per_radian(read_eqdsk(Path(__file__).parent / 'data' / name)) is per_radian
+
+    def test_eqdsk_insertion_independent_of_source_cocos(self, gacode_file_path):
+        # The same equilibrium given per radian (COCOS 2) and in Wb (COCOS 11) must produce the same plasma state
+        states = []
+        for name in ['sample_cocos02_input.geqdsk', 'sample_cocos11_input.geqdsk']:
+            p = plasma_io.from_gacode(gacode_io(input=gacode_file_path), side='input')
+            p.add_geometry_from_eqdsk(gacode_file_path.parent / name, side='input')
+            states.append(p.input)
+        for var in ['magnetic_flux', 'safety_factor', 'contour', 'r_minor', 'poloidal_flux_map']:
+            np.testing.assert_allclose(states[1][var].to_numpy(), states[0][var].to_numpy(), rtol=1.0e-8, atol=1.0e-8 * float(np.max(np.abs(states[0][var]))), err_msg=var)
+
+    def test_current_in_amps_from_gacode(self, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        p = plasma_io.from_gacode(g, side='input')
+        np.testing.assert_allclose(p.input['current'].to_numpy(), 1.0e6 * g.input['current'].to_numpy(), rtol=1e-12)
+        back = p.to('gacode', side='input')
+        np.testing.assert_allclose(back.input['current'].to_numpy(), g.input['current'].to_numpy(), rtol=1e-12)
+
+    def test_eqdsk_field_current_and_profiles(self, gacode_file_path):
+        from fusio.utils.eqdsk_tools import read_eqdsk
+        eqdsk = gacode_file_path.parent / 'sample_cocos02_input.geqdsk'
+        eq = read_eqdsk(eqdsk)
+        p = plasma_io.from_gacode(gacode_io(input=gacode_file_path), side='input')
+        p.add_geometry_from_eqdsk(eqdsk, side='input')
+        # Field and its reference radius come together, and the current in A
+        assert np.isclose(float(np.atleast_1d(p.input.attrs['rcentr'])[0]), eq['rcentr'])
+        assert np.isclose(abs(p.input['field_axis'].isel(time=0).item()), abs(eq['bcentr']))
+        assert np.isclose(abs(p.input['current'].isel(time=0).item()), abs(eq['cpasma']))
+        # F, p, FF' and p' follow the EQDSK from axis to boundary
+        f = p.input['diamagnetic_function'].isel(time=0).to_numpy()
+        pres = p.input['pressure_equilibrium'].isel(time=0).to_numpy()
+        assert np.isclose(abs(f[0]), abs(eq['fpol'][0]), rtol=1e-6) and np.isclose(abs(f[-1]), abs(eq['fpol'][-1]), rtol=1e-6)
+        assert np.isclose(pres[0], eq['pres'][0], rtol=1e-6) and np.isclose(pres[-1], eq['pres'][-1], rtol=1e-6, atol=1e-6 * eq['pres'][0])
+        for var in ['f_df_dpsi', 'dpressure_dpsi']:
+            assert np.all(np.isfinite(p.input[var].to_numpy())), var
+
+    def test_poloidal_flux_map_overwrite(self, gacode_file_path):
+        eqdsk = gacode_file_path.parent / 'sample_cocos02_input.geqdsk'
+        p = plasma_io.from_gacode(gacode_io(input=gacode_file_path), side='input')
+        p.add_geometry_from_eqdsk(eqdsk, side='input')
+        psimap = p.input['poloidal_flux_map'].to_numpy().copy()
+        assert psimap.shape == (1, p.input['r_map'].size, p.input['z_map'].size)
+        assert np.all(np.isfinite(psimap))
+        # Flux at the traced magnetic axis matches the axis value of the 1D poloidal flux
+        psi_axis = p.input['magnetic_flux'].sel(direction='poloidal').isel(time=0, radius=0).item()
+        r_axis = p.input['contour'].sel(grid='r').isel(time=0, radius=0, poloidal_index=0).item()
+        z_axis = p.input['contour'].sel(grid='z').isel(time=0, radius=0, poloidal_index=0).item()
+        psi_at_axis = p.input['poloidal_flux_map'].isel(time=0).interp(r_map=r_axis, z_map=z_axis, method='cubic').item()
+        psi_span = abs(p.input['magnetic_flux'].sel(direction='poloidal').isel(time=0, radius=-1).item() - psi_axis)
+        assert abs(psi_at_axis - psi_axis) < 1.0e-3 * psi_span
+        p.update_input_data_vars({'poloidal_flux_map': (['time', 'r_map', 'z_map'], np.full(psimap.shape, 7.0))})
+        p.add_geometry_from_eqdsk(eqdsk, side='input', overwrite=False)
+        assert np.all(p.input['poloidal_flux_map'].to_numpy() == 7.0)
+        p.add_geometry_from_eqdsk(eqdsk, side='input')
+        np.testing.assert_array_equal(p.input['poloidal_flux_map'].to_numpy(), psimap)
+
+
+class TestScalings:
+
+    SCALING_FIELDS = (
+        'greenwald_density',
+        'greenwald_fraction',
+        'effective_collisionality_angioni',
+        'confinement_time_scaling_h98',
+        'confinement_time_scaling_h89',
+        'confinement_time_scaling_l97',
+        'power_lh_scaling_martin',
+        'power_lh_ratio',
+        'qstar_uckan',
+        'qstar_iter',
+        'width_scrape_off_layer_brunner',
+        'width_scrape_off_layer_eich14',
+        'width_scrape_off_layer_eich15',
+    )
+
+    # The block was gated on 'bcentr', a GACODE field name that plasma_io never stores,
+    # so none of these were ever produced. Guard the gate against regressing to that.
+    def test_scalings_are_produced(self, derived_reference):
+        missing = [key for key in self.SCALING_FIELDS if key not in derived_reference]
+        assert not missing
+
+    def test_greenwald_density_matches_closed_form(self, derived_reference):
+        d = derived_reference
+        current_ma = 1.0e-6 * np.abs(d['current'].to_numpy())
+        expected = 1.0e20 * current_ma / (np.pi * d['r_minor_lcfs'].to_numpy() ** 2)
+        np.testing.assert_allclose(d['greenwald_density'].to_numpy(), expected, rtol=1.0e-12)
+        np.testing.assert_allclose(
+            d['greenwald_fraction'].to_numpy(),
+            d['density_e_volume_average'].to_numpy() / expected,
+            rtol=1.0e-12,
+        )
+
+    # The scalings are empirical fits in MA, MW and 10^19 or 10^20 m^-3, while plasma_io
+    # stores SI, so a missing conversion shows up as a power of ten rather than a crash.
+    def test_scalings_are_physical(self, derived_reference):
+        d = derived_reference
+        assert 1.0e18 < d['greenwald_density'].to_numpy().min()
+        assert d['greenwald_density'].to_numpy().max() < 1.0e22
+        for key in ('confinement_time_scaling_h98', 'confinement_time_scaling_h89', 'confinement_time_scaling_l97'):
+            tau = d[key].to_numpy()
+            assert np.all((tau > 1.0e-3) & (tau < 1.0e2)), key
+        qstar = d['qstar_uckan'].to_numpy()
+        assert np.all((qstar > 0.5) & (qstar < 50.0))
+
+    def test_low_density_lh_correction_only_fires_below_the_minimum(self, derived_reference):
+        # The Martin threshold rises below the density minimum and is unmodified above it
+        d = derived_reference
+        p_lh = (
+            2.15
+            * (1.0e-20 * d['density_e_volume_average']) ** (0.782)
+            * np.abs(d['field_axis']) ** (0.772)
+            * d['r_minor_lcfs'] ** (0.975)
+            * d['r_geometric_lcfs'] ** (0.999)
+            * (2.0 / d['mass_main_average']) ** (1.11)
+        ).to_numpy()
+        assert np.all(d['power_lh_scaling_martin'].to_numpy() >= p_lh * (1.0 - 1.0e-12))
+
+
+class TestFieldComponents:
+
+    # b_inner and b_outer are normalized to field_unit, so the physical field carries
+    # one power of it, not the two that field_squared legitimately carries.
+    def test_outboard_field_scales_with_one_power_of_field_unit(self, derived_reference):
+        d = derived_reference
+        b_sq = d['field_squared'].isel(radius=-1).sum(dim='direction').to_numpy()
+        inner = (d['field_inner'].isel(radius=-1) ** 2).sum(dim='direction').to_numpy()
+        outer = (d['field_outer'].isel(radius=-1) ** 2).sum(dim='direction').to_numpy()
+        # The flux-surface average lies between the two extremes of |B| on the surface
+        assert np.all(outer < b_sq)
+        assert np.all(b_sq < inner)
+
+    def test_toroidal_field_follows_one_over_major_radius(self, derived_reference):
+        d = derived_reference
+        r_out = (d['r_geometric_lcfs'] + d['r_minor_lcfs']).to_numpy()
+        r_in = (d['r_geometric_lcfs'] - d['r_minor_lcfs']).to_numpy()
+        bt_out = np.abs(d['field_outer'].sel(direction='toroidal').isel(radius=-1).to_numpy())
+        bt_in = np.abs(d['field_inner'].sel(direction='toroidal').isel(radius=-1).to_numpy())
+        # The tolerance covers the discrete poloidal grid placing the traced extremum
+        # slightly off r_geometric +/- r_minor; a wrong power of field_unit is a factor of ~15
+        np.testing.assert_allclose(bt_in / bt_out, r_out / r_in, rtol=1.0e-3)
+
+    # The fields keep their sign, as every other field in plasma_io does, and the
+    # consumers that assume a positive field take the magnitude at the point of use.
+    def test_field_components_retain_the_sign_of_field_unit(self, derived_reference):
+        d = derived_reference
+        unit_sign = np.sign(d['field_unit'].isel(radius=-1).to_numpy())
+        for name in ('field_inner', 'field_outer'):
+            bt = d[name].sel(direction='toroidal').isel(radius=-1).to_numpy()
+            np.testing.assert_array_equal(np.sign(bt), unit_sign, err_msg=name)
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_scrape_off_layer_widths_stay_positive_under_sign_flips(self, gacode_file_path, keys):
+        d = _plasma_with_flipped_signs(gacode_file_path, keys).input
+        for name in ('width_scrape_off_layer_brunner', 'width_scrape_off_layer_eich14', 'width_scrape_off_layer_eich15'):
+            width = d[name].to_numpy()
+            assert np.all(np.isfinite(width)), name
+            assert np.all(width > 0.0), name
+
+    def test_poloidal_field_is_of_order_the_current_estimate(self, derived_reference):
+        d = derived_reference
+        mu0 = 4.0e-7 * np.pi
+        estimate = mu0 * np.abs(d['current'].to_numpy()) / (2.0 * np.pi * d['r_minor_lcfs'].to_numpy())
+        bp_out = np.abs(d['field_outer'].sel(direction='poloidal').isel(radius=-1).to_numpy())
+        np.testing.assert_allclose(bp_out, estimate, rtol=0.5)

@@ -120,6 +120,13 @@ class TestPlasmaTools():
         grad_q = pt.calc_grad_q_from_s_and_q(s, q, rmin)
         xr.testing.assert_allclose(grad_q, dimensionless_2ion_plasma_state['grad_safety_factor_circular'])
 
+    def test_calc_s_from_q_and_grad_q(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
+        q = dimensionless_2ion_plasma_state['safety_factor_circular']
+        grad_q = dimensionless_2ion_plasma_state['grad_safety_factor_circular']
+        rmin = physical_2ion_plasma_state['r_minor']
+        s = pt.calc_s_from_q_and_grad_q(q, grad_q, rmin)
+        xr.testing.assert_allclose(s, dimensionless_2ion_plasma_state['magnetic_shear_circular'])
+
     def test_calc_s_circular_from_grad_bp(self, physical_2ion_plasma_state, dimensionless_2ion_plasma_state):
         grad_bp = physical_2ion_plasma_state['grad_field_geometric'].sel(direction='poloidal', drop=True)
         bp = physical_2ion_plasma_state['field_geometric'].sel(direction='poloidal', drop=True)

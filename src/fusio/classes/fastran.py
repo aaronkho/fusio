@@ -233,13 +233,13 @@ class fastran_io(io):
                 temp_data = xr.open_dataset(load_path, engine='netcdf4', decode_times=False)
                 ntime = int(temp_data.sizes.get('time', 0))
                 coords: MutableMapping[str, Any] = {}
-                time = np.arange(ntime).astype(float)
+                time: NDArray = np.arange(ntime).astype(float)
                 if 'time' in temp_data:
                     time = temp_data['time'].to_numpy().astype(float)
                     unset = ~np.isfinite(time) | (np.abs(time) >= self.netcdf_fill_tolerance)
                     if np.any(unset):
                         logger.warning(f'{self.format} output file does not define a plasma time, using slice index instead...')
-                        time = np.where(unset, np.arange(len(time)).astype(float), time)  # type: ignore[assignment]
+                        time = np.where(unset, np.arange(len(time)).astype(float), time)
                 coords['time'] = (['time'], time, {'units': self.dim_vars['time'][0], 'description': self.dim_vars['time'][1]})
                 if 'rho' in temp_data:
                     coords['rho'] = (['rho'], temp_data['rho'].to_numpy(), {'units': self.dim_vars['rho'][0], 'description': self.dim_vars['rho'][1]})

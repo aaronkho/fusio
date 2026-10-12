@@ -16,12 +16,17 @@ from ..utils.plasma_tools import define_ion_species
 from ..utils.math_tools import (
     vectorized_numpy_derivative,
     vectorized_numpy_integration,
+    vectorized_numpy_oriented_integration,
     vectorized_numpy_interpolation,
     vectorized_numpy_find,
 )
 from ..utils.eqdsk_tools import (
     read_eqdsk,
+    define_cocos,
     define_cocos_converter,
+    determine_cocos_from_signs,
+    detect_psi_per_radian,
+    convert_cocos,
     trace_contour_with_megpy,
     convert_mxh_to_contour_megpy,
     convert_contour_to_mxh_megpy,
@@ -61,6 +66,11 @@ class plasma_io(io):
         'current_source',
         'heat_exchange_ei',
         'contour',
+        'poloidal_flux_map',
+        'diamagnetic_function',
+        'pressure_equilibrium',
+        'f_df_dpsi',
+        'dpressure_dpsi',
     ]
     units: Final[Mapping[str, str]] = {
         'field_axis': 'T',
@@ -82,6 +92,11 @@ class plasma_io(io):
         'current_source': 'A/m^2',
         'heat_exchange_ei': 'W/m^3',
         'contour': 'm',
+        'poloidal_flux_map': 'Wb/radian',
+        'diamagnetic_function': 'T*m',
+        'pressure_equilibrium': 'Pa',
+        'f_df_dpsi': 'T^2*m^2*radian/Wb',
+        'dpressure_dpsi': 'Pa*radian/Wb',
     }
     constants: Final[Mapping[str, float]] = {
         'e_si': 1.60218e-19,  # C
@@ -108,6 +123,9 @@ class plasma_io(io):
         'bootstrap',
         'fusion',
     ]
+    # Field signs are stored as given by the source, with the COCOS convention they follow recorded in the
+    # 'cocos' attribute of each side. Fluxes are always stored per radian, so this is always one of COCOS 1-8.
+    default_cocos: Final[int] = 1
 
 
     def __init__(
@@ -133,6 +151,46 @@ class plasma_io(io):
         if opath is not None:
             self.read(opath, side='output')
         self.autoformat()
+
+
+    @property
+    def input_cocos(
+        self,
+    ) -> int:
+        return self._get_cocos(self.input)
+
+
+    @property
+    def output_cocos(
+        self,
+    ) -> int:
+        return self._get_cocos(self.output)
+
+
+    def _get_cocos(
+        self,
+        data: xr.Dataset,
+    ) -> int:
+        cocos = data.attrs.get('cocos', None)
+        if cocos is None and all(key in data for key in ['current', 'field_axis', 'magnetic_flux', 'safety_factor']):
+            # Infer from the field signs when not recorded, e.g. data written before the attribute existed
+            psi = data['magnetic_flux'].sel(direction='poloidal').isel(time=0).to_numpy()
+            cocos = determine_cocos_from_signs(
+                float(data['current'].isel(time=0)),
+                float(data['field_axis'].isel(time=0)),
+                float(psi[-1] - psi[0]),
+                float(data['safety_factor'].isel(time=0, radius=-1)),
+            )
+        return int(cocos) if cocos else self.default_cocos
+
+
+    def _flux_sign(
+        self,
+        data: xr.Dataset,
+    ) -> int:
+        '''Sign relating q to dPhi/dpsi (both per radian) in the COCOS convention of the given data.'''
+        cocos = define_cocos(self._get_cocos(data))
+        return cocos['sBp'] * cocos['spol']
 
 
     def read(
@@ -272,13 +330,18 @@ class plasma_io(io):
         trace_last: bool = True,
         add_field: bool = True,
         add_current: bool = True,
+        overwrite: bool = True,
     ) -> None:
         '''Trace flux surfaces from an EQDSK file and add MXH shape data.
+
+        The poloidal flux map and the F, p, FF' and p' profiles of the EQDSK are stored alongside the traced geometry.
 
         Args:
             path: Path to the EQDSK file.
             side: ``'input'`` or ``'output'`` dataset to populate.
-            overwrite: If ``True``, overwrite existing shape data.
+            add_field: If ``True``, take the vacuum field and its reference radius (``rcentr`` attribute) from the EQDSK.
+            add_current: If ``True``, take the plasma current from the EQDSK.
+            overwrite: If ``True``, replace any poloidal flux map already stored with the one from this EQDSK, otherwise keep the existing map.
         '''
         data = self.input if side == 'input' else self.output
         newcoords: MutableMapping[str, Any] = {}
@@ -286,13 +349,20 @@ class plasma_io(io):
         if isinstance(path, (str, Path)) and 'magnetic_flux' in data:
             t = data['time'].sel(time=time, method='nearest').to_numpy().item(0) if isinstance(time, (float, int)) else data['time'].isel(time=0).to_numpy().item(0)
             eqdsk_data = read_eqdsk(path)
+            # Bring the EQDSK into the COCOS convention already used by this plasma state, so the state never mixes conventions,
+            # including the per radian normalization of psi, which is identified from Ampere's law around the boundary
+            per_radian = detect_psi_per_radian(eqdsk_data)
+            if per_radian is None:
+                logger.warning(f'Could not determine whether psi in {path} is per radian, assuming it is')
+            eqdsk_cocos = determine_cocos_from_signs(eqdsk_data['cpasma'], eqdsk_data['bcentr'], eqdsk_data['sibdry'] - eqdsk_data['simagx'], eqdsk_data['qpsi'][-1], per_radian=per_radian is not False)
+            if eqdsk_cocos:
+                eqdsk_data = convert_cocos(eqdsk_data, eqdsk_cocos, self._get_cocos(data))
             time_index = list(data['time'].values).index(t)
             # rho = np.sqrt(data['magnetic_flux'] / data['magnetic_flux'].isel(radius=-1)).sel(direction='toroidal', drop=True).isel(time=time_index, drop=True)
             # if data.attrs.get('radius', '') == 'rho_tor_norm':
             #     rho = data['radius'].to_numpy()
             psip = data['magnetic_flux'].sel(direction='poloidal', drop=True).isel(time=time_index, drop=True)
             psip = (eqdsk_data['sibdry'] - eqdsk_data['simagx']) * (psip - psip.isel(radius=0)) / (psip.isel(radius=-1) - psip.isel(radius=0)) + eqdsk_data['simagx']
-            psip[{'radius': 0}] = 0.0  # Pin the axis exactly, mirroring the initial=0.0 pin that fixes torflux's axis value below
             psivec = np.linspace(eqdsk_data['simagx'], eqdsk_data['sibdry'], eqdsk_data['nr'])
             rvec = np.linspace(eqdsk_data['rleft'], eqdsk_data['rleft'] + eqdsk_data['rdim'], eqdsk_data['nr'])
             zvec = np.linspace(eqdsk_data['zmid'] - 0.5 * eqdsk_data['zdim'], eqdsk_data['zmid'] + 0.5 * eqdsk_data['zdim'], eqdsk_data['nz'])
@@ -305,27 +375,36 @@ class plasma_io(io):
                 psivec[0] = eqdsk_data['simagx'] - 1.0e-6
             elif eqdsk_data['simagx'] < eqdsk_data['sibdry'] and psivec[0] <= eqdsk_data['simagx']:
                 psivec[0] = eqdsk_data['simagx'] + 1.0e-6
-            sign = 1.0
+            # Interpolation is done on an outward-increasing axis, as the flux may decrease outward in this convention
             qpsi = eqdsk_data['qpsi']
-            polflux = copy.deepcopy(psivec)
-            if (polflux[-1] - polflux[0]) < 0.0:
-                sign = -1.0
-                polflux = -polflux
-            torflux = sign * vectorized_numpy_integration(qpsi, polflux)
-            psit = np.interp(psip, polflux, torflux)
+            orient = -1.0 if psivec[-1] < psivec[0] else 1.0
+            torflux = self._flux_sign(data) * vectorized_numpy_oriented_integration(qpsi, psivec)
+            psit = np.interp(orient * psip, orient * psivec, torflux)
             flux = data['magnetic_flux']
             flux.loc[dict(time=t, direction='poloidal')] = psip
             flux.loc[dict(time=t, direction='toroidal')] = psit
             newvars['magnetic_flux'] = (['time', 'radius', 'direction'], flux.to_numpy())
             if 'safety_factor' in data:
                 safety_factor = data['safety_factor']
-                q = np.interp(psip, polflux, qpsi)
+                q = np.interp(orient * psip, orient * psivec, qpsi)
                 safety_factor.loc[dict(time=t)] = q
                 newvars['safety_factor'] = (['time', 'radius'], safety_factor.to_numpy())
+            # Equilibrium profiles of the EQDSK, as functions of psi in the convention of this plasma state
+            for key, var in [('fpol', 'diamagnetic_function'), ('pres', 'pressure_equilibrium'), ('ffprime', 'f_df_dpsi'), ('pprime', 'dpressure_dpsi')]:
+                if key in eqdsk_data and len(eqdsk_data[key]) == len(psivec):
+                    values = data[var].to_numpy().copy() if var in data else np.full((len(data['time']), len(data['radius'])), np.nan)
+                    values[time_index] = np.interp(orient * psip, orient * psivec, eqdsk_data[key])
+                    newvars[var] = (['time', 'radius'], values)
+            rcentr = data.attrs.get('rcentr', None)
             if add_field:
                 baxis = data['field_axis']
                 baxis.loc[dict(time=t)] = eqdsk_data['bcentr']
                 newvars['field_axis'] = (['time'], baxis.to_numpy())
+                # The field is given at the EQDSK reference radius, which then becomes that of this time slice
+                rlist = np.atleast_1d(rcentr if rcentr is not None else eqdsk_data['rcentr']).astype(float)
+                rlist = rlist if len(rlist) == len(data['time']) else np.full(len(data['time']), float(rlist[0]))
+                rlist[time_index] = float(eqdsk_data['rcentr'])
+                rcentr = float(rlist[0]) if len(rlist) == 1 else [float(r) for r in rlist]
             if add_current:
                 cur = data['current']
                 cur.loc[dict(time=t)] = eqdsk_data['cpasma']
@@ -397,6 +476,19 @@ class plasma_io(io):
                     if rmin_arr[it, ir] <= rmin_arr[it, ir - 1]:
                         rmin_arr[it, ir] = rmin_arr[it, ir - 1] + 1.0e-6
             newvars['r_minor'] = (['time', 'radius'], rmin_arr)
+            # Keep the poloidal flux map itself, already in the convention of this plasma state, on its rectangular (R, Z) grid
+            if overwrite or 'poloidal_flux_map' not in data:
+                if 'poloidal_flux_map' in data:
+                    data = data.drop_vars(['poloidal_flux_map', 'r_map', 'z_map'])  # Grid may differ, so replace the map outright
+                    if side == 'input':
+                        self.input = data
+                    else:
+                        self.output = data
+                psimap = np.full((len(data['time']), len(rvec), len(zvec)), np.nan)
+                psimap[time_index] = eqdsk_data['psi'].T  # EQDSK stores psi as (nz, nr)
+                newcoords['r_map'] = rvec
+                newcoords['z_map'] = zvec
+                newvars['poloidal_flux_map'] = (['time', 'r_map', 'z_map'], psimap)
         if newvars:
             if side == 'input':
                 self.update_input_coords(newcoords)
@@ -404,6 +496,13 @@ class plasma_io(io):
             else:
                 self.update_output_coords(newcoords)
                 self.update_output_data_vars(newvars)
+            if add_field and rcentr is not None:
+                data = self.input if side == 'input' else self.output
+                data.attrs['rcentr'] = rcentr
+                if side == 'input':
+                    self.input = data
+                else:
+                    self.output = data
 
 
     def add_safety_factor_profile(
@@ -420,13 +519,17 @@ class plasma_io(io):
             fill = 'poloidal' if base == 'toroidal' else 'toroidal'
             root_idx = self.directions.index(root)
             fill_idx = self.directions.index(fill)
-            q_values = vectorized_numpy_interpolation(data['magnetic_flux'].sel(direction=root).to_numpy(), np.asarray(r), np.asarray(q), extrapolate=True)
+            # Interpolate on an axis oriented to increase outward, since the flux may decrease outward in the source convention
+            r_arr = np.asarray(r)
+            orient = np.expand_dims(np.where(r_arr[..., -1] < r_arr[..., 0], -1.0, 1.0), axis=-1)
+            q_values = vectorized_numpy_interpolation(orient * data['magnetic_flux'].sel(direction=root).to_numpy(), orient * r_arr, np.asarray(q), extrapolate=True)
             newvars['safety_factor'] = (['time', 'radius'], q_values)
             flux = data['magnetic_flux'].to_numpy()
+            sign = self._flux_sign(data)  # q = sign * dPhi/dpsi in the COCOS convention of this side
             if fill == 'toroidal':
-                flux[..., fill_idx] = vectorized_numpy_integration(q_values, flux[..., root_idx])
+                flux[..., fill_idx] = sign * vectorized_numpy_oriented_integration(q_values, flux[..., root_idx])
             else:
-                flux[..., fill_idx] = vectorized_numpy_integration(1.0 / q_values, flux[..., root_idx])
+                flux[..., fill_idx] = sign * vectorized_numpy_oriented_integration(1.0 / q_values, flux[..., root_idx])
             newvars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
             if side == 'input':
                 self.update_input_data_vars(newvars)
@@ -434,6 +537,35 @@ class plasma_io(io):
                 self.update_output_data_vars(newvars)
         else:
             logger.error(f'No magnetic flux data found in {self.format} data! Aborting safety factor insertion...')
+
+
+    def match_toroidal_flux_sign(
+        self,
+        reference: ArrayLike,
+        side: str = 'input',
+    ) -> None:
+        '''Flip the toroidal magnetic flux per time slice to share the sign of a reference value.
+
+        Used when the toroidal flux is reconstructed from q and the poloidal flux, whose
+        product does not necessarily share the sign convention of the source data.
+
+        Args:
+            reference: Original toroidal flux values (any shape broadcastable to ``time``).
+            side: ``'input'`` or ``'output'`` dataset to modify.
+        '''
+        data = self.input if side == 'input' else self.output
+        if 'magnetic_flux' in data:
+            flux = data['magnetic_flux'].to_numpy()
+            idx = self.directions.index('toroidal')
+            ref_sign = np.sign(np.broadcast_to(np.asarray(reference, dtype=float).reshape(-1), flux.shape[:1]))
+            cur_sign = np.sign(flux[:, -1, idx])
+            factor = np.where((ref_sign != 0.0) & (cur_sign != 0.0) & (ref_sign != cur_sign), -1.0, 1.0)
+            flux[..., idx] = flux[..., idx] * np.expand_dims(factor, axis=-1)
+            newvars: MutableMapping[str, Any] = {'magnetic_flux': (['time', 'radius', 'direction'], flux)}
+            if side == 'input':
+                self.update_input_data_vars(newvars)
+            else:
+                self.update_output_data_vars(newvars)
 
 
     def _compute_derived_coordinates(
@@ -463,9 +595,12 @@ class plasma_io(io):
             newvars['aspect_ratio_lcfs'] = (['time'], (r_geometric_lcfs / r_minor_lcfs).to_numpy())
             newvars['epsilon'] = (['time', 'radius'], (data['r_minor'] / data['r_geometric']).to_numpy())
             newvars['epsilon_lcfs'] = (['time'], (r_minor_lcfs / r_geometric_lcfs).to_numpy())
-            newvars['magnetic_flux_norm'] = (['time', 'radius', 'direction'], (data['magnetic_flux'] / magnetic_flux_lcfs).to_numpy())
-            newvars['rho'] = (['time', 'radius', 'direction'], ((data['magnetic_flux'] / (0.5 * data['field_axis'])) ** 0.5).to_numpy())
-            newvars['rho_norm'] = (['time', 'radius', 'direction'], ((data['magnetic_flux'] / magnetic_flux_lcfs) ** 0.5).to_numpy())
+            # Referenced to the axis value and sign-independent, since the flux sign and offset depend on the source convention
+            magnetic_flux_axis = data['magnetic_flux'].isel(radius=0)
+            magnetic_flux_norm = ((data['magnetic_flux'] - magnetic_flux_axis) / (magnetic_flux_lcfs - magnetic_flux_axis)).clip(min=0.0)
+            newvars['magnetic_flux_norm'] = (['time', 'radius', 'direction'], magnetic_flux_norm.to_numpy())
+            newvars['rho'] = (['time', 'radius', 'direction'], ((abs(data['magnetic_flux'] - magnetic_flux_axis) / (0.5 * abs(data['field_axis']))) ** 0.5).to_numpy())
+            newvars['rho_norm'] = (['time', 'radius', 'direction'], (magnetic_flux_norm ** 0.5).to_numpy())
             #contour_r = (data['contour'] * np.cos(data['angle_geometric']) + data['r_geometric']).to_numpy()
             #contour_z = (data['contour'] * np.sin(data['angle_geometric']) + data['z_geometric']).to_numpy()
             contour_r = data['contour'].sel(grid='r')
@@ -521,7 +656,7 @@ class plasma_io(io):
             mass_ref = data.get('mass_ref', xr.zeros_like(data['time']) + 2.0)
             length_ref = data.get('length_ref', xr.zeros_like(data['time']) + data['r_minor_lcfs'])
             field_unit = vectorized_numpy_derivative(0.5 * data['r_minor'].to_numpy() ** 2, data['magnetic_flux'].sel(direction='toroidal').to_numpy())
-            safety_factor = vectorized_numpy_derivative(data['magnetic_flux'].sel(direction='toroidal').to_numpy(), data['magnetic_flux'].sel(direction='poloidal').to_numpy())
+            safety_factor = self._flux_sign(data) * vectorized_numpy_derivative(data['magnetic_flux'].sel(direction='toroidal').to_numpy(), data['magnetic_flux'].sel(direction='poloidal').to_numpy())
             safety_factor[..., 0] = 2.0 * safety_factor[..., 1] - safety_factor[..., 2]
             newvars['mass_ref'] = (['time'], mass_ref.to_numpy())
             newvars['mass_main_average'] = (['time'], mass_ave)
@@ -707,8 +842,11 @@ class plasma_io(io):
             newvars['mxh_mass_main_average'] = (['time'], mxh_mass_ave)
 
             newvars['field_squared'] = (['time', 'radius', 'direction'], b2 * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
-            newvars['field_inner'] = (['time', 'radius', 'direction'], b_inner * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
-            newvars['field_outer'] = (['time', 'radius', 'direction'], b_outer * np.expand_dims(data['field_unit'].to_numpy() ** 2, axis=-1))
+            # b_inner and b_outer are normalized to field_unit, so the physical field carries one
+            # power of it, unlike field_squared above. The sign is retained, as it is for every other
+            # field in this class; consumers that assume a positive field take the magnitude there.
+            newvars['field_inner'] = (['time', 'radius', 'direction'], b_inner * np.expand_dims(data['field_unit'].to_numpy(), axis=-1))
+            newvars['field_outer'] = (['time', 'radius', 'direction'], b_outer * np.expand_dims(data['field_unit'].to_numpy(), axis=-1))
 
             if side == 'output':
                 self.update_output_coords(newcoords)
@@ -1159,7 +1297,7 @@ class plasma_io(io):
             #if 'mach' in data:
             #    newvars['mach_vol'] = (['n'], vectorized_numpy_integration((data['mach'] * data['dvolume_dr']).to_numpy(), data['r_minor'].to_numpy())[:, -1] / vol[:, -1])
             newvars['pressure_total_vol_norm_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] / (data['field_axis'] ** 2)).to_numpy())
-            newvars['beta_n_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] * 100.0 * data['r_minor_lcfs'] / (data['field_axis'] * data['current'])).to_numpy())  # pc
+            newvars['beta_n_axis'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] / vol[..., -1]) * (2.0 * self.constants['mu_si'] * 100.0 * data['r_minor_lcfs'] / np.abs(data['field_axis'] * 1.0e-6 * data['current'])).to_numpy())  # pc, current in MA
 
             field_squared_vol = vectorized_numpy_integration(
                 np.transpose((data['field_squared'] * data['dvolume_dr']).to_numpy(), axes=(0, 2, 1)),
@@ -1168,7 +1306,7 @@ class plasma_io(io):
             newvars['field_squared_vol'] = (['time', 'field_direction'], field_squared_vol[..., -1] / np.expand_dims(vol, axis=1)[..., -1])
             newvars['pressure_total_vol_norm_field'] = (['time', 'field_direction'], np.expand_dims((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1], axis=-1) * 2.0 * self.constants['mu_si'] / field_squared_vol[..., -1])
             newvars['pressure_total_vol_norm'] = (['time'], (pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] * 2.0 * self.constants['mu_si'] / np.sum(field_squared_vol, axis=1)[..., -1])
-            newvars['beta_n'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] * 2.0 * self.constants['mu_si'] / np.sum(field_squared_vol, axis=1)[..., -1]) * (100.0 * data['r_minor_lcfs'] * data['field_axis'] / data['current']).to_numpy())  # pc
+            newvars['beta_n'] = (['time'], ((pressure_e_vol + np.sum(pressure_i_vol, axis=1))[..., -1] * 2.0 * self.constants['mu_si'] / np.sum(field_squared_vol, axis=1)[..., -1]) * (100.0 * data['r_minor_lcfs'] * np.abs(data['field_axis'] / (1.0e-6 * data['current']))).to_numpy())  # pc, current in MA
 
             confinement_time_energy = np.where(np.isclose(heating_source_vol[..., -1], 0.0), np.inf, (energy_e_vol + energy_thermal_i_vol)[..., -1] / heating_source_vol[..., -1])
             confinement_time_particle = np.where(np.isclose(np.sum(particle_source_e_vol, axis=-1)[..., -1], 0.0), np.inf, density_e_vol[..., -1] / np.sum(particle_source_e_vol, axis=-1)[..., -1])
@@ -1187,120 +1325,130 @@ class plasma_io(io):
         side: str = 'input',
     ) -> None:
 
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
-        if 'current' in data and 'bcentr' in data:
+        if 'current' in data and 'field_axis' in data:
 
-            greenwald_density = (1.0e14 * data['current'] / (np.pi * data['r_minor_lcfs'] ** 2))
-            newvars['greenwald_density'] = (['time'], greenwald_density.to_numpy())
-            newvars['greenwald_fraction'] = (['time'], (data['density_e_vol'] / greenwald_density).to_numpy())
-            #newvars['greenwald_density_local'] = (['time', 'radius'], (data['density_e'] / greenwald_density).to_numpy())
+            current_ma = 1.0e-6 * abs(data['current'])  # Empirical scalings take the current in MA
 
-            newvars['effective_collisionality_angioni'] = (['time', 'radius'], (data['effective_charge_vol'] * data['r_geometric'] * 0.1 * data['density_e'] * data['temperature_e'] ** (-2)).to_numpy())
+            if all(key in data for key in ('r_minor_lcfs', 'density_e_volume_average')):
+                greenwald_density = (1.0e20 * current_ma / (np.pi * data['r_minor_lcfs'] ** 2))  # The limit is I[MA] / (pi a^2) in 10^20 m^-3
+                newvars['greenwald_density'] = (['time'], greenwald_density.to_numpy())
+                newvars['greenwald_fraction'] = (['time'], (data['density_e_volume_average'] / greenwald_density).to_numpy())
+                #newvars['greenwald_density_local'] = (['time', 'radius'], (data['density_e'] / greenwald_density).to_numpy())
 
-            newvars['confinement_time_scaling_h98'] = (['time'], (
-                0.0562
-                * data['current'] ** (0.93)
-                * data['r_geometric_lcfs'] ** (1.97)
-                * data['kappa'].isel(radius=-1) ** (0.78)
-                * data['epsilon_lcfs'] ** (0.58)
-                * data['field_axis'] ** (0.15)
-                * (1.0e-19 * data['density_e_line_average']) ** (0.41)
-                * data['mass_main_average'] ** (0.19)
-                * data['power_input'] ** (-0.69)
-            ).to_numpy())
-            newvars['confinement_time_scaling_h89'] = (['time'], (
-                0.048
-                * data['current'] ** (0.85)
-                * data['r_geometric_lcfs'] ** (1.50)
-                * data['kappa'].isel(radius=-1) ** (0.50)
-                * data['epsilon_lcfs'] ** (0.30)
-                * data['field_axis'] ** (0.20)
-                * (1.0e-20 * data['density_e_line_average']) ** (0.10)
-                * data['mass_main_average'] ** (0.50)
-                * data['power_input'] ** (-0.50)
-            ).to_numpy())
-            newvars['confinement_time_scaling_l97'] = (['time'], (
-                0.023
-                * data['current'] ** (0.96)
-                * data['r_geometric_lcfs'] ** (1.83)
-                * data['kappa'].isel(radius=-1) ** (0.64)
-                * data['epsilon_lcfs'] ** (0.06)
-                * data['field_axis'] ** (0.03)
-                * (1.0e-19 * data['density_e_line_average']) ** (0.40)
-                * data['mass_main_average'] ** (0.20)
-                * data['power_input'] ** (-0.73)
-            ).to_numpy())
+            if all(key in data for key in ('effective_charge_vol', 'r_geometric', 'density_e', 'temperature_e')):
+                newvars['effective_collisionality_angioni'] = (['time', 'radius'], (1.0e-13 * data['effective_charge_vol'] * data['r_geometric'] * 0.1 * data['density_e'] * data['temperature_e'] ** (-2)).to_numpy())  # 1.0e-19 on n_e and 1.0e6 on T_e ** -2, the scaling takes 10^19 m^-3 and keV
 
-            lh_nmin = (
-                1.0e19 * 0.07
-                * data['current'] ** (0.34)
-                * data['field_axis'] ** (0.62)
-                * data['r_minor_lcfs'] ** (-0.95)
-                * data['epsilon_lcfs'] ** (0.4)
-            ).to_numpy()
-            nminfactor = np.where(data['density_e_volume_average'].to_numpy() > lh_nmin, (data['density_e_volume_average'].to_numpy() / lh_nmin) ** 2, 1.0)
-            p_lh = (
-                2.15
-                * (1.0e-19 * data['density_e_volume_average']) ** (0.782)
-                * data['field_axis'] ** (0.772)
-                * data['r_minor_lcfs'] ** (0.975)
-                * data['r_geometric_lcfs'] ** (0.999)
-                * (2.0 / data['mass_main_average']) ** (1.11)
-            ).to_numpy() * nminfactor
-            newvars['power_lh_scaling_martin'] = (['time'], p_lh)
-            newvars['power_lh_ratio'] = (['time'], data['power_scrape_off_layer'].to_numpy() / p_lh)
+            if all(key in data for key in ('r_geometric_lcfs', 'mxh_kappa', 'epsilon_lcfs', 'density_e_line_average', 'mass_main_average', 'power_input')):
+                power_input_mw = 1.0e-6 * data['power_input']  # The scalings take the heating power in MW
+                newvars['confinement_time_scaling_h98'] = (['time'], (
+                    0.0562
+                    * current_ma ** (0.93)
+                    * data['r_geometric_lcfs'] ** (1.97)
+                    * data['mxh_kappa'].isel(radius=-1) ** (0.78)
+                    * data['epsilon_lcfs'] ** (0.58)
+                    * np.abs(data['field_axis']) ** (0.15)
+                    * (1.0e-19 * data['density_e_line_average']) ** (0.41)
+                    * data['mass_main_average'] ** (0.19)
+                    * power_input_mw ** (-0.69)
+                ).to_numpy())
+                newvars['confinement_time_scaling_h89'] = (['time'], (
+                    0.048
+                    * current_ma ** (0.85)
+                    * data['r_geometric_lcfs'] ** (1.50)
+                    * data['mxh_kappa'].isel(radius=-1) ** (0.50)
+                    * data['epsilon_lcfs'] ** (0.30)
+                    * np.abs(data['field_axis']) ** (0.20)
+                    * (1.0e-20 * data['density_e_line_average']) ** (0.10)
+                    * data['mass_main_average'] ** (0.50)
+                    * power_input_mw ** (-0.50)
+                ).to_numpy())
+                newvars['confinement_time_scaling_l97'] = (['time'], (
+                    0.023
+                    * current_ma ** (0.96)
+                    * data['r_geometric_lcfs'] ** (1.83)
+                    * data['mxh_kappa'].isel(radius=-1) ** (0.64)
+                    * data['epsilon_lcfs'] ** (0.06)
+                    * np.abs(data['field_axis']) ** (0.03)
+                    * (1.0e-19 * data['density_e_line_average']) ** (0.40)
+                    * data['mass_main_average'] ** (0.20)
+                    * power_input_mw ** (-0.73)
+                ).to_numpy())
 
-            epsilon_95 = vectorized_numpy_interpolation(
-                0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
-                data['epsilon'].to_numpy()
-            )
-            kappa_95 = vectorized_numpy_interpolation(
-                0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
-                data['mxh_kappa'].to_numpy()
-            )
-            delta_95 = vectorized_numpy_interpolation(
-                0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
-                data['mxh_delta'].to_numpy()
-            )
-            uckan_shaping = 1.0 + kappa_95[..., -1] ** 2 * (1.0 + 2.0 * delta_95[..., -1] ** 2 - 1.2 * delta_95[..., -1] ** 3)
-            iter_shaping = uckan_shaping * (1.17 - 0.65 * epsilon_95) / (1 - epsilon_95 ** 2) ** 2
+            if all(key in data for key in ('r_minor_lcfs', 'r_geometric_lcfs', 'epsilon_lcfs', 'density_e_volume_average', 'mass_main_average')):
+                lh_nmin = (
+                    1.0e19 * 0.07
+                    * current_ma ** (0.34)
+                    * np.abs(data['field_axis']) ** (0.62)
+                    * data['r_minor_lcfs'] ** (-0.95)
+                    * data['epsilon_lcfs'] ** (0.4)
+                ).to_numpy()
+                nminfactor = np.where(data['density_e_volume_average'].to_numpy() < lh_nmin, (lh_nmin / data['density_e_volume_average'].to_numpy()) ** 2, 1.0)  # The threshold only rises below the density minimum
+                p_lh = (
+                    2.15
+                    * (1.0e-20 * data['density_e_volume_average']) ** (0.782)  # The scaling takes the density in 10^20 m^-3
+                    * np.abs(data['field_axis']) ** (0.772)
+                    * data['r_minor_lcfs'] ** (0.975)
+                    * data['r_geometric_lcfs'] ** (0.999)
+                    * (2.0 / data['mass_main_average']) ** (1.11)
+                ).to_numpy() * nminfactor
+                newvars['power_lh_scaling_martin'] = (['time'], p_lh)
+                if 'power_scrape_off_layer' in data:
+                    newvars['power_lh_ratio'] = (['time'], 1.0e-6 * data['power_scrape_off_layer'].to_numpy() / p_lh)  # p_lh is in MW
 
-            newvars['qstar_uckan'] = (['time'], (
-                2.5
-                * data['r_geometric_lcfs']
-                * data['epsilon_lcfs'] ** 2
-                * data['field_axis']
-                / data['current']
-                * uckan_shaping
-            ).to_numpy())
-            newvars['qstar_iter'] = (['time'], (
-                2.5
-                * data['r_geometric_lcfs']
-                * data['epsilon_lcfs'] ** 2
-                * data['field_axis']
-                / data['current']
-                * iter_shaping
-            ).to_numpy())
+            if all(key in data for key in ('magnetic_flux_norm', 'epsilon', 'mxh_kappa', 'mxh_delta', 'r_geometric_lcfs', 'epsilon_lcfs')):
+                epsilon_95 = vectorized_numpy_interpolation(
+                    0.95,
+                    data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
+                    data['epsilon'].to_numpy()
+                )
+                kappa_95 = vectorized_numpy_interpolation(
+                    0.95,
+                    data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
+                    data['mxh_kappa'].to_numpy()
+                )
+                delta_95 = vectorized_numpy_interpolation(
+                    0.95,
+                    data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
+                    data['mxh_delta'].to_numpy()
+                )
+                uckan_shaping = 1.0 + kappa_95[..., -1] ** 2 * (1.0 + 2.0 * delta_95[..., -1] ** 2 - 1.2 * delta_95[..., -1] ** 3)
+                iter_shaping = uckan_shaping * (1.17 - 0.65 * epsilon_95) / (1 - epsilon_95 ** 2) ** 2
 
-            newvars['width_scrape_off_layer_brunner'] = (['time'], (
-                0.91
-                * (data['pressure_total_volume_average'] / self.constants['atm_si']) ** (-0.48)
-            ).to_numpy())
-            newvars['width_scrape_off_layer_eich14'] = (['time'], (
-                0.63
-                * data['field_outer'].sel(direction='poloidal').isel(radius=-1) ** (-1.19)
-            ).to_numpy())
-            newvars['width_scrape_off_layer_eich15'] = (['time'], (
-                1.35
-                * data['power_scrape_off_layer'] ** (-0.02)
-                * data['field_outer'].sel(direction='poloidal').isel(radius=-1) ** (-0.92)
-                * data['r_geometric_lcfs'] ** (0.04)
-                * data['epsilon_lcfs'] ** (0.42)
-            ).to_numpy())
+                newvars['qstar_uckan'] = (['time'], (
+                    2.5
+                    * data['r_geometric_lcfs']
+                    * data['epsilon_lcfs'] ** 2
+                    * np.abs(data['field_axis']) / current_ma
+                    * uckan_shaping
+                ).to_numpy())
+                newvars['qstar_iter'] = (['time'], (
+                    2.5
+                    * data['r_geometric_lcfs']
+                    * data['epsilon_lcfs'] ** 2
+                    * np.abs(data['field_axis']) / current_ma
+                    * iter_shaping
+                ).to_numpy())
+
+            if 'pressure_total_volume_average' in data:
+                newvars['width_scrape_off_layer_brunner'] = (['time'], (
+                    0.91
+                    * (data['pressure_total_volume_average'] / self.constants['atm_si']) ** (-0.48)
+                ).to_numpy())
+            if 'field_outer' in data:
+                newvars['width_scrape_off_layer_eich14'] = (['time'], (
+                    0.63
+                    * abs(data['field_outer'].sel(direction='poloidal').isel(radius=-1)) ** (-1.19)
+                ).to_numpy())
+            if all(key in data for key in ('power_scrape_off_layer', 'field_outer', 'r_geometric_lcfs', 'epsilon_lcfs')):
+                newvars['width_scrape_off_layer_eich15'] = (['time'], (
+                    1.35
+                    * (1.0e-6 * data['power_scrape_off_layer']) ** (-0.02)  # The scaling takes the power in MW
+                    * abs(data['field_outer'].sel(direction='poloidal').isel(radius=-1)) ** (-0.92)
+                    * data['r_geometric_lcfs'] ** (0.04)
+                    * data['epsilon_lcfs'] ** (0.42)
+                ).to_numpy())
 
             # newvars['density_e_upstream'] = (['time'], 0.6 * data['density_e_vol'].isel(rho=-1).to_numpy())
             # debye_e_upstream = ((self.constants['eps_si'] / self.constants['e_si']) ** 0.5) * (data['temperature_e'] / (0.6 * data['density_e_vol'] * (data['charge_e'] ** 2))) ** 0.5  # m
@@ -1686,10 +1834,10 @@ class plasma_io(io):
             ion_cs = f'{prof_cs}.ion.{ion_field}'
             ikwargs = {'fill_value': 'extrapolate'}
 
-            cocos_out = 1   # Assumed plasma class has COCOS=1
-            if kwargs.get('jetto_style', False) and obj_cocos == 11:
-                cocos_out = 8
-            cocos = define_cocos_converter(obj_cocos, cocos_out)
+            # Field signs are retained as given, only the flux is converted to per radian, so the
+            # recorded convention is the per radian member of the same COCOS family (e.g. 17 -> 7)
+            flux_scale = np.power(2.0 * np.pi, define_cocos_converter(obj_cocos, 1)['eBp'])
+            cocos_per_radian = int(np.sign(obj_cocos)) * (abs(obj_cocos) - 10 if abs(obj_cocos) > 10 else abs(obj_cocos))
             transpose_equilibrium = kwargs.get('transpose_equilibrium', False)
 
             dsvec = []
@@ -1708,7 +1856,7 @@ class plasma_io(io):
 
                     coords: MutableMapping[str, Any] = {}
                     data_vars: MutableMapping[str, Any] = {}
-                    attrs: MutableMapping[str, Any] = {}
+                    attrs: MutableMapping[str, Any] = {'cocos': cocos_per_radian}
 
                     if rho_cp_i in data.dims and rho_cp in data:
                         data = data.isel({time_cp: time_index}).swap_dims({rho_cp_i: rho_cp}).drop_duplicates(rho_cp)
@@ -1727,7 +1875,8 @@ class plasma_io(io):
                                 types = []
                                 for name in coords['ion']:
                                     types.extend(['thermal' if data[tag].sel({ion_cp: name}).sum() > 0.0 else 'fast'])
-                                ni = data[tag]
+                                # Total density, so that fast species are not dropped, with the thermal part only defining the type
+                                ni = data['core_profiles.profiles_1d.ion.density'] if 'core_profiles.profiles_1d.ion.density' in data else data[tag]
                                 data_vars['density_i'] = (['time', 'radius', 'ion'], np.expand_dims(ni.to_numpy().T, axis=0))
                                 data_vars['type_i'] = (['time', 'ion'], np.expand_dims(types, axis=0))
                             tag = 'core_profiles.profiles_1d.ion.temperature'
@@ -1760,22 +1909,22 @@ class plasma_io(io):
                             data_vars['temperature_e'] = (['time', 'radius'], np.expand_dims(te.to_numpy(), axis=0))
                         tag = 'core_profiles.profiles_1d.q'
                         if tag in data:
-                            data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * np.expand_dims(data[tag].to_numpy(), axis=0))
+                            data_vars['safety_factor'] = (['time', 'radius'], np.expand_dims(data[tag].to_numpy(), axis=0))
                         tag = 'core_profiles.profiles_1d.j_ohmic'
                         if tag in data:
-                            data_vars['johm'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
+                            data_vars['johm'] = (['time', 'radius'], np.expand_dims(data[tag].to_numpy(), axis=0))
                         tag = 'core_profiles.profiles_1d.j_bootstrap'
                         if tag in data:
-                            data_vars['jbs'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
+                            data_vars['jbs'] = (['time', 'radius'], np.expand_dims(data[tag].to_numpy(), axis=0))
                         vtag = 'core_profiles.profiles_1d.ion.velocity.toroidal'
                         ptag = 'core_profiles.profiles_1d.ion.velocity.poloidal'
                         if 'ion' in coords:
                             # _compute_extended_local_inputs() requires velocity_i unconditionally
                             velocity_i = np.zeros((1, len(coords['radius']), len(coords['ion']), len(cls.directions)))
                             if vtag in data:
-                                velocity_i[0, ..., cls.directions.index('toroidal')] = cocos['scyl'] * data[vtag].to_numpy()
+                                velocity_i[0, ..., cls.directions.index('toroidal')] = data[vtag].to_numpy().T
                             if ptag in data:
-                                velocity_i[0, ..., cls.directions.index('poloidal')] = cocos['spol'] * data[ptag].to_numpy()
+                                velocity_i[0, ..., cls.directions.index('poloidal')] = data[ptag].to_numpy().T
                             data_vars['velocity_i'] = (['time', 'radius', 'ion', 'direction'], velocity_i)
                             coords['direction'] = list(cls.directions)
                         coords['source'] = list(cls.sources)
@@ -1789,7 +1938,7 @@ class plasma_io(io):
                             coords['direction'] = list(cls.directions)
                         tag = 'core_profiles.profiles_1d.rotation_frequency_tor_sonic'
                         if tag in data:
-                            data_vars['rotation_frequency_sonic'] = (['time', 'radius'], cocos['scyl'] * np.expand_dims(data[tag].to_numpy(), axis=0))
+                            data_vars['rotation_frequency_sonic'] = (['time', 'radius'], np.expand_dims(data[tag].to_numpy(), axis=0))
 
                     if time_eq in data.coords and psi_eq_i in data.dims and rho_eq in data and 'radius' in coords:
                         data = data.interp({time_eq: time.item(i)}, kwargs=ikwargs) if data[time_eq].size > 1 else data.isel({time_eq: 0})
@@ -1800,21 +1949,21 @@ class plasma_io(io):
                             magnetic_flux = np.zeros((1, len(coords['radius']), len(cls.directions)))
                             if tag in data:
                                 psivec = data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy()
-                                magnetic_flux[0, :, cls.directions.index('poloidal')] = np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * psivec
+                                magnetic_flux[0, :, cls.directions.index('poloidal')] = flux_scale * psivec
                             if ptag in data:
                                 phivec = data[ptag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy()
-                                magnetic_flux[0, :, cls.directions.index('toroidal')] = np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * phivec
+                                magnetic_flux[0, :, cls.directions.index('toroidal')] = flux_scale * phivec
                             data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], magnetic_flux)
                             coords['direction'] = list(cls.directions)
                         tag = 'equilibrium.vacuum_toroidal_field.b0'
                         if tag in data and 'field_axis' not in data_vars:
-                            data_vars['field_axis'] = (['time'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
+                            data_vars['field_axis'] = (['time'], np.atleast_1d(data[tag].to_numpy()))
                         tag = 'equilibrium.time_slice.global_quantities.ip'
                         if tag in data and 'current' not in data_vars:
-                            data_vars['current'] = (['time'], cocos['scyl'] * np.atleast_1d(data[tag].to_numpy()))
+                            data_vars['current'] = (['time'], np.atleast_1d(data[tag].to_numpy()))
                         tag = 'equilibrium.time_slice.profiles_1d.q'
                         if tag in data and 'safety_factor' not in data_vars:
-                            data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * np.expand_dims(data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
+                            data_vars['safety_factor'] = (['time', 'radius'], np.expand_dims(data[tag].interp({rho_eq: coords['radius']}, kwargs=ikwargs).to_numpy(), axis=0))
                         itag = 'equilibrium.time_slice.profiles_1d.r_inboard'
                         otag = 'equilibrium.time_slice.profiles_1d.r_outboard'
                         if itag in data and otag in data and ('r_minor' not in data_vars or 'r_geometric' not in data_vars):
@@ -1903,7 +2052,7 @@ class plasma_io(io):
                                 jrf += data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy().flatten()
                             srctag = 'nbi'
                             if srctag in srclist:
-                                data_vars['jnb'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['jnb'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         tag = 'core_sources.source.profiles_1d.ion.particles'
                         if tag in data and ion_cs_i in data.dims:
                             srctag = 'cold_neutrals'
@@ -1919,13 +2068,13 @@ class plasma_io(io):
                         if tag in data:
                             srctag = 'nbi'
                             if srctag in srclist:
-                                data_vars['qmom'] = (['n', 'rho'], cocos['scyl'] * np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
+                                data_vars['qmom'] = (['n', 'rho'], np.expand_dims(data[tag].sel({src_cs: srctag}).swap_dims({rho_cs_i: rho_cs}).drop_duplicates(rho_cs).interp({rho_cs: coords['rho']}, kwargs=ikwargs).to_numpy(), axis=0))
                         if np.abs(qrfe).sum() > 0.0:
                             data_vars['qrfe'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(qrfe, axis=0))
                         if np.abs(qrfi).sum() > 0.0:
                             data_vars['qrfi'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(qrfi, axis=0))
                         if np.abs(jrf).sum() > 0.0:
-                            data_vars['jrf'] = (['n', 'rho'], cocos['scyl'] * 1.0e-6 * np.expand_dims(jrf, axis=0))
+                            data_vars['jrf'] = (['n', 'rho'], 1.0e-6 * np.expand_dims(jrf, axis=0))
                         if np.abs(swall).sum() > 0.0:
                             data_vars['qpar_wall'] = (['n', 'rho'], np.expand_dims(swall, axis=0))
 
@@ -1952,7 +2101,6 @@ class plasma_io(io):
                 'masse': 'mass_e',
                 'ze': 'charge_e',
                 'bcentr': 'field_axis',
-                'current': 'current',
             }
             direct_time_ion_map = {
                 'mass': 'mass_i',
@@ -2008,6 +2156,8 @@ class plasma_io(io):
                 for key, nkey in direct_time_rho_ion_map.items():
                     if key in data and 'name' in data:
                         data_vars[nkey] = (['time', 'radius', 'ion'], data[key].to_numpy())
+                if 'current' in data:
+                    data_vars['current'] = (['time'], 1.0e6 * data['current'].to_numpy())  # MA -> A
                 if 'ne' in data:
                     data_vars['density_e'] = (['time', 'radius'], 1.0e19 * data['ne'].to_numpy())
                 if 'te' in data:
@@ -2021,22 +2171,22 @@ class plasma_io(io):
                 flux = np.repeat(np.expand_dims(np.zeros((len(coords['time']), len(coords['radius']))), axis=-1), len(coords['direction']), axis=-1)
                 if 'rcentr' in data:
                     attrs['rcentr'] = [r for r in data['rcentr'].to_numpy()]
-                if 'torflux' in data:
-                    flux[..., 0] = np.abs(data['torflux'].to_numpy())
+                # Field signs are retained as given, with the COCOS convention they imply recorded since GACODE does not specify one
+                if all(key in data for key in ['current', 'bcentr', 'polflux', 'q']):
+                    cocos = determine_cocos_from_signs(
+                        float(data['current'].isel(n=0)),
+                        float(data['bcentr'].isel(n=0)),
+                        float(data['polflux'].isel(n=0, rho=-1) - data['polflux'].isel(n=0, rho=0)),
+                        float(data['q'].isel(n=0, rho=-1)),
+                    )
+                    if cocos:
+                        attrs['cocos'] = cocos
+                if 'torfluxa' in data:
+                    flux[..., 0] = np.expand_dims(data['torfluxa'].to_numpy(), axis=-1) * np.expand_dims(coords['radius'], axis=0) ** 2
                 elif 'q' in data and 'polflux' in data:
-                    sign = 1.0
-                    q = data['q'].to_numpy()
-                    polflux = data['polflux'].to_numpy()
-                    if np.any((polflux[..., -1] - polflux[..., 0]) < 0.0):
-                        sign = -1.0
-                        polflux = -polflux
-                    flux[..., 0] = sign * vectorized_numpy_integration(q, polflux)
+                    flux[..., 0] = vectorized_numpy_oriented_integration(data['q'].to_numpy(), data['polflux'].to_numpy())
                 if 'polflux' in data:
-                    sign = 1.0
-                    polflux = data['polflux'].to_numpy()
-                    if np.any((polflux[..., -1] - polflux[..., 0]) < 0.0):
-                        polflux = -polflux
-                    flux[..., 1] = polflux
+                    flux[..., 1] = data['polflux'].to_numpy()
                 data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], flux)
                 #if 'q' in data:
                 #    data_vars['safety_factor'] = (['time', 'radius'], data['q'].to_numpy())
@@ -2163,6 +2313,8 @@ class plasma_io(io):
             newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
             if 'q' in data and 'polflux' in data:
                 newobj.add_safety_factor_profile(data['q'].to_numpy(), data['polflux'].to_numpy(), base='poloidal', side='input')
+                if 'torfluxa' in data:
+                    newobj.match_toroidal_flux_sign(data['torfluxa'].to_numpy(), side='input')
         return newobj
 
 
@@ -2262,7 +2414,8 @@ class plasma_io(io):
             # always COCOS 2 (mexcal/cocos.py: MEXCAL_COCOS = 2, CHEASE
             # family, e_Bp=0) -- fixed, not something read from the data
             # the way IMAS's data_dictionary_version-tied convention is.
-            cocos = define_cocos_converter(2, 1)   # Assumed plasma class has COCOS=1
+            # Field signs are retained as given and the convention recorded, only the flux is converted to per radian
+            flux_scale = np.power(2.0 * np.pi, define_cocos_converter(2, 1)['eBp'])
             ikwargs = {'fill_value': 'extrapolate'}
 
             if window is not None and len(window) >= 2 and 'time' in data.coords:
@@ -2273,6 +2426,7 @@ class plasma_io(io):
                 coords['time'] = data['time'].to_numpy()
                 coords['radius'] = data['rho_norm'].to_numpy()
                 attrs['radius'] = 'rho_tor_norm'
+                attrs['cocos'] = 2
                 nt = len(coords['time'])
                 nr = len(coords['radius'])
 
@@ -2375,17 +2529,17 @@ class plasma_io(io):
                     magnetic_flux = np.zeros((nt, nr, len(cls.directions)))
                     if 'psi' in data:
                         magnetic_flux[..., cls.directions.index('poloidal')] = (
-                            np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * onrad('psi'))
+                            flux_scale * onrad('psi'))
                     if 'Phi' in data:
                         magnetic_flux[..., cls.directions.index('toroidal')] = (
-                            np.power(2.0 * np.pi, cocos['eBp']) * cocos['sBp'] * onrad('Phi'))
+                            flux_scale * onrad('Phi'))
                     data_vars['magnetic_flux'] = (['time', 'radius', 'direction'], magnetic_flux)
                 if 'q' in data:
-                    data_vars['safety_factor'] = (['time', 'radius'], cocos['spol'] * onrad('q'))
+                    data_vars['safety_factor'] = (['time', 'radius'], onrad('q'))
                 if 'B_0' in data:
-                    data_vars['field_axis'] = (['time'], cocos['scyl'] * data['B_0'].to_numpy())
+                    data_vars['field_axis'] = (['time'], data['B_0'].to_numpy())
                 if 'Ip' in data:
-                    data_vars['current'] = (['time'], cocos['scyl'] * data['Ip'].to_numpy())
+                    data_vars['current'] = (['time'], data['Ip'].to_numpy())
                 if 'R_in' in data and 'R_out' in data:
                     r_in, r_out = onrad('R_in'), onrad('R_out')
                     data_vars['r_minor'] = (['time', 'radius'], 0.5 * (r_out - r_in))
@@ -2436,11 +2590,11 @@ class plasma_io(io):
                                                  else np.zeros((nt, nr)))
 
                 if 'j_ohmic' in data:
-                    current_source[..., cls.sources.index('ohmic')] += cocos['scyl'] * onrad('j_ohmic')
+                    current_source[..., cls.sources.index('ohmic')] += onrad('j_ohmic')
                 if 'j_bootstrap' in data:
-                    current_source[..., cls.sources.index('bootstrap')] += cocos['scyl'] * onrad('j_bootstrap')
+                    current_source[..., cls.sources.index('bootstrap')] += onrad('j_bootstrap')
                 if 'j_ecrh' in data:
-                    current_source[..., cls.sources.index('electron_cyclotron')] += cocos['scyl'] * onrad('j_ecrh')
+                    current_source[..., cls.sources.index('electron_cyclotron')] += onrad('j_ecrh')
                 data_vars['current_source'] = (['time', 'radius', 'source'], current_source)
 
                 if 'ion' in coords:
