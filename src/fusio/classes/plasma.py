@@ -1325,120 +1325,130 @@ class plasma_io(io):
         side: str = 'input',
     ) -> None:
 
-        data = self.input
+        data = self.output if side == 'output' else self.input
         newvars: MutableMapping[str, Any] = {}
-        if 'current' in data and 'bcentr' in data:
+        if 'current' in data and 'field_axis' in data:
 
-            current_ma = 1.0e-6 * np.abs(data['current'])  # Empirical scalings take the current in MA
+            current_ma = 1.0e-6 * abs(data['current'])  # Empirical scalings take the current in MA
 
-            greenwald_density = (1.0e14 * current_ma / (np.pi * data['r_minor_lcfs'] ** 2))
-            newvars['greenwald_density'] = (['time'], greenwald_density.to_numpy())
-            newvars['greenwald_fraction'] = (['time'], (data['density_e_vol'] / greenwald_density).to_numpy())
-            #newvars['greenwald_density_local'] = (['time', 'radius'], (data['density_e'] / greenwald_density).to_numpy())
+            if all(key in data for key in ('r_minor_lcfs', 'density_e_volume_average')):
+                greenwald_density = (1.0e20 * current_ma / (np.pi * data['r_minor_lcfs'] ** 2))  # The limit is I[MA] / (pi a^2) in 10^20 m^-3
+                newvars['greenwald_density'] = (['time'], greenwald_density.to_numpy())
+                newvars['greenwald_fraction'] = (['time'], (data['density_e_volume_average'] / greenwald_density).to_numpy())
+                #newvars['greenwald_density_local'] = (['time', 'radius'], (data['density_e'] / greenwald_density).to_numpy())
 
-            newvars['effective_collisionality_angioni'] = (['time', 'radius'], (data['effective_charge_vol'] * data['r_geometric'] * 0.1 * data['density_e'] * data['temperature_e'] ** (-2)).to_numpy())
+            if all(key in data for key in ('effective_charge_vol', 'r_geometric', 'density_e', 'temperature_e')):
+                newvars['effective_collisionality_angioni'] = (['time', 'radius'], (1.0e-13 * data['effective_charge_vol'] * data['r_geometric'] * 0.1 * data['density_e'] * data['temperature_e'] ** (-2)).to_numpy())  # 1.0e-19 on n_e and 1.0e6 on T_e ** -2, the scaling takes 10^19 m^-3 and keV
 
-            newvars['confinement_time_scaling_h98'] = (['time'], (
-                0.0562
-                * current_ma ** (0.93)
-                * data['r_geometric_lcfs'] ** (1.97)
-                * data['kappa'].isel(radius=-1) ** (0.78)
-                * data['epsilon_lcfs'] ** (0.58)
-                * np.abs(data['field_axis']) ** (0.15)
-                * (1.0e-19 * data['density_e_line_average']) ** (0.41)
-                * data['mass_main_average'] ** (0.19)
-                * data['power_input'] ** (-0.69)
-            ).to_numpy())
-            newvars['confinement_time_scaling_h89'] = (['time'], (
-                0.048
-                * current_ma ** (0.85)
-                * data['r_geometric_lcfs'] ** (1.50)
-                * data['kappa'].isel(radius=-1) ** (0.50)
-                * data['epsilon_lcfs'] ** (0.30)
-                * np.abs(data['field_axis']) ** (0.20)
-                * (1.0e-20 * data['density_e_line_average']) ** (0.10)
-                * data['mass_main_average'] ** (0.50)
-                * data['power_input'] ** (-0.50)
-            ).to_numpy())
-            newvars['confinement_time_scaling_l97'] = (['time'], (
-                0.023
-                * current_ma ** (0.96)
-                * data['r_geometric_lcfs'] ** (1.83)
-                * data['kappa'].isel(radius=-1) ** (0.64)
-                * data['epsilon_lcfs'] ** (0.06)
-                * np.abs(data['field_axis']) ** (0.03)
-                * (1.0e-19 * data['density_e_line_average']) ** (0.40)
-                * data['mass_main_average'] ** (0.20)
-                * data['power_input'] ** (-0.73)
-            ).to_numpy())
+            if all(key in data for key in ('r_geometric_lcfs', 'mxh_kappa', 'epsilon_lcfs', 'density_e_line_average', 'mass_main_average', 'power_input')):
+                power_input_mw = 1.0e-6 * data['power_input']  # The scalings take the heating power in MW
+                newvars['confinement_time_scaling_h98'] = (['time'], (
+                    0.0562
+                    * current_ma ** (0.93)
+                    * data['r_geometric_lcfs'] ** (1.97)
+                    * data['mxh_kappa'].isel(radius=-1) ** (0.78)
+                    * data['epsilon_lcfs'] ** (0.58)
+                    * np.abs(data['field_axis']) ** (0.15)
+                    * (1.0e-19 * data['density_e_line_average']) ** (0.41)
+                    * data['mass_main_average'] ** (0.19)
+                    * power_input_mw ** (-0.69)
+                ).to_numpy())
+                newvars['confinement_time_scaling_h89'] = (['time'], (
+                    0.048
+                    * current_ma ** (0.85)
+                    * data['r_geometric_lcfs'] ** (1.50)
+                    * data['mxh_kappa'].isel(radius=-1) ** (0.50)
+                    * data['epsilon_lcfs'] ** (0.30)
+                    * np.abs(data['field_axis']) ** (0.20)
+                    * (1.0e-20 * data['density_e_line_average']) ** (0.10)
+                    * data['mass_main_average'] ** (0.50)
+                    * power_input_mw ** (-0.50)
+                ).to_numpy())
+                newvars['confinement_time_scaling_l97'] = (['time'], (
+                    0.023
+                    * current_ma ** (0.96)
+                    * data['r_geometric_lcfs'] ** (1.83)
+                    * data['mxh_kappa'].isel(radius=-1) ** (0.64)
+                    * data['epsilon_lcfs'] ** (0.06)
+                    * np.abs(data['field_axis']) ** (0.03)
+                    * (1.0e-19 * data['density_e_line_average']) ** (0.40)
+                    * data['mass_main_average'] ** (0.20)
+                    * power_input_mw ** (-0.73)
+                ).to_numpy())
 
-            lh_nmin = (
-                1.0e19 * 0.07
-                * current_ma ** (0.34)
-                * np.abs(data['field_axis']) ** (0.62)
-                * data['r_minor_lcfs'] ** (-0.95)
-                * data['epsilon_lcfs'] ** (0.4)
-            ).to_numpy()
-            nminfactor = np.where(data['density_e_volume_average'].to_numpy() > lh_nmin, (data['density_e_volume_average'].to_numpy() / lh_nmin) ** 2, 1.0)
-            p_lh = (
-                2.15
-                * (1.0e-19 * data['density_e_volume_average']) ** (0.782)
-                * np.abs(data['field_axis']) ** (0.772)
-                * data['r_minor_lcfs'] ** (0.975)
-                * data['r_geometric_lcfs'] ** (0.999)
-                * (2.0 / data['mass_main_average']) ** (1.11)
-            ).to_numpy() * nminfactor
-            newvars['power_lh_scaling_martin'] = (['time'], p_lh)
-            newvars['power_lh_ratio'] = (['time'], data['power_scrape_off_layer'].to_numpy() / p_lh)
+            if all(key in data for key in ('r_minor_lcfs', 'r_geometric_lcfs', 'epsilon_lcfs', 'density_e_volume_average', 'mass_main_average')):
+                lh_nmin = (
+                    1.0e19 * 0.07
+                    * current_ma ** (0.34)
+                    * np.abs(data['field_axis']) ** (0.62)
+                    * data['r_minor_lcfs'] ** (-0.95)
+                    * data['epsilon_lcfs'] ** (0.4)
+                ).to_numpy()
+                nminfactor = np.where(data['density_e_volume_average'].to_numpy() < lh_nmin, (lh_nmin / data['density_e_volume_average'].to_numpy()) ** 2, 1.0)  # The threshold only rises below the density minimum
+                p_lh = (
+                    2.15
+                    * (1.0e-20 * data['density_e_volume_average']) ** (0.782)  # The scaling takes the density in 10^20 m^-3
+                    * np.abs(data['field_axis']) ** (0.772)
+                    * data['r_minor_lcfs'] ** (0.975)
+                    * data['r_geometric_lcfs'] ** (0.999)
+                    * (2.0 / data['mass_main_average']) ** (1.11)
+                ).to_numpy() * nminfactor
+                newvars['power_lh_scaling_martin'] = (['time'], p_lh)
+                if 'power_scrape_off_layer' in data:
+                    newvars['power_lh_ratio'] = (['time'], 1.0e-6 * data['power_scrape_off_layer'].to_numpy() / p_lh)  # p_lh is in MW
 
-            epsilon_95 = vectorized_numpy_interpolation(
-                0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
-                data['epsilon'].to_numpy()
-            )
-            kappa_95 = vectorized_numpy_interpolation(
-                0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
-                data['mxh_kappa'].to_numpy()
-            )
-            delta_95 = vectorized_numpy_interpolation(
-                0.95,
-                data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
-                data['mxh_delta'].to_numpy()
-            )
-            uckan_shaping = 1.0 + kappa_95[..., -1] ** 2 * (1.0 + 2.0 * delta_95[..., -1] ** 2 - 1.2 * delta_95[..., -1] ** 3)
-            iter_shaping = uckan_shaping * (1.17 - 0.65 * epsilon_95) / (1 - epsilon_95 ** 2) ** 2
+            if all(key in data for key in ('magnetic_flux_norm', 'epsilon', 'mxh_kappa', 'mxh_delta', 'r_geometric_lcfs', 'epsilon_lcfs')):
+                epsilon_95 = vectorized_numpy_interpolation(
+                    0.95,
+                    data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
+                    data['epsilon'].to_numpy()
+                )
+                kappa_95 = vectorized_numpy_interpolation(
+                    0.95,
+                    data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
+                    data['mxh_kappa'].to_numpy()
+                )
+                delta_95 = vectorized_numpy_interpolation(
+                    0.95,
+                    data['magnetic_flux_norm'].sel(direction='poloidal').to_numpy(),
+                    data['mxh_delta'].to_numpy()
+                )
+                uckan_shaping = 1.0 + kappa_95[..., -1] ** 2 * (1.0 + 2.0 * delta_95[..., -1] ** 2 - 1.2 * delta_95[..., -1] ** 3)
+                iter_shaping = uckan_shaping * (1.17 - 0.65 * epsilon_95) / (1 - epsilon_95 ** 2) ** 2
 
-            newvars['qstar_uckan'] = (['time'], (
-                2.5
-                * data['r_geometric_lcfs']
-                * data['epsilon_lcfs'] ** 2
-                * np.abs(data['field_axis']) / current_ma
-                * uckan_shaping
-            ).to_numpy())
-            newvars['qstar_iter'] = (['time'], (
-                2.5
-                * data['r_geometric_lcfs']
-                * data['epsilon_lcfs'] ** 2
-                * np.abs(data['field_axis']) / current_ma
-                * iter_shaping
-            ).to_numpy())
+                newvars['qstar_uckan'] = (['time'], (
+                    2.5
+                    * data['r_geometric_lcfs']
+                    * data['epsilon_lcfs'] ** 2
+                    * np.abs(data['field_axis']) / current_ma
+                    * uckan_shaping
+                ).to_numpy())
+                newvars['qstar_iter'] = (['time'], (
+                    2.5
+                    * data['r_geometric_lcfs']
+                    * data['epsilon_lcfs'] ** 2
+                    * np.abs(data['field_axis']) / current_ma
+                    * iter_shaping
+                ).to_numpy())
 
-            newvars['width_scrape_off_layer_brunner'] = (['time'], (
-                0.91
-                * (data['pressure_total_volume_average'] / self.constants['atm_si']) ** (-0.48)
-            ).to_numpy())
-            newvars['width_scrape_off_layer_eich14'] = (['time'], (
-                0.63
-                * data['field_outer'].sel(direction='poloidal').isel(radius=-1) ** (-1.19)
-            ).to_numpy())
-            newvars['width_scrape_off_layer_eich15'] = (['time'], (
-                1.35
-                * data['power_scrape_off_layer'] ** (-0.02)
-                * data['field_outer'].sel(direction='poloidal').isel(radius=-1) ** (-0.92)
-                * data['r_geometric_lcfs'] ** (0.04)
-                * data['epsilon_lcfs'] ** (0.42)
-            ).to_numpy())
+            if 'pressure_total_volume_average' in data:
+                newvars['width_scrape_off_layer_brunner'] = (['time'], (
+                    0.91
+                    * (data['pressure_total_volume_average'] / self.constants['atm_si']) ** (-0.48)
+                ).to_numpy())
+            if 'field_outer' in data:
+                newvars['width_scrape_off_layer_eich14'] = (['time'], (
+                    0.63
+                    * abs(data['field_outer'].sel(direction='poloidal').isel(radius=-1)) ** (-1.19)
+                ).to_numpy())
+            if all(key in data for key in ('power_scrape_off_layer', 'field_outer', 'r_geometric_lcfs', 'epsilon_lcfs')):
+                newvars['width_scrape_off_layer_eich15'] = (['time'], (
+                    1.35
+                    * (1.0e-6 * data['power_scrape_off_layer']) ** (-0.02)  # The scaling takes the power in MW
+                    * abs(data['field_outer'].sel(direction='poloidal').isel(radius=-1)) ** (-0.92)
+                    * data['r_geometric_lcfs'] ** (0.04)
+                    * data['epsilon_lcfs'] ** (0.42)
+                ).to_numpy())
 
             # newvars['density_e_upstream'] = (['time'], 0.6 * data['density_e_vol'].isel(rho=-1).to_numpy())
             # debye_e_upstream = ((self.constants['eps_si'] / self.constants['e_si']) ** 0.5) * (data['temperature_e'] / (0.6 * data['density_e_vol'] * (data['charge_e'] ** 2))) ** 0.5  # m

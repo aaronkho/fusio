@@ -382,6 +382,67 @@ class TestCocos:
         np.testing.assert_array_equal(p.input['poloidal_flux_map'].to_numpy(), psimap)
 
 
+class TestScalings:
+
+    SCALING_FIELDS = (
+        'greenwald_density',
+        'greenwald_fraction',
+        'effective_collisionality_angioni',
+        'confinement_time_scaling_h98',
+        'confinement_time_scaling_h89',
+        'confinement_time_scaling_l97',
+        'power_lh_scaling_martin',
+        'power_lh_ratio',
+        'qstar_uckan',
+        'qstar_iter',
+        'width_scrape_off_layer_brunner',
+        'width_scrape_off_layer_eich14',
+        'width_scrape_off_layer_eich15',
+    )
+
+    # The block was gated on 'bcentr', a GACODE field name that plasma_io never stores,
+    # so none of these were ever produced. Guard the gate against regressing to that.
+    def test_scalings_are_produced(self, derived_reference):
+        missing = [key for key in self.SCALING_FIELDS if key not in derived_reference]
+        assert not missing
+
+    def test_greenwald_density_matches_closed_form(self, derived_reference):
+        d = derived_reference
+        current_ma = 1.0e-6 * np.abs(d['current'].to_numpy())
+        expected = 1.0e20 * current_ma / (np.pi * d['r_minor_lcfs'].to_numpy() ** 2)
+        np.testing.assert_allclose(d['greenwald_density'].to_numpy(), expected, rtol=1.0e-12)
+        np.testing.assert_allclose(
+            d['greenwald_fraction'].to_numpy(),
+            d['density_e_volume_average'].to_numpy() / expected,
+            rtol=1.0e-12,
+        )
+
+    # The scalings are empirical fits in MA, MW and 10^19 or 10^20 m^-3, while plasma_io
+    # stores SI, so a missing conversion shows up as a power of ten rather than a crash.
+    def test_scalings_are_physical(self, derived_reference):
+        d = derived_reference
+        assert 1.0e18 < d['greenwald_density'].to_numpy().min()
+        assert d['greenwald_density'].to_numpy().max() < 1.0e22
+        for key in ('confinement_time_scaling_h98', 'confinement_time_scaling_h89', 'confinement_time_scaling_l97'):
+            tau = d[key].to_numpy()
+            assert np.all((tau > 1.0e-3) & (tau < 1.0e2)), key
+        qstar = d['qstar_uckan'].to_numpy()
+        assert np.all((qstar > 0.5) & (qstar < 50.0))
+
+    def test_low_density_lh_correction_only_fires_below_the_minimum(self, derived_reference):
+        # The Martin threshold rises below the density minimum and is unmodified above it
+        d = derived_reference
+        p_lh = (
+            2.15
+            * (1.0e-20 * d['density_e_volume_average']) ** (0.782)
+            * np.abs(d['field_axis']) ** (0.772)
+            * d['r_minor_lcfs'] ** (0.975)
+            * d['r_geometric_lcfs'] ** (0.999)
+            * (2.0 / d['mass_main_average']) ** (1.11)
+        ).to_numpy()
+        assert np.all(d['power_lh_scaling_martin'].to_numpy() >= p_lh * (1.0 - 1.0e-12))
+
+
 class TestFieldComponents:
 
     # b_inner and b_outer are normalized to field_unit, so the physical field carries
@@ -413,6 +474,14 @@ class TestFieldComponents:
         for name in ('field_inner', 'field_outer'):
             bt = d[name].sel(direction='toroidal').isel(radius=-1).to_numpy()
             np.testing.assert_array_equal(np.sign(bt), unit_sign, err_msg=name)
+
+    @pytest.mark.parametrize('keys', SIGN_FLIPS.values(), ids=SIGN_FLIPS.keys())
+    def test_scrape_off_layer_widths_stay_positive_under_sign_flips(self, gacode_file_path, keys):
+        d = _plasma_with_flipped_signs(gacode_file_path, keys).input
+        for name in ('width_scrape_off_layer_brunner', 'width_scrape_off_layer_eich14', 'width_scrape_off_layer_eich15'):
+            width = d[name].to_numpy()
+            assert np.all(np.isfinite(width)), name
+            assert np.all(width > 0.0), name
 
     def test_poloidal_field_is_of_order_the_current_estimate(self, derived_reference):
         d = derived_reference
