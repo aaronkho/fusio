@@ -134,3 +134,46 @@ def test_plasma_to_imas_eqdsk_roundtrip(gacode_file_path, tmp_path):
     # so the steep derivative profiles get a looser tolerance
     for key, tol in [('fpol', 1e-2), ('pres', 1e-2), ('ffprime', 5e-2), ('pprime', 5e-2)]:
         np.testing.assert_allclose(b[key], a[key], rtol=0.0, atol=tol * np.max(np.abs(a[key])), err_msg=key)
+
+
+def test_imas_ragged_profiles_2d_roundtrip(tmp_path):
+    # imas-python to_xarray() pads arrays of structures whose entries differ in size without
+    # recording the extents, so imas_io has to carry them itself to write a valid file back
+    import imas
+    rect = (np.arange(20.0) + 1.0).reshape(5, 4)
+    polar = (np.arange(21.0) + 100.0).reshape(3, 7)
+    factory = imas.IDSFactory(version='4.0.0')
+    eq = factory.equilibrium()
+    eq.ids_properties.homogeneous_time = imas.ids_defs.IDS_TIME_MODE_HOMOGENEOUS
+    eq.time = np.array([0.0])
+    eq.time_slice.resize(1)
+    p2d = eq.time_slice[0].profiles_2d
+    p2d.resize(2)
+    p2d[0].grid_type = imas.identifiers.poloidal_plane_coordinates_identifier.rectangular
+    p2d[0].grid.dim1 = np.linspace(1.0, 2.0, rect.shape[0])
+    p2d[0].grid.dim2 = np.linspace(-1.0, 1.0, rect.shape[1])
+    p2d[0].psi = rect
+    p2d[1].grid_type = imas.identifiers.poloidal_plane_coordinates_identifier.inverse_rhotornorm_polar
+    p2d[1].grid.dim1 = np.linspace(0.0, 1.0, polar.shape[0])
+    p2d[1].grid.dim2 = np.linspace(0.0, 2.0 * np.pi, polar.shape[1])
+    p2d[1].psi = polar
+    src = tmp_path / 'src'
+    src.mkdir()
+    with imas.DBEntry(src / 'equilibrium.nc', 'w', dd_version='4.0.0') as entry:
+        entry.put(eq)
+
+    obj = imas_io(input=src)
+    # The flat representation is dense, so it stays padded, with the true extents alongside it
+    shapes = obj.input['equilibrium.time_slice.profiles_2d.psi:shape'].to_numpy()
+    np.testing.assert_array_equal(shapes.reshape(2, 2), np.array([rect.shape, polar.shape]))
+    assert obj.input['equilibrium.time_slice.profiles_2d.psi'].shape[-2:] == (5, 7)
+
+    obj.write(tmp_path / 'dst', side='input')
+    with imas.DBEntry(str(tmp_path / 'dst' / 'equilibrium.nc'), 'r') as entry:
+        out = entry.get('equilibrium').time_slice[0].profiles_2d
+    assert [p.grid_type.name for p in out] == ['rectangular', 'inverse_rhotornorm_polar']
+    for written, expected in zip(out, [rect, polar]):
+        assert np.asarray(written.psi).shape == expected.shape
+        np.testing.assert_allclose(np.asarray(written.psi), expected)
+        assert np.asarray(written.grid.dim1).size == expected.shape[0]
+        assert np.asarray(written.grid.dim2).size == expected.shape[1]

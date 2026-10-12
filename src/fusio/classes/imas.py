@@ -232,6 +232,75 @@ class imas_io(io):
             self._write_imas_directory(path, self.output, overwrite=overwrite)
 
 
+    @classmethod
+    def _collect_ragged_array_shapes(
+        cls,
+        ids_struct: IDSStructure,
+    ) -> MutableMapping[str, NDArray]:
+        """
+        Records the true extent of every array under an array of structures whose entries
+        differ in size, which imas-python to_xarray() pads to a common size without noting.
+
+        The shapes are keyed by the dot-delimited node path and indexed by the enclosing
+        array of structure indices, matching the ':shape' convention of the IMAS netCDF
+        format and the padding removal in _convert_to_ids_structure.
+        """
+        extents: MutableMapping[str, MutableMapping[tuple[int, ...], tuple[int, ...]]] = {}
+        ndims: MutableMapping[str, int] = {}
+
+        def _record(node: IDSBase) -> None:
+            ndim = getattr(node.metadata, 'ndim', 0)
+            if isinstance(node, (IDSStructure, IDSStructArray)) or ndim < 1:
+                return
+            full_path = imas.util.get_full_path(node)
+            index = tuple(int(i) for i in re.findall(r'\[(\d+)\]', full_path))
+            if not index:
+                return  # Only arrays inside an array of structures can be padded against a sibling
+            path = re.sub(r'\[\d+\]', '', full_path).replace('/', '.')
+            try:
+                shape = tuple(int(n) for n in np.asarray(node).shape)
+            except Exception:
+                return
+            extents.setdefault(path, {})[index] = shape
+            ndims[path] = int(ndim)
+
+        imas.util.visit_children(_record, ids_struct, leaf_only=True, visit_empty=True)
+
+        shapes: MutableMapping[str, NDArray] = {}
+        for path, per_index in extents.items():
+            if len(set(per_index.values())) < 2:
+                continue  # Uniform across the array of structures, so to_xarray() applied no padding
+            depth = len(next(iter(per_index)))
+            aos_sizes = tuple(max(index[i] for index in per_index) + 1 for i in range(depth))
+            shape_array = np.zeros(aos_sizes + (ndims[path], ), dtype=int)
+            for index, shape in per_index.items():
+                shape_array[index] = shape
+            shapes[path] = shape_array
+        return shapes
+
+
+    @classmethod
+    def _convert_to_xarray(
+        cls,
+        ids_struct: IDSStructure,
+    ) -> xr.Dataset:
+        """
+        Converts an IDS into its flat xarray representation, augmented with the ':shape'
+        variables which record the extents that to_xarray() drops when it pads ragged
+        arrays, such as the equilibrium profiles_2d grids of differing sizes.
+        """
+        ds = imas.util.to_xarray(ids_struct)
+        newvars = {}
+        for path, shape_array in cls._collect_ragged_array_shapes(ids_struct).items():
+            if path not in ds:
+                continue
+            # The leading dimensions are those of the enclosing arrays of structures, taken from
+            # the padded variable itself, and the last is the helper dimension of the netCDF format
+            dims = tuple(ds[path].dims[:shape_array.ndim - 1]) + (f'{shape_array.shape[-1]:d}D', )
+            newvars[f'{path}:shape'] = (dims, shape_array)
+        return ds.assign(newvars) if newvars else ds
+
+
     def _convert_to_ids_structure(
         self,
         ids_name: str,
@@ -313,8 +382,9 @@ class imas_io(io):
                 data.pop(key)
         for key in sorted(shape_data.keys(), key=len):
             _recursive_resize_struct_array(ids_struct, key.replace('[]', '').split(delimiter), shape_data[key])
-        # imas-python to_xarray() pads ragged arrays (e.g. profiles_2d grids of different sizes) to a common size, recording
-        # the true size of each in a '<name>:shape' variable along a helper dimension named '1D', '2D', ...
+        # Ragged arrays (e.g. profiles_2d grids of different sizes) are padded to a common size, with
+        # the true size of each held in a '<name>:shape' variable along a helper dimension named
+        # '1D', '2D', ..., as written by the IMAS netCDF format and by _convert_to_xarray
         ragged_shapes = {key[:-len(':shape')]: data.pop(key) for key in list(data.keys()) if key.endswith(':shape')}
         for key in [key for key in data.keys() if re.fullmatch(r'\d+D', key)]:
             data.pop(key)
@@ -375,7 +445,7 @@ class imas_io(io):
                 for ids, ids_struct in idsmap.items():
                     if ids_struct.has_value:
                         ids_struct.validate()
-                        ds_ids = imas.util.to_xarray(ids_struct)
+                        ds_ids = self._convert_to_xarray(ids_struct)
                         unique_names = list(set(
                             [k for k in ds_ids.dims] +
                             [k for k in ds_ids.coords] +
@@ -427,7 +497,7 @@ class imas_io(io):
                 for ids, ids_struct in idsmap.items():
                     if ids_struct.has_value:
                         ids_struct.validate()
-                        ds_ids = imas.util.to_xarray(ids_struct)
+                        ds_ids = self._convert_to_xarray(ids_struct)
                         unique_names = list(set(
                             [k for k in ds_ids.dims] +
                             [k for k in ds_ids.coords] +
@@ -497,7 +567,7 @@ class imas_io(io):
                     ids_struct = self._convert_to_ids_structure(f'{ids}', idsdata, delimiter='&', version=attrs.get('data_dictionary_version', None))
                     if ids_struct.has_value:
                         ids_struct.validate()
-                        ds_ids = imas.util.to_xarray(ids_struct)
+                        ds_ids = self._convert_to_xarray(ids_struct)
                         unique_names = list(set(
                             [k for k in ds_ids.dims] +
                             [k for k in ds_ids.coords] +
@@ -1506,7 +1576,7 @@ class imas_io(io):
             for ids, ids_struct in idsmap.items():
                 if ids_struct.has_value:
                     ids_struct.validate()
-                    ds_ids = imas.util.to_xarray(ids_struct)
+                    ds_ids = cls._convert_to_xarray(ids_struct)
                     unique_names = list(set(
                         [k for k in ds_ids.dims] +
                         [k for k in ds_ids.coords] +
