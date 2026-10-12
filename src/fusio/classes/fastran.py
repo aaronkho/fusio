@@ -1,11 +1,14 @@
+import copy
 import logging
 from pathlib import Path
 from .io import Any, Final, Self
 from collections.abc import MutableMapping, Mapping, Sequence
+from numpy.typing import NDArray
 import numpy as np
 import xarray as xr
 
 from .io import io
+from ..utils.plasma_tools import define_ion_species
 
 logger = logging.getLogger('fusio')
 
@@ -303,6 +306,90 @@ class fastran_io(io):
                 logger.warning(f'Requested write path, {opath.resolve()}, already exists! Aborting write...')
         else:
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
+
+
+    def resolve_ion_species(
+        self,
+        data: xr.Dataset,
+    ) -> tuple[list[str], list[str], list[NDArray], list[NDArray], list[NDArray], list[NDArray]]:
+        """Resolve the ion species carried by a FASTRAN output dataset.
+
+        FASTRAN carries a lumped main ion, a thermal helium ash, an arbitrary number of
+        impurities indexed on the imp dimension, and fast populations from the neutral beam
+        and from fusion reactions. Species resolving to the same element symbol are merged,
+        which is exactly charge-conserving since a shared symbol implies a shared charge, so
+        quasi-neutrality and the effective charge are both preserved while only the mass of
+        the merged species becomes approximate. Fast species take a _fast suffix to keep them
+        distinct from the thermal species of the same element, applied through
+        define_ion_species' fast keyword and only where a name would otherwise be duplicated.
+
+        Expects a dataset already reduced to the desired time window. Returns the species
+        names, types, masses, charges, densities and temperatures as lists, with masses and
+        charges shaped per time and densities and temperatures shaped per time and radius.
+        """
+
+        ntime = len(data['time']) if 'time' in data.coords else 1
+        nrho = len(data['rho']) if 'rho' in data.coords else 0
+        ones = np.ones(ntime)
+        zeros = np.zeros((ntime, nrho))
+        ti = data['ti'].to_numpy() if 'ti' in data else copy.deepcopy(zeros)
+        amain = data['amain'].to_numpy().flatten() if 'amain' in data else 2.0 * ones
+        zmain = data['zmain'].to_numpy().flatten() if 'zmain' in data else 1.0 * ones
+        mname, _, _ = define_ion_species(z=float(zmain[-1]), a=float(amain[-1]))
+        species = []
+        if 'ni' in data:
+            species.append((f'{mname}', '[therm]', amain, zmain, data['ni'].to_numpy(), ti))
+        if 'nhe' in data:
+            species.append(('He', '[therm]', 4.0 * ones, 2.0 * ones, data['nhe'].to_numpy(), ti))
+        if 'nz' in data and 'aimp' in data and 'zimp' in data and 'imp' in data.coords:
+            aimp = data['aimp'].to_numpy().flatten()
+            zimp = data['zimp'].to_numpy().flatten()
+            for k in range(len(data.coords['imp'])):
+                zname, _, _ = define_ion_species(z=float(zimp[k]), a=float(aimp[k]))
+                species.append((f'{zname}', '[therm]', aimp[k] * ones, zimp[k] * ones, data['nz'].isel(imp=k).to_numpy(), ti))
+        # Fast species are only taken when populated, since FASTRAN writes their profiles even
+        # when the corresponding heating or fusion source is switched off, and a zero-density
+        # species breaks downstream normalizations
+        for dkey, wkey, fmass, fcharge in [
+            ('nbeam', 'wbeam', amain, zmain),
+            ('nalpha', 'walp', 4.0 * ones, 2.0 * ones),
+        ]:
+            if dkey in data and np.any(data[dkey].to_numpy() > 0.0):
+                fname, _, _ = define_ion_species(z=float(fcharge[-1]), a=float(fmass[-1]))
+                nfast = data[dkey].to_numpy()
+                tfast = copy.deepcopy(ti)
+                if wkey in data:
+                    # FASTRAN stores the fast ion energy density as n * (eperp + epll) * 1.602e-3,
+                    # inverted here into the equivalent temperature (2 / 3) * (eperp + epll)
+                    tfast = np.where(
+                        nfast > 0.0,
+                        (2.0 / 3.0) * data[wkey].to_numpy() / np.where(nfast > 0.0, nfast, 1.0) / 1.602e-3,
+                        tfast,
+                    )
+                species.append((fname, '[fast]', fmass, fcharge, nfast, tfast))
+        names: list[str] = []
+        types: list[str] = []
+        masses: list[np.ndarray] = []
+        charges: list[np.ndarray] = []
+        densities: list[np.ndarray] = []
+        temperatures: list[np.ndarray] = []
+        for sname, stype, smass, scharge, sdensity, stemperature in species:
+            newname = f'{sname}'
+            if newname in names and stype == '[fast]':
+                # The type field already distinguishes the fast population from the thermal one, so
+                # the tag is only applied where it is needed to keep the species names distinct
+                newname, _, _ = define_ion_species(short_name=sname, fast=True)
+            if newname in names:
+                logger.warning(f'Multiple {newname} species found in {self.format} data, merging their densities...')
+                densities[names.index(newname)] = densities[names.index(newname)] + sdensity
+                continue
+            names.append(newname)
+            types.append(stype)
+            masses.append(smass)
+            charges.append(scharge)
+            densities.append(sdensity)
+            temperatures.append(stemperature)
+        return names, types, masses, charges, densities, temperatures
 
 
     @classmethod

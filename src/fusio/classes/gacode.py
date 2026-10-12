@@ -11,7 +11,7 @@ from packaging.version import Version
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
-from ..utils.plasma_tools import define_ion_species, define_fastran_ion_species
+from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
     read_eqdsk,
@@ -2449,7 +2449,9 @@ class gacode_io(io):
 
                 # FASTRAN carries a lumped main ion, a thermal helium ash species and an arbitrary
                 # number of impurities, all of which share the single ion temperature profile
-                names, types, masses, charges, densities, temperatures = define_fastran_ion_species(data)
+                # Resolved by the source class, which owns the FASTRAN-specific field layout;
+                # duck-typed on obj as the input and output properties above already are
+                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data)  # type: ignore[attr-defined]
                 if len(names) > 0:
                     coords['name'] = np.array(names)
                     data_vars['nion'] = (['n'], np.atleast_1d([len(names)] * len(coords['n'])).astype(int))
