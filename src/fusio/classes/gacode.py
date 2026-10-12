@@ -571,8 +571,13 @@ class gacode_io(io):
                     newvars['b_ref'] = (['n', 'rho'], np.abs(data['b_unit'].to_numpy() * newvars['geo_bt'][-1]))
                 bt = np.squeeze(np.take_along_axis(bt, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
                 bp = np.squeeze(np.take_along_axis(bp, np.expand_dims(np.argmax(r, axis=0), axis=0), axis=0), axis=0)
-                newvars['bt_out'] = (['n', 'rho'], np.where(np.isfinite(bt), bt, 0.0))
-                newvars['bp_out'] = (['n', 'rho'], np.where(np.isfinite(bp), bp, 0.0))
+                if 'b_unit' in data:
+                    # bt and bp are normalized to b_unit, so carry one power of it to reach T, rather
+                    # than being emitted normalized under a physical name. The sign is retained;
+                    # consumers that assume a positive field take the magnitude there.
+                    bunit = data['b_unit'].to_numpy()
+                    newvars['bt_out'] = (['n', 'rho'], bunit * np.where(np.isfinite(bt), bt, 0.0))
+                    newvars['bp_out'] = (['n', 'rho'], bunit * np.where(np.isfinite(bp), bp, 0.0))
         if side == 'output':
             self.update_output_data_vars(newvars)
         else:
@@ -1105,40 +1110,40 @@ class gacode_io(io):
         if 'current' in data and 'bcentr' in data:
 
             if 'rmin' in data and 'n_e_vol' in data and 'ne' in data:
-                newvars['n_gw'] = (['n'], (data['current'] / (np.pi * data['rmin'] ** 2)).to_numpy()[:, -1])
+                newvars['n_gw'] = (['n'], (abs(data['current']) / (np.pi * data['rmin'] ** 2)).to_numpy()[:, -1])
                 newvars['f_gw'] = (['n'], 0.1 * data['n_e_vol'].to_numpy() / newvars['n_gw'][-1])
                 newvars['f_gw_local'] = (['n', 'rho'], 0.1 * data['ne'].to_numpy() / np.expand_dims(newvars['n_gw'][-1], axis=-1))
 
             if all(key in data for key in ('rcentr', 'kappa', 'eps', 'n_e_line', 'mass_i', 'ptotal')):
                 newvars['tau98'] = (['n'], (
                     0.0562
-                    * data['current'] ** (0.93)
+                    * abs(data['current']) ** (0.93)
                     * data['rcentr'] ** (1.97)
                     * data['kappa'].isel(rho=-1) ** (0.78)
                     * data['eps'] ** (0.58)
-                    * data['bcentr'] ** (0.15)
+                    * abs(data['bcentr']) ** (0.15)
                     * data['n_e_line'] ** (0.41)
                     * data['mass_i'] ** (0.19)
                     * data['ptotal'].isel(rho=-1) ** (-0.69)
                 ).to_numpy())
                 newvars['tau89'] = (['n'], (
                     0.048
-                    * data['current'] ** (0.85)
+                    * abs(data['current']) ** (0.85)
                     * data['rcentr'] ** (1.50)
                     * data['kappa'].isel(rho=-1) ** (0.50)
                     * data['eps'] ** (0.30)
-                    * data['bcentr'] ** (0.20)
+                    * abs(data['bcentr']) ** (0.20)
                     * (data['n_e_line'] * 0.1) ** (0.10)
                     * data['mass_i'] ** (0.50)
                     * data['ptotal'].isel(rho=-1) ** (-0.50)
                 ).to_numpy())
                 newvars['tau97l'] = (['n'], (
                     0.023
-                    * data['current'] ** (0.96)
+                    * abs(data['current']) ** (0.96)
                     * data['rcentr'] ** (1.83)
                     * data['kappa'].isel(rho=-1) ** (0.64)
                     * data['eps'] ** (0.06)
-                    * data['bcentr'] ** (0.03)
+                    * abs(data['bcentr']) ** (0.03)
                     * data['n_e_line'] ** (0.40)
                     * data['mass_i'] ** (0.20)
                     * data['ptotal'].isel(rho=-1) ** (-0.73)
@@ -1147,16 +1152,16 @@ class gacode_io(io):
             if all(key in data for key in ('a', 'eps', 'n_e_vol', 'mass_i', 'rcentr')):
                 lh_nmin = (
                     0.07
-                    * data['current'] ** (0.34)
-                    * data['bcentr'] ** (0.62)
+                    * abs(data['current']) ** (0.34)
+                    * abs(data['bcentr']) ** (0.62)
                     * data['a'] ** (-0.95)
                     * data['eps'] ** (0.4)
                 ).to_numpy()
-                nminfactor = np.where(data['n_e_vol'].to_numpy() > lh_nmin, (data['n_e_vol'].to_numpy() / lh_nmin) ** 2, 1.0)
+                nminfactor = np.where(data['n_e_vol'].to_numpy() < lh_nmin, (lh_nmin / data['n_e_vol'].to_numpy()) ** 2, 1.0)  # The threshold only rises below the density minimum
                 newvars['p_lh_martin'] = (['n'], (
                     2.15
-                    * data['n_e_vol'] ** (0.782)
-                    * data['bcentr'] ** (0.772)
+                    * (0.1 * data['n_e_vol']) ** (0.782)  # The scaling takes the density in 10^20 m^-3
+                    * abs(data['bcentr']) ** (0.772)
                     * data['a'] ** (0.975)
                     * data['rcentr'] ** (0.999)
                     * (2.0 / data['mass_i']) ** (1.11)
@@ -1172,16 +1177,16 @@ class gacode_io(io):
                     2.5
                     * data['rmaj'].isel(rho=-1)
                     * data['eps'] ** 2
-                    * data['bcentr']
-                    / data['current']
+                    * abs(data['bcentr'])
+                    / abs(data['current'])
                     * uckan_shaping
                 ).to_numpy())
                 newvars['qstar_iter'] = (['n'], (
                     2.5
                     * data['rmaj'].isel(rho=-1)
                     * data['eps'] ** 2
-                    * data['bcentr']
-                    / data['current']
+                    * abs(data['bcentr'])
+                    / abs(data['current'])
                     * iter_shaping
                 ).to_numpy())
 
@@ -1193,13 +1198,13 @@ class gacode_io(io):
             if 'bp_out' in data:
                 newvars['lq_eich14'] = (['n'], (
                     0.63
-                    * data['bp_out'].isel(rho=-1) ** (-1.19)
+                    * abs(data['bp_out'].isel(rho=-1)) ** (-1.19)
                 ).to_numpy())
             if all(key in data for key in ('p_sol', 'bp_out', 'rcentr', 'eps')):
                 newvars['lq_eich15'] = (['n'], (
                     1.35
-                    * (data['p_sol'] * 1.0e6) ** (-0.02)
-                    * data['bp_out'].isel(rho=-1) ** (-0.92)
+                    * data['p_sol'] ** (-0.02)  # p_sol is already in MW, which is what the scaling takes
+                    * abs(data['bp_out'].isel(rho=-1)) ** (-0.92)
                     * data['rcentr'] ** (0.04)
                     * data['eps'] ** (0.42)
                 ).to_numpy())
