@@ -45,6 +45,7 @@ build = ["build", "twine"]
 "Homepage" = "https://github.com/aaronkho/fusio"
 
 [project.scripts]
+fusio_convert = "fusio.scripts.convert:main"
 generate_qualikiz_runs = "fusio.scripts.standalone_qualikiz:main"
 generate_tglf_runs = "fusio.scripts.standalone_tglf:main"
 

@@ -52,8 +52,42 @@ Format conversion is done via:
 
 Registered as package entry points:
 
+- `fusio_convert` (`scripts/convert.py`) — generic class-to-class format conversion
 - `generate_tglf_runs` (`scripts/standalone_tglf.py`) — converts TORAX output → TGLF standalone input files
 - `generate_qualikiz_runs` (`scripts/standalone_qualikiz.py`) — converts TORAX output → QuaLiKiz input files
+
+### `fusio_convert`
+
+Mirrors `obj.to(fmt)` on the command line. The conversion matrix is built by introspecting
+the `from_<source>` methods on each format class, so it tracks the classes rather than
+duplicating them; `--list` prints it.
+
+```bash
+fusio_convert input.gacode -t plasma -o state.nc        # source format is auto-detected
+fusio_convert out.nc -f torax -t gacode -o input.gacode
+fusio_convert imas_dir/ -t torax --via plasma gacode    # multi-hop, see below
+fusio_convert state.nc -t gacode -e equil.geqdsk        # fold in an equilibrium
+fusio_convert --list
+```
+
+Key behaviours:
+
+- **Source detection** — inferred from path and contents when `-f` is omitted: suffix for
+  `.gacode`, top-level keys for `.json` (TORAX config vs. OMAS), variable names for `.nc`,
+  IDS filenames for IMAS/ASTRA directories. Files produced by `io.dump()` are recognized by
+  their root `class` attribute and loaded through `io.load()`.
+- **Routing** — direct `from_<source>` edges only, unless `--via <fmt> ...` names
+  intermediates or `--via auto` searches for the shortest route. `source == target` with no
+  self-conversion is a passthrough, which makes `--eqdsk`/derivation-only runs possible.
+- **Derived quantities** — `compute_derived_quantities()` runs at every hop whose class
+  defines it (`plasma_io`, `gacode_io`); failures warn rather than abort, since derivation is
+  enrichment. `--no-derive` opts out.
+- **Sides** — conversion methods always deposit onto the target's `input` side, so reads
+  default to `output` (`--read-side`) and writes to `input`.
+- Valid targets are the formats with a working `write()`: `plasma`, `gacode`, `imas`, `torax`.
+  `omas_io._write_omas_json_file` is a no-op and `astra_io.write` only warns, so those are
+  intermediates only; `fastran_io.from_plasma` and `transp_io.from_plasma` are stubs that
+  raise, and are excluded from the conversion map via `STUB_CONVERSIONS`.
 
 ## Typical Workflow
 
