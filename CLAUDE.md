@@ -53,8 +53,11 @@ Format conversion is done via:
 Registered as package entry points:
 
 - `fusio_convert` (`scripts/convert.py`) — generic class-to-class format conversion
-- `generate_tglf_runs` (`scripts/standalone_tglf.py`) — converts TORAX output → TGLF standalone input files
-- `generate_qualikiz_runs` (`scripts/standalone_qualikiz.py`) — converts TORAX output → QuaLiKiz input files
+- `generate_tglf_runs` (`scripts/standalone_tglf.py`) — TGLF standalone input files
+- `generate_qualikiz_runs` (`scripts/standalone_qualikiz.py`) — QuaLiKiz input files
+- `generate_cgyro_runs` (`scripts/standalone_cgyro.py`) — CGYRO input files
+
+Shared plumbing for the three run generators lives in `scripts/standalone.py`.
 
 ### `fusio_convert`
 
@@ -88,6 +91,55 @@ Key behaviours:
   `omas_io._write_omas_json_file` is a no-op and `astra_io.write` only warns, so those are
   intermediates only; `fastran_io.from_plasma` and `transp_io.from_plasma` are stubs that
   raise, and are excluded from the conversion map via `STUB_CONVERSIONS`.
+
+### Standalone run generators
+
+Each generator reads a source file, routes it to a format implementing
+`to_<code>_parameters()`, then expands the result into one run directory per operating
+point. The producer map is introspected the same way the conversion map is, so defining a
+new `to_<code>_parameters()` makes it available to the CLI; `--list` prints it.
+
+```bash
+generate_cgyro_runs out.nc -f torax -r 0.4 0.6 -o ./cgyro_runs
+generate_cgyro_runs input.gacode -e equil.geqdsk -r 0.5   # routed gacode → plasma → imas
+generate_tglf_runs torax_output.nc -t 2.0 -r 0.5 --cell-grid
+generate_qualikiz_runs torax_output.nc -x /path/to/qualikiz
+```
+
+Who can feed what:
+
+| Code | Native producers | Reachable by conversion |
+|---|---|---|
+| `tglf` | `torax` | — |
+| `qualikiz` | `torax` | — |
+| `cgyro` | `torax`, `imas` | `plasma`, `gacode`, `omas`, `fastran`, `astra` |
+
+- **`NATIVE_ONLY_PRODUCERS`** — `torax_io.to_*_parameters()` read TORAX *output* profiles
+  from `self.output`, but `torax_io.from_gacode`/`from_omas` build a TORAX *configuration*
+  on the input side. A converted `torax_io` therefore yields nothing, so `torax` is marked
+  native-only: it is never used as a conversion target, and asking for it via `--via` is a
+  hard error rather than a silently empty run set.
+- **Hub-preferred routing** — there is no target format to name, so a route to a producer is
+  chosen automatically. `standalone.route_to_producer()` prefers a route through `plasma`
+  over a shorter direct edge, because the direct cross-conversions cover less: `gacode →
+  imas` fills only `equilibrium`, while `gacode → plasma → imas` also fills `core_profiles`
+  and `core_sources`. `--via` overrides.
+- **EQDSK placement** — `convert.select_eqdsk_hop()` folds the equilibrium in at `plasma`
+  when the route passes through it, otherwise at the first capable format. This matters for
+  CGYRO: `imas_io.to_cgyro_parameters()` traces MXH coefficients through `to_eqdsk()`, which
+  needs the rectangular `profiles_2d` grid that `imas_io.from_plasma` only writes when
+  `plasma_io` carries a `poloidal_flux_map` — i.e. only after `add_geometry_from_eqdsk`.
+- **Plan shapes** — `build_pointwise_plan()` for the local codes (TGLF, CGYRO: one run per
+  time and radius), `build_profile_plan()` for the radial-scan codes (QuaLiKiz: one run per
+  time, arrays over rho). CGYRO uses `overlay_all=True` so the variable-length MXH shape
+  series (`SHAPE_SIN3`, `SHAPE_S_COS4`, …) survives; TGLF and QuaLiKiz keep the original
+  behaviour of writing only keys named in their templates.
+- **Producer kwargs** — `call_parameter_generator()` reads the signature of
+  `to_<code>_parameters` and passes only what it accepts, since the producers differ
+  (`lump_impurities`/`use_cell_grid` on `torax_io`, `side`/`n_mxh_moments`/`n_fine` on
+  `imas_io`).
+- Run directories are regenerated artifacts, so an existing input file is replaced, matching
+  the original scripts' behaviour.
 
 ## Typical Workflow
 
