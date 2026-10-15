@@ -314,7 +314,18 @@ class gacode_io(io):
                 newvars['a'] = (['n'], a.to_numpy())
                 newvars['roa'] = (['n', 'rho'], (data['rmin'] / a).to_numpy())
                 if 'rmaj' in data:
-                    newvars['aspect_local'] = (['n', 'rho'], (data['rmaj'] / data['rmin']).to_numpy())
+                    # rmaj / rmin diverges on the magnetic axis, so the axial value is
+                    # extrapolated from the neighbouring surfaces, as done for the other
+                    # quantities which are singular there
+                    rmin_np = data['rmin'].to_numpy()
+                    aspect_local = np.divide(
+                        data['rmaj'].to_numpy(),
+                        rmin_np,
+                        out=np.zeros_like(rmin_np),
+                        where=(rmin_np > 0.0),
+                    )
+                    aspect_local[..., 0] = 2.0 * aspect_local[..., 1] - aspect_local[..., 2]
+                    newvars['aspect_local'] = (['n', 'rho'], aspect_local)
                     newvars['aspect'] = (['n'], (data['rmaj'] / data['rmin']).isel(rho=-1).to_numpy())
                     newvars['eps_local'] = (['n', 'rho'], (data['rmin'] / data['rmaj']).to_numpy())
                     newvars['eps'] = (['n'], (data['rmin'] / data['rmaj']).isel(rho=-1).to_numpy())
