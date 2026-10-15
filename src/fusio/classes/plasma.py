@@ -703,12 +703,16 @@ class plasma_io(io):
             mxh_z0 = data['z_geometric'].to_numpy()
             mxh_dz0 = vectorized_numpy_derivative(data['r_minor'].to_numpy(), mxh_z0)
             mxh_r = (np.nanmax(contour_r, axis=-1) - np.nanmin(contour_r, axis=-1)) / 2.0
-            mxh_kappa = (np.nanmax(contour_z, axis=-1) - np.nanmin(contour_z, axis=-1)) / (2.0 * mxh_r)
+            # The flux surface collapses onto the magnetic axis, where mxh_r vanishes, so the
+            # divisions by it are masked and the axial values which depend on them are
+            # extrapolated from the neighbouring surfaces further below
+            mxh_r_safe = np.where(mxh_r > 0.0, mxh_r, 1.0)
+            mxh_kappa = (np.nanmax(contour_z, axis=-1) - np.nanmin(contour_z, axis=-1)) / (2.0 * mxh_r_safe)
             mxh_kappa[..., 0] = 2.0 * mxh_kappa[..., 1] - mxh_kappa[..., 2]
             mxh_s_kappa = data['r_minor_norm'].to_numpy() / mxh_kappa * vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_kappa)
-            r_norm = (contour_r - np.expand_dims(mxh_r0, axis=-1)) / np.expand_dims(mxh_r, axis=-1)
+            r_norm = (contour_r - np.expand_dims(mxh_r0, axis=-1)) / np.expand_dims(mxh_r_safe, axis=-1)
             r_norm = np.where(r_norm > 1.0, 1.0, np.where(r_norm < -1.0, -1.0, r_norm))
-            z_norm = (contour_z - np.expand_dims(mxh_z0, axis=-1)) / np.expand_dims(mxh_kappa * mxh_r, axis=-1)
+            z_norm = (contour_z - np.expand_dims(mxh_z0, axis=-1)) / np.expand_dims(mxh_kappa * mxh_r_safe, axis=-1)
             z_norm = np.where(z_norm > 1.0, 1.0, np.where(z_norm < -1.0, -1.0, z_norm))
 
             def _arccos2pi(x):

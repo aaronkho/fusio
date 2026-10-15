@@ -532,7 +532,10 @@ class gacode_io(io):
                     r_t_i = r_t[:, :, i_rho]
                     l_t_i = l_t[:, :, i_rho]
                     dn_normal = np.abs(dr_surf * z_t_i - dz_surf * r_t_i) / np.where(l_t_i > 1.0e-10, l_t_i, 1.0e-10)
-                    grad_psi_mag[:, :, i_rho] = np.where(dn_normal > 1.0e-10, np.abs(dpsi) / dn_normal, 0.0)
+                    # The divisor is masked inside the branch as well, since np.where
+                    # evaluates both of them and dn_normal vanishes on the axis
+                    normal_ok = dn_normal > 1.0e-10
+                    grad_psi_mag[:, :, i_rho] = np.where(normal_ok, np.abs(dpsi) / np.where(normal_ok, dn_normal, 1.0), 0.0)
                 bp_phys = grad_psi_mag / (2.0 * np.pi * r)
                 bp_phys_line_integral = np.sum(bp_phys[:-1] * l_t[:-1], axis=0) * 2.0 * np.pi / float(n_theta - 1)
                 newvars['Ip_profile_miller'] = (['n', 'rho'], bp_phys_line_integral / mu0)
