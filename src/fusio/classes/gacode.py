@@ -1900,15 +1900,19 @@ class gacode_io(io):
                     elif 'config' in data.attrs and 'n_impurity' in data:
                         nimp = 1.0e-19 * np.expand_dims(data['n_impurity'].to_numpy(), axis=-1)
                         impdict = data.attrs['config'].get('plasma_composition', {}).get('impurity', {})
+                        impref = nimp if impdict.get('impurity_mode', 'fractions') == 'fractions' else np.expand_dims(ne, axis=-1)
                         imp_splits = []
-                        for key in impdict:
+                        for key, spec in impdict.get('species', {}).items():
+                            val = spec.get('value', ['float', [0.0]])
+                            if isinstance(val, dict):
+                                val = next(iter(val.values()))[-1]
                             simps.append(f'{key}')
-                            imp_splits.append(impdict[key].get('value', ['float', [0.0]])[1][-1])
+                            imp_splits.append(val[1][-1])
                             _, impa, impz = define_ion_species(short_name=f'{key}')
                             aimps.append(np.expand_dims(zeros + impa, axis=-1))
                             zimps.append(np.expand_dims(zeros + impz, axis=-1))
                         if len(imp_splits) > 0:
-                            nimps = [val * nimp for val in imp_splits]
+                            nimps = [val * impref for val in imp_splits]
                     if len(nimps) > 0:
                         nimp = np.concatenate(nimps, axis=-1)
                         nimp[:, 0, :] = nimp[:, 1, :]

@@ -516,8 +516,19 @@ class torax_io(io):
             ipath = Path(path)
             if ipath.exists():
                 dt = xr.open_datatree(ipath)
-                ds_temp = xr.combine_by_coords([dt[key].to_dataset() for key in dt.groups], compat="override")
+                dslist = []
+                auxlist = []
+                for key in dt.groups:
+                    dsg = dt[key].to_dataset()
+                    if key.startswith('/auxiliary'):
+                        if dsg.data_vars:
+                            prefix = '.'.join(key.split('/')[2:])
+                            auxlist.append(dsg.rename({var: f'{prefix}.{var}' for var in dsg.data_vars}))
+                    elif key == '/' or dsg.data_vars:
+                        dslist.append(dsg)
+                ds_temp = xr.combine_by_coords(dslist + auxlist, compat="override")
                 ds = ds_temp if isinstance(ds_temp, xr.Dataset) else ds_temp.to_dataset()
+                ds.attrs = dict(dt.attrs)
                 newattrs: MutableMapping[str, Any] = {}
                 for attr in ds.attrs:
                     if isinstance(ds.attrs[attr], str):
@@ -2502,7 +2513,7 @@ class torax_io(io):
                 nion += 1
             else:
                 if 'A_impurity' in data:
-                    data_vars[f'Ai{nion:d}'] = (['time', 'rho'], np.repeat(np.expand_dims(data['A_impurity'].to_numpy(), axis=-1), len(coords['rho']), axis=-1))
+                    data_vars[f'Ai{nion:d}'] = (['time', 'rho'], data['A_impurity'].interp({'rho_norm': coords['rho']}).to_numpy())
                 if 'Z_impurity' in data:
                     data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity'].interp({'rho_norm': coords['rho']}).to_numpy())
                 if 'n_impurity' in data:
@@ -2673,8 +2684,8 @@ class torax_io(io):
             else:
                 if 'A_impurity' in data:
                     ns += 1
-                    mimp = data['A_impurity'].to_numpy() * c['u'] / c['md']
-                    data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], np.repeat(np.expand_dims(mimp, axis=-1), len(coords['rho']), axis=-1))
+                    mimp = data['A_impurity'].interp({'rho_norm': coords['rho']}).to_numpy() * c['u'] / c['md']
+                    data_vars[f'MASS_{ns:d}'] = (['time', 'rho'], mimp)
                 if 'Z_impurity' in data:
                     data_vars[f'ZS_{ns:d}'] = (['time', 'rho'], data['Z_impurity'].interp({'rho_norm': coords['rho']}).to_numpy())
                 if 'n_impurity' in data:
