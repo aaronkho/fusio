@@ -3518,7 +3518,7 @@ class torax_io(io):
                         data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(impfracs, axis=0))
                     data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 if 'current' in data:
-                    data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * data['current'].to_numpy())
+                    data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * np.abs(data['current'].to_numpy()))
                 if 'ne' in data:
                     data_vars['profile_conditions.n_e'] = (['time', 'rho'], 1.0e19 * data['ne'].to_numpy())
                     attrs['profile_conditions.normalize_n_e_to_nbar'] = False
@@ -3785,7 +3785,7 @@ class torax_io(io):
                     cp_data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 omas_tag = 'core_profiles.global_quantities.ip'
                 if omas_tag in data:
-                    cp_data_vars['profile_conditions.Ip'] = (['time'], data[omas_tag].to_numpy())
+                    cp_data_vars['profile_conditions.Ip'] = (['time'], np.abs(data[omas_tag].to_numpy()))
                 omas_tag = 'core_profiles.profiles_1d.electrons.density'
                 if omas_tag in data:
                     cp_data_vars['profile_conditions.n_e'] = (['time', 'rho'], data[omas_tag].to_numpy())
