@@ -30,8 +30,6 @@ class torax_io(io):
             'Z_eff',
             'Z_i_override',
             'A_i_override',
-            'Z_impurity_override',
-            'A_impurity_override',
         ],
         'profile_conditions': [
             'Ip',
@@ -48,10 +46,10 @@ class torax_io(io):
             'n_e_nbar_is_fGW',
             'n_e_right_bc',
             'n_e_right_bc_is_fGW',
-            'set_pedestal',
             'current_profile_nu',
             'initial_j_is_total_current',
             'initial_psi_from_j',
+            'internal_boundary_conditions',
         ],
         'numerics': [
             't_initial',
@@ -61,7 +59,7 @@ class torax_io(io):
             'evolve_electron_heat',
             'evolve_current',
             'evolve_density',
-            'resistivity_multiplier',
+            'current_diffusion_time_reduction_factor',
             'max_dt',
             'min_dt',
             'chi_timestep_prefactor',
@@ -75,8 +73,18 @@ class torax_io(io):
             'cocos',
         ],
         'pedestal': [
-            'model_name',
-            'set_pedestal',
+            'structure_model',
+            'formation_model',
+            'saturation_model',
+            'mode',
+            'transition_time_width',
+            'explicit_pedestal',
+            'chi_max',
+            'D_e_max',
+            'V_e_max',
+            'V_e_min',
+            'pedestal_top_smoothing_width',
+            'initial_L_mode_bc_multiplier',
         ],
         'edge': [
             'model_name',
@@ -89,6 +97,10 @@ class torax_io(io):
             'V_e_min',
             'V_e_max',
             'smoothing_width',
+            'pedestal_smoothing_width',
+            'smoothing_zones',
+            'core_transport_models',
+            'pedestal_transport_models',
         ],
         'sources': [
         ],
@@ -164,6 +176,8 @@ class torax_io(io):
                 'T_i_T_e_ratio',
                 'rho_norm_ped_top',
             ],
+            'no_pedestal': [
+            ],
         },
         'neoclassical': {
             'bootstrap_current': [
@@ -180,6 +194,9 @@ class torax_io(io):
                 'V_e_max',
             ],
             'conductivity': [
+                'model_name',
+            ],
+            'poloidal_velocity': [
                 'model_name',
             ],
         },
@@ -297,12 +314,12 @@ class torax_io(io):
                 'wall_inner',
                 'wall_outer',
                 'frequency',
-                'minority_concentration',
+                'minority_species',
                 'P_total',
             ],
         },
         'transport': {
-            'constant': [
+            'prescribed': [
                 'chi_i',
                 'chi_e',
                 'D_e',
@@ -315,7 +332,7 @@ class torax_io(io):
                 'chi_D_ratio',
                 'VR_D_ratio',
             ],
-            'Bohm-GyroBohm': [
+            'bohm-gyrobohm': [
                 'chi_e_bohm_coeff',
                 'chi_e_gyrobohm_coeff',
                 'chi_i_bohm_coeff',
@@ -355,6 +372,18 @@ class torax_io(io):
                 'smag_alpha_correction',
                 'q_sawtooth_proxy',
             ],
+            'tglf': [
+                'n_processes',
+                'n_cores_per_process',
+                'tglf_settings',
+                'DV_effective',
+                'An_min',
+            ],
+            'tglfnn-ukaea': [
+                'machine',
+                'DV_effective',
+                'An_min',
+            ],
         },
         'solver': {
             'linear': [
@@ -367,6 +396,8 @@ class torax_io(io):
                 'n_max_iterations',
                 'delta_reduction_factor',
                 'tau_min',
+                'max_linesearch_steps',
+                'vmap_linesearch',
             ],
             'optimizer': [
                 'initial_guess_mode',

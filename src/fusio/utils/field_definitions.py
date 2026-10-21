@@ -532,10 +532,10 @@ torax_profile_conditions: Final[Mapping[str, tuple[str, ...]]] = {
     'n_e_nbar_is_fGW': ('-', 'toggle whether normalized electron density represents Greenwald fraction'),
     'n_e_right_bc': ('m**-3', 'outer boundary condition for electron density'),
     'n_e_right_bc_is_fGW': ('-', 'toggle whether the outer boundary condition for electron density represents Greenwald fraction'),
-    'set_pedestal': ('-', 'toggle inclusion of pedestal models'),
     'current_profile_nu': ('-', 'toggle usage of analytical current profile'),
     'initial_j_is_total_current': ('-', 'toggle whether initial current profile represents total current'),
     'initial_psi_from_j': ('-', 'toggle whether initial poloidal flux is computed from initial current profile'),
+    'internal_boundary_conditions': ('-', 'internal boundary conditions for kinetic profiles'),
 }
 torax_numerics: Final[Mapping[str, tuple[str, ...]]] = {
     't_initial': ('s', 'initial time of simulation'),
@@ -545,14 +545,12 @@ torax_numerics: Final[Mapping[str, tuple[str, ...]]] = {
     'evolve_electron_heat': ('-', 'toggle solving of electron energy equation'),
     'evolve_current': ('-', 'toggle solving of poloidal flux equation'),
     'evolve_density': ('-', 'toggle solving of electron continuity equation'),
-    'resistivity_multiplier': ('-', 'multiplier for plasma resistivity in poloidal flux evolution equation'),
+    'current_diffusion_time_reduction_factor': ('-', 'reduction factor for current diffusion time in poloidal flux evolution equation'),
     'max_dt': ('s', 'maximum time step'),
     'min_dt': ('s', 'minimum time step'),
     'chi_timestep_prefactor': ('-', 'multiplier for chi time step calculator'),
     'fixed_dt': ('s', 'fixed time step'),
     'dt_reduction_factor': ('-', 'reduction factor for time step'),
-    'adaptive_T_source_prefactor': ('-', 'prefactor for adaptive ion temperature source'),
-    'adaptive_n_source_prefactor': ('-', 'prefactor for adaptive density source'),
 }
 torax_geometry: Final[Mapping[str, tuple[str, ...]]] = {
     'geometry_type': ('-', 'type of geometry'),
@@ -562,34 +560,27 @@ torax_geometry: Final[Mapping[str, tuple[str, ...]]] = {
     'cocos': ('-', 'COCOS identifier'),
 }
 torax_pedestal: Final[Mapping[str, tuple[str, ...]]] = {
-    'model_name': ('-', 'name of the pedestal model'),
-    'set_pedestal': ('-', 'toggle inclusion of pedestal models'),
+    'structure_model': ('-', 'pedestal structure model settings'),
+    'formation_model': ('-', 'pedestal formation model settings'),
+    'saturation_model': ('-', 'pedestal saturation model settings'),
+    'mode': ('-', 'pedestal enforcement mode'),
+    'transition_time_width': ('s', 'width of pedestal transition in time'),
 }
 torax_edge: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'name of the edge model'),
 }
 torax_transport: Final[Mapping[str, tuple[str, ...]]] = {
-    'model_name': ('-', 'name of the transport model'),
     'chi_min': ('m**2 s**-1', 'minimum chi value'),
     'chi_max': ('m**2 s**-1', 'maximum chi value'),
     'D_e_min': ('m**2 s**-1', 'minimum electron diffusivity'),
     'D_e_max': ('m**2 s**-1', 'maximum electron diffusivity'),
     'V_e_min': ('m s**-1', 'minimum electron velocity'),
     'V_e_max': ('m s**-1', 'maximum electron velocity'),
-    'apply_inner_patch': ('-', 'toggle application of inner patch'),
-    'D_e_inner': ('m**2 s**-1', 'inner electron diffusivity'),
-    'V_e_inner': ('m s**-1', 'inner electron velocity'),
-    'chi_i_inner': ('m**2 s**-1', 'inner ion chi value'),
-    'chi_e_inner': ('m**2 s**-1', 'inner electron chi value'),
-    'rho_inner': ('-', 'inner radial position in rho toroidal flux coordinates'),
-    'apply_outer_patch': ('-', 'toggle application of outer patch'),
-    'D_e_outer': ('m**2 s**-1', 'outer electron diffusivity'),
-    'V_e_outer': ('m s**-1', 'outer electron velocity'),
-    'chi_i_outer': ('m**2 s**-1', 'outer ion chi value'),
-    'chi_e_outer': ('m**2 s**-1', 'outer electron chi value'),
-    'rho_outer': ('-', 'outer radial position in rho toroidal flux coordinates'),
     'smoothing_width': ('-', 'width of smoothing region in rho toroidal flux coordinates'),
-    'smooth_everywhere': ('-', 'toggle smoothing everywhere in rho toroidal flux coordinates'),
+    'pedestal_smoothing_width': ('-', 'width of smoothing region for pedestal transport models in rho toroidal flux coordinates'),
+    'smoothing_zones': ('-', 'list of smoothing zones in rho toroidal flux coordinates'),
+    'core_transport_models': ('-', 'named core transport model settings'),
+    'pedestal_transport_models': ('-', 'named pedestal transport model settings'),
 }
 torax_solver: Final[Mapping[str, tuple[str, ...]]] = {
     'solver_type': ('-', 'type of solver'),
@@ -682,12 +673,12 @@ torax_neoclassical_conductivity: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'model name'),
 }
 torax_neoclassical_options: Final[Mapping[str, Any]] = {
-    'bootstrap': torax_neoclassical_bootstrap,
+    'bootstrap_current': torax_neoclassical_bootstrap,
     'transport': torax_neoclassical_transport,
     'conductivity': torax_neoclassical_conductivity,
 }
 torax_mhd_sawtooth: Final[Mapping[str, tuple[str, ...]]] = {
-    'crash_time_duration': ('s', 'duration of crash phase of sawtooth cycle'),
+    'crash_step_duration': ('s', 'duration of crash phase of sawtooth cycle'),
 }
 torax_mhd_sawtooth_trigger: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'model name'),
@@ -797,7 +788,7 @@ torax_sources_icrh: Final[Mapping[str, Any]] = {
     'wall_inner': '',
     'wall_outer': '',
     'frequency': '',
-    'minority_concentration': '',
+    'minority_species': '',
     'P_total': '',
 }
 torax_transport_constant: Final[Mapping[str, Any]] = {
@@ -863,6 +854,8 @@ torax_solver_newton_raphson: Final[Mapping[str, Any]] = {
     'n_max_iterations': '',
     'delta_reduction_factor': '',
     'tau_min': '',
+    'max_linesearch_steps': '',
+    'vmap_linesearch': '',
 }
 torax_solver_optimizer: Final[Mapping[str, Any]] = {
     'initial_guess_mode': '',
