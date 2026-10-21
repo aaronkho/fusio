@@ -1246,6 +1246,7 @@ class torax_io(io):
             newvars: MutableMapping[str, Any] = {}
             newvars[f'profile_conditions.internal_boundary_conditions.{variable}'] = (['time', 'rho_bc'], np.expand_dims(bc, axis=-1))
             self.update_input_data_vars(newvars)
+            self.update_input_attrs({'profile_conditions.internal_boundary_conditions.model_name': 'prescribed'})
 
 
     def add_internal_boundary_with_pedestal(
@@ -3071,7 +3072,13 @@ class torax_io(io):
                             datadict[f'{key}.{species}'] = None
                 elif rtag is not None and rtag in dims:
                     da = data[key].dropna(ttag).rename({rtag: 'rho_norm'}).dropna('rho_norm')
-                    if da.size > 0:
+                    if da.size > 0 and str(key).startswith('profile_conditions.internal_boundary_conditions'):
+                        da = da.rename({ttag: 'time'}).transpose('time', 'rho_norm')
+                        datadict[f'{key}'] = {
+                            float(t): {float(r): float(v) for r, v in zip(da['rho_norm'].to_numpy().flatten(), row)}
+                            for t, row in zip(da['time'].to_numpy().flatten(), da.to_numpy())
+                        }
+                    elif da.size > 0:
                         datadict[f'{key}'] = da.rename({ttag: 'time'})
                         if json_compatible:
                             datadict[f'{key}'] = (
@@ -3079,11 +3086,6 @@ class torax_io(io):
                                 datadict[f'{key}']['rho_norm'].to_numpy().flatten().tolist(),
                                 datadict[f'{key}'].to_numpy().tolist(),
                             )
-                        if str(key).startswith('profile_conditions.internal_boundary_conditions'):
-                            datadict[f'{key}'] = {
-                                time: {rho: val for rho in datadict[f'{key}']['rho_norm'].to_numpy().flatten()}
-                                for time, val in zip(datadict[f'{key}']['time'].to_numpy().flatten(), datadict[f'{key}']['rho_norm'].to_numpy().flatten())
-                            }
                 else:
                     da = data[key].dropna(ttag)
                     if da.size > 0:
@@ -3223,14 +3225,23 @@ class torax_io(io):
                             else:
                                 attrs[f'{key}.{field}.{name}.{k}'] = v
                 elif key == 'profile_conditions' and field in ['internal_boundary_conditions']:
-                    for i, variable in enumerate(json_dict[key][field]):
+                    model_name = json_dict[key][field].get('model_name', 'prescribed')
+                    if model_name == 'no_ibc':
+                        continue
+                    attrs[f'{key}.{field}.model_name'] = model_name
+                    for variable, settings in json_dict[key][field].items():
+                        if variable == 'model_name' or settings is None:
+                            continue
+                        if not isinstance(settings, dict):
+                            attrs[f'{key}.{field}.{variable}'] = settings
+                            continue
                         rho_bc = 1.0
                         time_bc = []
                         val_bc = []
-                        for k, v in json_dict[key][field][variable].items():
-                            time_bc.append(k)
+                        for k, v in settings.items():
+                            time_bc.append(float(k))
                             for rho, val in v.items():
-                                rho_bc = rho
+                                rho_bc = float(rho)
                                 val_bc.append(val)
                         dims = [f'time_{field}_{variable}', f'rho_{field}_{variable}']
                         pre_coords[f'time_{field}_{variable}'] = np.asarray(time_bc)
