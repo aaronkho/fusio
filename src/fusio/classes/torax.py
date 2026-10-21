@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from .io import Any, Final, Self
 from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, Iterable
@@ -1145,19 +1146,13 @@ class torax_io(io):
         wrho = self._pedestal_top_rho()
         if wrho is not None:
             models = data.attrs.get('map_pedestal_transport_model_names', [])
-            name = f'constant_{len(models):d}'
+            name = f'prescribed_{len(models):d}'
             prefix = f'transport.pedestal_transport_models.{name}'
             xrho = np.linspace(wrho, 1.0, 25)
-            chiirho = np.zeros_like(xrho) + chi_i
-            chierho = np.zeros_like(xrho) + chi_e
-            derho = np.zeros_like(xrho) + D_e
-            verho = np.zeros_like(xrho) + V_e
             newcoords['rho_ped_const'] = xrho.flatten()
-            newvars[f'{prefix}.chi_i'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(chiirho, axis=0), len(time), axis=0))
-            newvars[f'{prefix}.chi_e'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(chierho, axis=0), len(time), axis=0))
-            newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(derho, axis=0), len(time), axis=0))
-            newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_const'], np.repeat(np.expand_dims(verho, axis=0), len(time), axis=0))
-            newattrs[f'{prefix}.model_name'] = 'constant'
+            channels = {'chi_i': chi_i, 'chi_e': chi_e, 'D_e': D_e, 'V_e': V_e}
+            self._add_prescribed_transport_channels(prefix, 'rho_ped_const', time, {k: np.zeros_like(xrho) + v for k, v in channels.items()}, newvars, newattrs)
+            newattrs[f'{prefix}.model_name'] = 'prescribed'
             models.append(name)
             newattrs['map_pedestal_transport_model_names'] = models
         self.update_input_coords(newcoords)
@@ -1180,7 +1175,7 @@ class torax_io(io):
         wrho = self._pedestal_top_rho()
         if wrho is not None:
             models = data.attrs.get('map_pedestal_transport_model_names', [])
-            name = f'constant_{len(models):d}'
+            name = f'prescribed_{len(models):d}'
             prefix = f'transport.pedestal_transport_models.{name}'
             xrho = np.linspace(wrho, 1.0, 25)
             factor = np.abs((xrho - wrho) / (1.0 - wrho))
@@ -1188,11 +1183,9 @@ class torax_io(io):
             drho = dscale * np.exp(-factor / ddecay)
             vrho = np.zeros_like(factor)
             newcoords['rho_ped_exp'] = xrho.flatten()
-            newvars[f'{prefix}.chi_i'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
-            newvars[f'{prefix}.chi_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(chirho, axis=0), len(time), axis=0))
-            newvars[f'{prefix}.D_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
-            newvars[f'{prefix}.V_e'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(vrho, axis=0), len(time), axis=0))
-            newattrs[f'{prefix}.model_name'] = 'constant'
+            channels = {'chi_i': chirho, 'chi_e': chirho, 'D_e': drho, 'V_e': vrho}
+            self._add_prescribed_transport_channels(prefix, 'rho_ped_exp', time, channels, newvars, newattrs)
+            newattrs[f'{prefix}.model_name'] = 'prescribed'
             models.append(name)
             newattrs['map_pedestal_transport_model_names'] = models
         self.update_input_coords(newcoords)
@@ -1208,7 +1201,8 @@ class torax_io(io):
         D_ratio: float = 5.0,
         peaking: float = 0.0,
     ) -> None:
-        # TODO: Currently does not work with TORAX-v1.1.1
+        if ei_ratio <= 0.0:
+            raise ValueError('Critical gradient transport model requires ei_ratio > 0')
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newcoords: MutableMapping[str, Any] = {}
@@ -1219,14 +1213,9 @@ class torax_io(io):
             models = data.attrs.get('map_pedestal_transport_model_names', [])
             name = f'CGM_{len(models):d}'
             prefix = f'transport.pedestal_transport_models.{name}'
-            xrho = np.linspace(wrho, 1.0, 25)
-            erho = np.zeros_like(xrho) + ei_ratio
-            drho = np.zeros_like(xrho) + D_ratio
-            prho = np.zeros_like(xrho) + peaking
-            newcoords['rho_ped_exp'] = xrho.flatten()
-            newvars[f'{prefix}.chi_e_i_ratio'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(erho, axis=0), len(time), axis=0))
-            newvars[f'{prefix}.chi_D_ratio'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(drho, axis=0), len(time), axis=0))
-            newvars[f'{prefix}.VR_D_ratio'] = (['time', 'rho_ped_exp'], np.repeat(np.expand_dims(prho, axis=0), len(time), axis=0))
+            newvars[f'{prefix}.chi_e_i_ratio'] = (['time'], np.zeros_like(time) + ei_ratio)
+            newvars[f'{prefix}.chi_D_ratio'] = (['time'], np.zeros_like(time) + D_ratio)
+            newvars[f'{prefix}.VR_D_ratio'] = (['time'], np.zeros_like(time) + peaking)
             newattrs[f'{prefix}.alpha'] = float(alpha)
             newattrs[f'{prefix}.chi_stiff'] = float(chi_grad)
             newattrs[f'{prefix}.model_name'] = 'CGM'
@@ -1323,7 +1312,7 @@ class torax_io(io):
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
         models = data.attrs.get('map_core_transport_model_names', [])
-        name = f'constant_{len(models):d}'
+        name = f'prescribed_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
         wrho = self._pedestal_top_rho()
         if wrho is not None:
@@ -1336,22 +1325,16 @@ class torax_io(io):
         if rho_max is not None:
             #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
-        newattrs[f'{prefix}.model_name'] = 'constant'
+        newattrs[f'{prefix}.model_name'] = 'prescribed'
         nrho = n_rho if isinstance(n_rho, int) else 2
         xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, nrho)
         #factor = np.abs((xrho - np.nanmin(xrho)) / (1.0 - np.nanmin(xrho)))
         #chirho = 0.01 * np.exp(-factor / 0.2)
         #drho = 0.01 * np.exp(-factor / 0.2)
         #vrho = np.zeros_like(factor)
-        chiirho = np.zeros_like(xrho) + chi_i
-        chierho = np.zeros_like(xrho) + chi_e
-        derho = np.zeros_like(xrho) + D_e
-        verho = np.zeros_like(xrho) + V_e
         newcoords['rho_const'] = xrho.flatten()
-        newvars[f'{prefix}.chi_i'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chiirho, axis=0), len(time), axis=0))
-        newvars[f'{prefix}.chi_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(chierho, axis=0), len(time), axis=0))
-        newvars[f'{prefix}.D_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(derho, axis=0), len(time), axis=0))
-        newvars[f'{prefix}.V_e'] = (['time', 'rho_const'], np.repeat(np.expand_dims(verho, axis=0), len(time), axis=0))
+        channels = {'chi_i': chi_i, 'chi_e': chi_e, 'D_e': D_e, 'V_e': V_e}
+        self._add_prescribed_transport_channels(prefix, 'rho_const', time, {k: np.zeros_like(xrho) + v for k, v in channels.items()}, newvars, newattrs)
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -1374,6 +1357,8 @@ class torax_io(io):
         rho_min: float | None = None,
         rho_max: float | None = None,
     ) -> None:
+        if ei_ratio <= 0.0:
+            raise ValueError('Critical gradient transport model requires ei_ratio > 0')
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newcoords: MutableMapping[str, Any] = {}
@@ -1459,12 +1444,10 @@ class torax_io(io):
         path: str | Path,
     ) -> None:
         data = self.input
-        newattrs: MutableMapping[str, Any] = {}
         models = data.attrs.get('map_core_transport_model_names', [])
         for name in models:
             if data.attrs.get(f'transport.core_transport_models.{name}.model_name', '') == 'qualikiz':
-                newattrs['TORAX_QLK_EXEC_PATH'] = f'{path}'  # Is this still necessary?
-        self.update_input_attrs(newattrs)
+                os.environ['TORAX_QLK_EXEC_PATH'] = f'{path}'
 
 
     def add_qlknn_transport(
@@ -1554,7 +1537,6 @@ class torax_io(io):
         newattrs[f'{prefix}.n_cores_per_process'] = 2
         newattrs[f'{prefix}.DV_effective'] = True
         newattrs[f'{prefix}.An_min'] = 0.01
-        newattrs[f'{prefix}.use_legacy_torax_defaults'] = False
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -1570,21 +1552,17 @@ class torax_io(io):
         self,
         path: str | Path,
     ) -> None:
-        data = self.input
-        newattrs: MutableMapping[str, Any] = {}
-        models = data.attrs.get('map_core_transport_model_names', [])
-        for name in models:
-            if data.attrs.get(f'transport.core_transport_models.{name}.model_name', '') == 'tglf':
-                newattrs[f'transport.core_transport_models.{name}.tglf_exec_path'] = f'{path}'
-        self.update_input_attrs(newattrs)
+        logger.warning('TORAX no longer accepts a TGLF executable path in its config, ignoring set_tglf_model_path')
 
 
     def add_tglfnn_transport(
         self,
         rho_min: float | None = None,
         rho_max: float | None = None,
-        machine: str = 'sparc',
+        machine: str = 'multimachine',
     ) -> None:
+        if machine not in ['step', 'multimachine']:
+            raise ValueError(f'Invalid TGLFNN machine "{machine}", must be "step" or "multimachine"')
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
@@ -1601,12 +1579,8 @@ class torax_io(io):
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
-        newattrs[f'{prefix}.model_name'] = 'tglfnn'
-        if machine == 'multimachine':
-            newattrs[f'{prefix}.model_name'] = 'tglfnn-ukaea'
-            newattrs[f'{prefix}.machine'] = 'multimachine'
-        newattrs[f'{prefix}.clip_inputs'] = False
-        newattrs[f'{prefix}.clip_margin'] = 0.95
+        newattrs[f'{prefix}.model_name'] = 'tglfnn-ukaea'
+        newattrs[f'{prefix}.machine'] = machine
         newattrs[f'{prefix}.DV_effective'] = True
         newattrs[f'{prefix}.An_min'] = 0.01
         newattrs['transport.chi_min'] = 0.05
@@ -1624,13 +1598,7 @@ class torax_io(io):
         self,
         path: str | Path,
     ) -> None:
-        data = self.input
-        newattrs: MutableMapping[str, Any] = {}
-        models = data.attrs.get('map_core_transport_model_names', [])
-        for name in models:
-            if data.attrs.get(f'transport.core_transport_models.{name}.model_name', '') == 'tglfnn':
-                newattrs[f'transport.core_transport_models.{name}.model_path'] = f'{path}'
-        self.update_input_attrs(newattrs)
+        logger.warning('TORAX TGLFNN-ukaea model does not accept a model path, ignoring set_tglfnn_model_path')
 
 
     def add_transport_inner_patch(
