@@ -87,6 +87,7 @@ _TRIM_AXIS_FIELDS = frozenset({
     'flux_surf_avg_grad_psi',
     'flux_surf_avg_grad_psi2',
     'flux_surf_avg_grad_psi2_over_R2',
+    'trapped_fraction',
 })
 
 _TRIM_BOUNDARY_FIELDS = frozenset({
@@ -94,6 +95,11 @@ _TRIM_BOUNDARY_FIELDS = frozenset({
 })
 
 _N_TRIM = 5
+
+_N_TRIM_AXIS_OVERRIDES = {
+    'Ip_profile': 10,
+    'trapped_fraction': 1,
+}
 
 _DEFAULT_TOL = 0.03
 
@@ -272,17 +278,19 @@ def _build_intermediates_from_roundtrip(eqdsk_path: str, cocos: int = 11):
     return intermediates
 
 
-def _compare(direct, roundtrip) -> dict[str, tuple[float, float]]:
-    """Return {field_name: (max_rel_error, mean_rel_error)}.
+def _compare(direct, roundtrip) -> tuple[dict[str, tuple[float, float]], dict[str, bool]]:
+    """Return {field_name: (max_rel_error, mean_rel_error)} and {field_name: all_finite}.
 
     Sign-convention-sensitive fields (``psi``, ``Ip_profile``) are
     compared by absolute value.  Fields that are zero on-axis are trimmed
-    to exclude the first ``_N_TRIM`` radial points where the relative
-    error is dominated by the near-zero denominator.
+    to exclude the first ``_N_TRIM`` radial points (or the count given in
+    ``_N_TRIM_AXIS_OVERRIDES``) where the relative error is dominated by
+    the near-zero denominator.  Finiteness is checked over the full profile.
     """
     rhon_direct = _rhon_from_intermediates(direct)
     rhon_roundtrip = _rhon_from_intermediates(roundtrip)
     results = {}
+    finite = {}
     for field in dataclasses.fields(direct):
         name = field.name
         if name in _SKIP_FIELDS:
@@ -295,6 +303,8 @@ def _compare(direct, roundtrip) -> dict[str, tuple[float, float]]:
         val_roundtrip = np.asarray(val_roundtrip, dtype=float)
         if val_direct.size == 0:
             continue
+
+        finite[name] = bool(np.all(np.isfinite(val_roundtrip)))
 
         if name in _ABS_FIELDS:
             val_direct = np.abs(val_direct)
@@ -311,8 +321,9 @@ def _compare(direct, roundtrip) -> dict[str, tuple[float, float]]:
                 val_roundtrip = interp_fn(rhon_direct)
 
         if name in _TRIM_AXIS_FIELDS and val_direct.ndim == 1:
-            val_direct = val_direct[_N_TRIM:]
-            val_roundtrip = val_roundtrip[_N_TRIM:]
+            n_trim = _N_TRIM_AXIS_OVERRIDES.get(name, _N_TRIM)
+            val_direct = val_direct[n_trim:]
+            val_roundtrip = val_roundtrip[n_trim:]
 
         if name in _TRIM_BOUNDARY_FIELDS and val_direct.ndim == 1:
             val_direct = val_direct[:-_N_TRIM]
@@ -321,7 +332,7 @@ def _compare(direct, roundtrip) -> dict[str, tuple[float, float]]:
         denom = np.where(np.abs(val_direct) > 1e-30, val_direct, 1.0)
         rel_err_arr = np.abs((val_roundtrip - val_direct) / denom)
         results[name] = (float(np.max(rel_err_arr)), float(np.mean(rel_err_arr)))
-    return results
+    return results, finite
 
 
 _COCOS_CASES = [
@@ -348,7 +359,7 @@ class TestRoundtripEQDSKGacodeIMAS:
         request.cls.roundtrip = _build_intermediates_from_roundtrip(
             eqdsk_path, cocos=cocos,
         )
-        request.cls.comparison = _compare(
+        request.cls.comparison, request.cls.finite = _compare(
             request.cls.direct, request.cls.roundtrip
         )
         request.cls.cocos = cocos
@@ -363,6 +374,12 @@ class TestRoundtripEQDSKGacodeIMAS:
                 assert val_r is not None, (
                     f'{field.name} is None in roundtrip but not in direct'
                 )
+
+    def test_all_fields_finite(self):
+        for name, is_finite in sorted(self.finite.items()):
+            assert is_finite, (
+                f'[cocos={self.cocos}] {name}: roundtrip contains non-finite values'
+            )
 
     def test_scalars_match(self):
         for name in ('R_major', 'a_minor', 'B_0'):
