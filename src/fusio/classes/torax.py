@@ -1065,6 +1065,13 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def _pedestal_top_rho(
+        self,
+    ) -> float | None:
+        wrho = self.input.get('pedestal.structure_model.rho_norm_ped_top', None)
+        return float(wrho.mean().to_numpy()) if wrho is not None else None
+
+
     def add_pedestal_by_pressure(
         self,
         pped: float,
@@ -1075,15 +1082,14 @@ class torax_io(io):
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
-        newvars['pedestal.P_ped'] = (['time'], np.zeros_like(time) + pped)
-        newvars['pedestal.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
-        newvars['pedestal.T_i_T_e_ratio'] = (['time'], np.zeros_like(time) + tpedratio)
-        newvars['pedestal.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
+        newvars['pedestal.structure_model.P_ped'] = (['time'], np.zeros_like(time) + pped)
+        newvars['pedestal.structure_model.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
+        newvars['pedestal.structure_model.T_i_T_e_ratio'] = (['time'], np.zeros_like(time) + tpedratio)
+        newvars['pedestal.structure_model.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['pedestal.set_pedestal'] = True
-        newattrs['pedestal.model_name'] = 'set_P_ped_n_ped'
-        newattrs['pedestal.n_e_ped_is_fGW'] = False
+        newattrs['pedestal.structure_model.model_name'] = 'set_P_ped_n_ped'
+        newattrs['pedestal.structure_model.n_e_ped_is_fGW'] = False
         self.update_input_attrs(newattrs)
 
 
@@ -1097,43 +1103,31 @@ class torax_io(io):
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         tref = 1.0e3
         newvars: MutableMapping[str, Any] = {}
-        newvars['pedestal.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
-        newvars['pedestal.T_e_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
-        newvars['pedestal.T_i_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
-        newvars['pedestal.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
+        newvars['pedestal.structure_model.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
+        newvars['pedestal.structure_model.T_e_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
+        newvars['pedestal.structure_model.T_i_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
+        newvars['pedestal.structure_model.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['pedestal.set_pedestal'] = True
-        newattrs['pedestal.model_name'] = 'set_T_ped_n_ped'
-        newattrs['pedestal.n_e_ped_is_fGW'] = False
+        newattrs['pedestal.structure_model.model_name'] = 'set_T_ped_n_ped'
+        newattrs['pedestal.structure_model.n_e_ped_is_fGW'] = False
         self.update_input_attrs(newattrs)
 
 
-    #def add_time_dependent_pedestal_by_temperature(
-    #    self,
-    #    nped: NDArray,
-    #    teped: NDArray,
-    #    tiped: NDArray,
-    #    wrho: NDArray,
-    #    time: NDArray,
-    #) -> None:
-    #    data = self.input
-    #    tvec = data.get('time', xr.DataArray()).to_numpy().flatten()
-    #    tref = 1.0e3
-    #    newvars: MutableMapping[str, Any] = {}
-    #    newvars['pedestal.n_e_ped'] = (['time'], np.interp(tvec, time, nped))
-    #    newvars['pedestal.T_e_ped'] = (['time'], np.interp(tvec, time, teped / tref))
-    #    newvars['pedestal.T_i_ped'] = (['time'], np.interp(tvec, time, tiped / tref))
-    #    newvars['pedestal.rho_norm_ped_top'] = (['time'], np.interp(tvec, time, wrho))
-    #    self.update_input_data_vars(newvars)
-    #    newattrs: MutableMapping[str, Any] = {}
-    #    newattrs['pedestal.set_pedestal'] = True
-    #    newattrs['pedestal.model_name'] = 'set_T_ped_n_ped'
-    #    newattrs['pedestal.n_e_ped_is_fGW'] = False
-    #    newattrs['transport.smooth_everywhere'] = False
-    #    newattrs['numerics.adaptive_T_source_prefactor'] = 1.0e10
-    #    newattrs['numerics.adaptive_n_source_prefactor'] = 1.0e8
-    #    self.update_input_attrs(newattrs)
+    def _add_prescribed_transport_channels(
+        self,
+        prefix: str,
+        coord: str,
+        time: NDArray,
+        channels: Mapping[str, NDArray],
+        newvars: MutableMapping[str, Any],
+        newattrs: MutableMapping[str, Any],
+    ) -> None:
+        for key, val in channels.items():
+            if key != 'V_e' and np.all(val == 0.0):
+                newattrs[f'{prefix}.disable_{key}'] = True
+            else:
+                newvars[f'{prefix}.{key}'] = (['time', coord], np.repeat(np.expand_dims(val, axis=0), len(time), axis=0))
 
 
     def add_pedestal_constant_transport(
@@ -1148,12 +1142,11 @@ class torax_io(io):
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        wrho_array = data.get('pedestal.rho_norm_ped_top', None)
-        if wrho_array is not None:
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
             models = data.attrs.get('map_pedestal_transport_model_names', [])
             name = f'constant_{len(models):d}'
             prefix = f'transport.pedestal_transport_models.{name}'
-            wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
             chiirho = np.zeros_like(xrho) + chi_i
             chierho = np.zeros_like(xrho) + chi_e
@@ -1184,12 +1177,11 @@ class torax_io(io):
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        wrho_array = data.get('pedestal.rho_norm_ped_top', None)
-        if wrho_array is not None:
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
             models = data.attrs.get('map_pedestal_transport_model_names', [])
             name = f'constant_{len(models):d}'
             prefix = f'transport.pedestal_transport_models.{name}'
-            wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
             factor = np.abs((xrho - wrho) / (1.0 - wrho))
             chirho = chiscale * np.exp(-factor / chidecay)
@@ -1222,12 +1214,11 @@ class torax_io(io):
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
-        wrho_array = data.get('pedestal.rho_norm_ped_top', None)
-        if wrho_array is not None:
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
             models = data.attrs.get('map_pedestal_transport_model_names', [])
             name = f'CGM_{len(models):d}'
             prefix = f'transport.pedestal_transport_models.{name}'
-            wrho = float(wrho_array.mean().to_numpy())
             xrho = np.linspace(wrho, 1.0, 25)
             erho = np.zeros_like(xrho) + ei_ratio
             drho = np.zeros_like(xrho) + D_ratio
@@ -1277,15 +1268,14 @@ class torax_io(io):
         te_bc = data['profile_conditions.T_e'].interp(rho=rho).to_numpy().flatten()
         ti_bc = data['profile_conditions.T_i'].interp(rho=rho).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
-        newvars['pedestal.n_e_ped'] = (['time'], ne_bc)
-        newvars['pedestal.T_e_ped'] = (['time'], te_bc)
-        newvars['pedestal.T_i_ped'] = (['time'], ti_bc)
-        newvars['pedestal.rho_norm_ped_top'] = (['time'], np.zeros_like(ne_bc) + rho)
+        newvars['pedestal.structure_model.n_e_ped'] = (['time'], ne_bc)
+        newvars['pedestal.structure_model.T_e_ped'] = (['time'], te_bc)
+        newvars['pedestal.structure_model.T_i_ped'] = (['time'], ti_bc)
+        newvars['pedestal.structure_model.rho_norm_ped_top'] = (['time'], np.zeros_like(ne_bc) + rho)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['pedestal.set_pedestal'] = True
-        newattrs['pedestal.model_name'] = 'set_T_ped_n_ped'
-        newattrs['pedestal.n_e_ped_is_fGW'] = False
+        newattrs['pedestal.structure_model.model_name'] = 'set_T_ped_n_ped'
+        newattrs['pedestal.structure_model.n_e_ped_is_fGW'] = False
         self.update_input_attrs(newattrs)
 
 
@@ -1335,8 +1325,9 @@ class torax_io(io):
         models = data.attrs.get('map_core_transport_model_names', [])
         name = f'constant_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
-        if 'pedestal.rho_norm_ped_top' in data:
-            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
+            newattrs[f'{prefix}.rho_max'] = wrho
         models.append(name)
         newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
@@ -1391,8 +1382,9 @@ class torax_io(io):
         models = data.attrs.get('map_core_transport_model_names', [])
         name = f'CGM_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
-        if 'pedestal.rho_norm_ped_top' in data:
-            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
+            newattrs[f'{prefix}.rho_max'] = wrho
         models.append(name)
         newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
@@ -1431,8 +1423,9 @@ class torax_io(io):
         models = data.attrs.get('map_core_transport_model_names', [])
         name = f'qualikiz_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
-        if 'pedestal.rho_norm_ped_top' in data:
-            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
+            newattrs[f'{prefix}.rho_max'] = wrho
         models.append(name)
         newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
@@ -1486,8 +1479,9 @@ class torax_io(io):
         models = data.attrs.get('map_core_transport_model_names', [])
         name = f'qlknn_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
-        if 'pedestal.rho_norm_ped_top' in data:
-            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
+            newattrs[f'{prefix}.rho_max'] = wrho
         models.append(name)
         newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
@@ -1546,8 +1540,9 @@ class torax_io(io):
         models = data.attrs.get('map_core_transport_model_names', [])
         name = f'tglf_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
-        if 'pedestal.rho_norm_ped_top' in data:
-            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
+            newattrs[f'{prefix}.rho_max'] = wrho
         models.append(name)
         newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
@@ -1597,8 +1592,9 @@ class torax_io(io):
         models = data.attrs.get('map_core_transport_model_names', [])
         name = f'tglfnn_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
-        if 'pedestal.rho_norm_ped_top' in data:
-            newattrs[f'{prefix}.rho_max'] = float(np.mean(data['pedestal.rho_norm_ped_top'].to_numpy()))
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
+            newattrs[f'{prefix}.rho_max'] = wrho
         models.append(name)
         newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
@@ -3199,8 +3195,11 @@ class torax_io(io):
         datadict.pop('profile_conditions.j_bootstrap', None)
         datadict.pop('TORAX_QLK_EXEC_PATH', None)
         datadict.pop('TORAX_TGLF_EXEC_PATH', None)
-        if 'pedestal.set_pedestal' not in datadict:
-            datadict['pedestal.set_pedestal'] = False
+        datadict.pop('pedestal.set_pedestal', None)
+        if not any(k.startswith('pedestal.') for k in datadict):
+            datadict['pedestal'] = {}
+        if not any(k.startswith('sources.') for k in datadict):
+            datadict['sources'] = {}
         return self._unflatten(datadict)
 
 
