@@ -3194,6 +3194,7 @@ class torax_io(io):
         pre_coords: MutableMapping[str, Any] = {}
         data_vars: MutableMapping[str, Any] = {}
         attrs: MutableMapping[str, Any] = {}
+        species_coords: MutableMapping[str, Any] = {}
         for key in self.basevars:
             if key in ['sources']:
                 continue
@@ -3201,38 +3202,36 @@ class torax_io(io):
                 continue
             for field in json_dict[key]:
                 if key == 'plasma_composition' and field in ['main_ion', 'impurity']:
-                    species = []
-                    for key2 in json_dict[key][field]:
-                        if key2 == 'species':
-                            for k, v in json_dict[key][field][key2].items():
-                                species.append(f'{k}')
-                                ndim = len(v) - 1
-                                dims = [f'time_{field}_{k}']
-                                pre_coords[dims[0]] = np.asarray(v[0])
-                                if ndim > 1:
-                                    dims.append(f'rho_{field}_{k}')
-                                    pre_coords[dims[1]] = np.asarray(v[1])
-                                data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[-1]))
-                        elif isinstance(json_dict[key][field][key2], (tuple, list)):
-                            species.append(f'{key2}')
-                            ndim = len(json_dict[key][field][key2]) - 1
-                            dims = [f'time_{field}_{key2}']
-                            pre_coords[dims[0]] = np.asarray(json_dict[key][field][key2][0])
-                            if ndim > 1:
-                                dims.append(f'rho_{field}_{key2}')
-                                pre_coords[dims[1]] = np.asarray(json_dict[key][field][key2][1])
-                            data_vars[f'{key}.{field}.{key2}'] = (dims, np.asarray(json_dict[key][field][key2][-1]))
-                        else:
-                            attrs[f'{key}.{field}.{key2}'] = json_dict[key][field][key2]
-                if key == 'transport' and field in ['core_transport_models', 'pedestal_transport_models']:
+                    entries = json_dict[key][field]
+                    specdict = entries.get('species', {}) if field == 'impurity' else entries
+                    spectag = f'{key}.{field}.species' if field == 'impurity' else f'{key}.{field}'
+                    if field == 'impurity':
+                        for k, v in entries.items():
+                            if k != 'species':
+                                attrs[f'{key}.{field}.{k}'] = v
+                    names = [k for k, v in specdict.items() if isinstance(v, (tuple, list))]
+                    for k, v in specdict.items():
+                        if k not in names:
+                            attrs[f'{spectag}.{k}'] = v
+                    if names:
+                        v0 = specdict[names[0]]
+                        dims = [field, f'time_{key}_{field}']
+                        pre_coords[dims[1]] = np.asarray(v0[0])
+                        if len(v0) > 2:
+                            dims.append(f'rho_{key}_{field}')
+                            pre_coords[dims[2]] = np.asarray(v0[1])
+                        species_coords[field] = np.asarray(names)
+                        data_vars[spectag] = (dims, np.stack([np.asarray(specdict[n][-1]) for n in names]))
+                elif key == 'transport' and field in ['core_transport_models', 'pedestal_transport_models']:
+                    attrs[f'map_{field.split("_")[0]}_transport_model_names'] = list(json_dict[key][field])
                     for name, settings in json_dict[key][field].items():
                         for k, v in settings.items():
                             if isinstance(v, (tuple, list)):
                                 ndim = len(v) - 1
-                                dims = [f'time_{key}_{k}']
+                                dims = [f'time_{key}_{name}_{k}']
                                 pre_coords[dims[0]] = np.asarray(v[0])
                                 if ndim > 1:
-                                    dims.append(f'rho_{key}_{k}')
+                                    dims.append(f'rho_{key}_{name}_{k}')
                                     pre_coords[dims[1]] = np.asarray(v[1])
                                 data_vars[f'{key}.{field}.{name}.{k}'] = (dims, np.asarray(v[-1]))
                             else:
@@ -3264,10 +3263,10 @@ class torax_io(io):
                     for k, v in json_dict[key][field].items():
                         if isinstance(v, (tuple, list)):
                             ndim = len(v) - 1
-                            dims = [f'time_{key}_{k}']
+                            dims = [f'time_{key}_{field}_{k}']
                             pre_coords[dims[0]] = np.asarray(v[0])
                             if ndim > 1:
-                                dims.append(f'rho_{key}_{k}')
+                                dims.append(f'rho_{key}_{field}_{k}')
                                 pre_coords[dims[1]] = np.asarray(v[1])
                             data_vars[f'{key}.{field}.{k}'] = (dims, np.asarray(v[-1]))
                         else:
@@ -3378,6 +3377,7 @@ class torax_io(io):
                 for name in unique_rho_coords_list[i]:
                     for field in data_vars:
                         data_vars[field] = ([f'rho_{i+1:d}' if dim == name else dim for dim in data_vars[field][0]], data_vars[field][1])
+        coords.update(species_coords)
         if coords and (data_vars or attrs):
             data = xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
             #self.input = data
