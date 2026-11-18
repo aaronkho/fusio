@@ -3477,7 +3477,6 @@ class torax_io(io):
                     nfilt = ((data['type'] == '[therm]') & np.isclose(data['z'], 1.0)).any('n')
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
-                        print(namelist)
                         nfuelsum = data['ni'].sel(name=namelist).sum('name')
                         # Lumped hydrogen isotope mixtures are expanded into their isotopes, since TORAX
                         # only takes those as main ions, with the split given by the mixture mass
@@ -3492,7 +3491,6 @@ class torax_io(io):
                         for iname, nfrac in fuel.items():
                             species.append(iname)
                             density.append(np.expand_dims(nfrac.to_numpy().flatten(), axis=0))
-                        coords['main_ion'] = np.array(species).flatten()
                     else:
                         species = ['D']
                         density = [np.atleast_2d([1.0])]
