@@ -230,6 +230,24 @@ class TestWrite:
 
 
 
+class TestLumpedMainIons:
+
+    def test_mixture_name_and_mass_survive_plasma_round_trip(self, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        data = g.input
+        names = [f'{name}' for name in data['name'].to_numpy()]
+        masses = data['mass'].to_numpy().copy()
+        masses[:, names.index('D')] = 2.4
+        names[names.index('D')] = 'DT'
+        g.input = data.assign_coords(name=names).assign(mass=(('n', 'name'), masses))
+        p = plasma_io.from_gacode(g, side='input')
+        np.testing.assert_allclose(p.input['mass_i'].sel(ion='DT').to_numpy(), 2.4)
+        np.testing.assert_allclose(p.input['atomic_number_i'].sel(ion='DT').to_numpy(), 1.0)
+        h = gacode_io.from_plasma(p, side='input').input
+        assert 'DT' in [f'{name}' for name in h['name'].to_numpy()]
+        np.testing.assert_allclose(h['mass'].sel(name='DT').to_numpy(), 2.4)
+
+
 class TestFixtureSelfConsistency:
 
     # rho is the normalized toroidal flux coordinate, so Phi(rho) = torfluxa * rho^2 and

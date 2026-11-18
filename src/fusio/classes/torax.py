@@ -13,6 +13,7 @@ from .io import io
 from ..utils.plasma_tools import (
     constants_si,
     define_ion_species,
+    define_mixture_fractions,
 )
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
@@ -3478,9 +3479,19 @@ class torax_io(io):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
                         print(namelist)
                         nfuelsum = data['ni'].sel(name=namelist).sum('name')
+                        # Lumped hydrogen isotope mixtures are expanded into their isotopes, since TORAX
+                        # only takes those as main ions, with the split given by the mixture mass
+                        fuel: MutableMapping[str, Any] = {}
                         for ii in range(len(namelist)):
-                            species.append(namelist[ii])
-                            density.append(np.expand_dims((data['ni'].sel(name=namelist[ii]) / nfuelsum).mean('rho').to_numpy().flatten(), axis=0))
+                            nfrac = (data['ni'].sel(name=namelist[ii]) / nfuelsum).mean('rho')
+                            smass = data['mass'].sel(name=namelist[ii]).to_numpy() if 'mass' in data else None
+                            fractions = define_mixture_fractions(namelist[ii], smass)
+                            for iname, ifrac in (fractions if fractions is not None else {namelist[ii]: 1.0}).items():
+                                weight = xr.DataArray(np.broadcast_to(ifrac, (len(data['n']), )), dims=['n'])
+                                fuel[iname] = fuel[iname] + nfrac * weight if iname in fuel else nfrac * weight
+                        for iname, nfrac in fuel.items():
+                            species.append(iname)
+                            density.append(np.expand_dims(nfrac.to_numpy().flatten(), axis=0))
                         coords['main_ion'] = np.array(species).flatten()
                     else:
                         species = ['D']
@@ -3494,7 +3505,7 @@ class torax_io(io):
                         namelist = data['name'].to_numpy().tolist()
                         implist = []
                         for ii in range(len(namelist)):
-                            if namelist[ii] not in ['H', 'D', 'T']:
+                            if namelist[ii] not in ['H', 'D', 'T'] and define_mixture_fractions(namelist[ii]) is None:
                                 implist.append(ii)
                         impcomp = {}
                         zeff = xr.zeros_like(data['ne'])
@@ -3723,14 +3734,27 @@ class torax_io(io):
                     namelist = data.isel({time_cp: 0}).get(ion_cp, xr.DataArray()).to_numpy().tolist()
                     mainlist = []
                     for ii in range(len(namelist)):
-                        if namelist[ii] in ['H', 'D', 'T']:
+                        if namelist[ii] in ['H', 'D', 'T'] or define_mixture_fractions(namelist[ii]) is not None:
                             mainlist.append(ii)
                     maincoord = []
                     mainfracs = []
                     total_main = data.isel({ion_cp_i: mainlist})[omas_tag].sum(ion_cp_i)
+                    # Lumped hydrogen isotope mixtures are expanded into their isotopes, since TORAX
+                    # only takes those as main ions, with the split given by the mixture mass
+                    mass_tag = 'core_profiles.profiles_1d.ion.element.a'
+                    fuel: MutableMapping[str, Any] = {}
                     for ii in mainlist:
-                        maincoord.append(namelist[ii])
-                        mainfracs.append(np.expand_dims(np.atleast_1d((data.isel({ion_cp_i: ii})[omas_tag] / total_main).mean(rho_cp_i).to_numpy()), axis=0))
+                        nfrac = np.atleast_1d((data.isel({ion_cp_i: ii})[omas_tag] / total_main).mean(rho_cp_i).to_numpy())
+                        smass = None
+                        if mass_tag in data:
+                            sdata = data.isel({ion_cp_i: ii})[mass_tag]
+                            smass = sdata.isel({dim: 0 for dim in sdata.dims if dim != time_cp}).to_numpy()
+                        fractions = define_mixture_fractions(namelist[ii], smass)
+                        for iname, ifrac in (fractions if fractions is not None else {namelist[ii]: 1.0}).items():
+                            fuel[iname] = fuel[iname] + nfrac * ifrac if iname in fuel else nfrac * ifrac
+                    for iname, nfrac in fuel.items():
+                        maincoord.append(iname)
+                        mainfracs.append(np.expand_dims(nfrac, axis=0))
                     if len(mainlist) == 0:
                         maincoord = ['D']
                         mainfracs = [np.atleast_2d([1.0])]
@@ -3742,7 +3766,7 @@ class torax_io(io):
                     #zeff = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     #nqn = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     for ii in range(len(namelist)):
-                        if namelist[ii] not in ['H', 'D', 'T']:
+                        if namelist[ii] not in ['H', 'D', 'T'] and define_mixture_fractions(namelist[ii]) is None:
                             implist.append(ii)
                     nzt = np.zeros_like(data[omas_tag].to_numpy()) # time, ion, rho
                     szt = np.zeros_like(data[omas_tag].to_numpy())
