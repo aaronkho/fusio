@@ -10,18 +10,8 @@ import xarray as xr
 logger = logging.getLogger('fusio')
 
 
-# All format classes which provide a read and / or a write function, jintrac is excluded
-# since it only exposes structure creation helpers so far
-ALL_FORMATS: Final[Sequence[str]] = [
-    'plasma',
-    'gacode',
-    'imas',
-    'omas',
-    'torax',
-    'fastran',
-    'transp',
-    'astra',
-]
+# All format classes which provide a read and / or a write function
+ALL_FORMATS: Final[Sequence[str]] = io._supported_formats
 
 # Formats whose write function is implemented, i.e. the valid conversion targets
 WRITABLE_FORMATS: Final[Sequence[str]] = [

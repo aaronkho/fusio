@@ -19,12 +19,17 @@ logger = logging.getLogger('fusio')
 
 class io():
 
+    # Formats with a class providing a read and / or a write function, jintrac is excluded
+    # since it only exposes structure creation helpers so far
     _supported_formats: Final[Sequence[str]] = [
         'plasma',
         'gacode',
         'imas',
         'omas',
         'torax',
+        'fastran',
+        'transp',
+        'astra',
     ]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
