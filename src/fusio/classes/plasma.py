@@ -2635,6 +2635,7 @@ class plasma_io(io):
         obj: io,
         side: str = 'output',
         window: Sequence[int | float] | None = None,
+        split_main_ion: bool = True,
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
@@ -2702,7 +2703,7 @@ class plasma_io(io):
                 # number of impurities, all of which share the single ion temperature profile
                 # Resolved by the source class, which owns the FASTRAN-specific field layout;
                 # duck-typed on obj as the input and output properties above already are
-                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data)  # type: ignore[attr-defined]
+                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data, split_main_ion=split_main_ion)  # type: ignore[attr-defined]
                 ni = len(names)
                 if ni > 0:
                     coords['ion'] = np.array(names)

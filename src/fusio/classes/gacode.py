@@ -112,6 +112,8 @@ class gacode_io(io):
     ]
     # Lowest harmonic written for each shape moment prefix in basevars, the first two sine
     # moments are carried by delta and zeta in the GACODE file format
+    # Name given to a main ion which is kept as a lumped mixture of isotopes on conversion
+    lumped_main_ion_name: Final[str] = 'MAIN'
     shape_harmonic_minimum: Final[Mapping[str, int]] = {
         'shape_cos': 0,
         'shape_sin': 3,
@@ -2460,6 +2462,7 @@ class gacode_io(io):
         obj: io,
         side: str = 'output',
         window: Sequence[int | float] | None = None,
+        split_main_ion: bool = True,
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
@@ -2525,7 +2528,11 @@ class gacode_io(io):
                 # number of impurities, all of which share the single ion temperature profile
                 # Resolved by the source class, which owns the FASTRAN-specific field layout;
                 # duck-typed on obj as the input and output properties above already are
-                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data)  # type: ignore[attr-defined]
+                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(  # type: ignore[attr-defined]
+                    data,
+                    split_main_ion=split_main_ion,
+                    lumped_main_ion_name=newobj.lumped_main_ion_name,
+                )
                 if len(names) > 0:
                     coords['name'] = np.array(names)
                     data_vars['nion'] = (['n'], np.atleast_1d([len(names)] * len(coords['n'])).astype(int))
