@@ -27,25 +27,31 @@ class TestMainIonSplit:
         (2.014, None),
         (2.016, None),
         (2.019, None),
-        (2.021, 0.021),
-        (2.979, 0.979),
+        (2.021, {'D': 0.979, 'T': 0.021}),
+        (2.979, {'D': 0.021, 'T': 0.979}),
         (3.016, None),
         (1.008, None),
-        (2.5, 0.5),
-        (2.25, 0.25),
-        (2.9, 0.9),
-        (1.5, None),
+        (2.5, {'D': 0.5, 'T': 0.5}),
+        (2.25, {'D': 0.75, 'T': 0.25}),
+        (1.5, {'H': 0.5, 'D': 0.5}),
+        (1.25, {'H': 0.75, 'D': 0.25}),
+        (3.5, None),
     ])
-    def test_tritium_fraction(self, amain, expected):
-        fraction = fastran_io().resolve_tritium_fraction(np.array([amain]), np.array([1.0]))
+    def test_main_ion_fractions(self, amain, expected):
+        fractions = fastran_io().resolve_main_ion_fractions(np.array([amain]), np.array([1.0]))
         if expected is None:
-            assert fraction is None
+            assert fractions is None
         else:
-            assert fraction is not None
-            np.testing.assert_allclose(fraction, [expected])
+            assert fractions is not None
+            assert list(fractions) == list(expected)
+            for name in expected:
+                np.testing.assert_allclose(fractions[name], [expected[name]])
 
     def test_non_hydrogenic_main_ion_is_not_split(self):
-        assert fastran_io().resolve_tritium_fraction(np.array([2.5]), np.array([2.0])) is None
+        assert fastran_io().resolve_main_ion_fractions(np.array([2.5]), np.array([2.0])) is None
+
+    def test_mixed_isotope_ranges_are_not_split(self):
+        assert fastran_io().resolve_main_ion_fractions(np.array([1.5, 2.5]), np.array([1.0, 1.0])) is None
 
     def test_lumped_main_ion_is_split_into_d_and_t(self):
         data = _main_ion_dataset(2.5)
@@ -70,7 +76,7 @@ class TestMainIonSplit:
     def test_split_can_be_disabled(self):
         data = _main_ion_dataset(2.5)
         names, _, masses, _, densities, _ = fastran_io().resolve_ion_species(data, split_main_ion=False)
-        assert names == ['D']
+        assert names == ['DT']
         np.testing.assert_allclose(masses[0], 2.5)
         np.testing.assert_allclose(densities[0], data['ni'].to_numpy())
 
@@ -80,23 +86,19 @@ class TestMainIonSplit:
         assert names == ['D']
         np.testing.assert_allclose(masses[0], 2.014)
 
-    def test_lumped_mixture_takes_the_given_name(self):
-        data = _main_ion_dataset(2.5)
-        names, _, masses, _, _, _ = fastran_io().resolve_ion_species(data, split_main_ion=False, lumped_main_ion_name='MAIN')
-        assert names == ['MAIN']
-        np.testing.assert_allclose(masses[0], 2.5)
-
-    def test_single_isotope_ignores_the_lumped_name(self):
-        data = _main_ion_dataset(2.016)
-        names, _, _, _, _, _ = fastran_io().resolve_ion_species(data, split_main_ion=False, lumped_main_ion_name='MAIN')
-        assert names == ['D']
+    def test_hydrogen_deuterium_main_ion_is_split(self):
+        data = _main_ion_dataset(1.5)
+        names, _, masses, _, densities, _ = fastran_io().resolve_ion_species(data)
+        assert names == ['H', 'D']
+        np.testing.assert_allclose(np.stack(masses, axis=-1)[-1], [1.0, 2.0])
+        np.testing.assert_allclose(densities[0] + densities[1], data['ni'].to_numpy())
 
 
 class TestGacodeConversion:
 
     @pytest.mark.parametrize('split, names, masses', [
         (True, ['D', 'T'], [2.0, 3.0]),
-        (False, ['MAIN'], [2.5]),
+        (False, ['DT'], [2.5]),
     ])
     def test_main_ion_names(self, split, names, masses):
         from fusio.classes.gacode import gacode_io

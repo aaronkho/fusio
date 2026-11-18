@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 from .io import io
-from ..utils.plasma_tools import define_ion_species
+from ..utils.plasma_tools import define_ion_species, define_mixture_fractions, mixture_species, snap_mass_number
 
 logger = logging.getLogger('fusio')
 
@@ -172,9 +172,6 @@ class fastran_io(io):
     # FASTRAN leaves the unlimited time dimension unwritten, so it comes back as the NetCDF
     # default double fill value instead of a plasma time
     netcdf_fill_tolerance: Final[float] = 1.0e30
-    # Absolute deviation of the main ion mass number from an integer within which it is taken
-    # as a single isotope, absorbing floating point noise and isotope masses such as D = 2.016
-    main_ion_mass_tolerance: Final[float] = 0.02
 
 
     def __init__(
@@ -311,53 +308,49 @@ class fastran_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
-    def snap_main_ion_mass(
-        self,
-        amain: NDArray,
-    ) -> NDArray:
-        """Snap main ion mass numbers within main_ion_mass_tolerance of an integer onto it."""
-        anearest = np.rint(amain)
-        return np.where(np.abs(amain - anearest) <= self.main_ion_mass_tolerance, anearest, amain)
-
-
-    def resolve_tritium_fraction(
+    def resolve_main_ion_fractions(
         self,
         amain: NDArray,
         zmain: NDArray,
-    ) -> NDArray | None:
-        """Resolve the tritium fraction of a lumped D-T main ion, or None for a single isotope.
+    ) -> Mapping[str, NDArray] | None:
+        """Resolve the isotope fractions of a lumped hydrogenic main ion, or None for a single isotope.
 
         FASTRAN carries the hydrogenic fuel as one main ion whose mass number is the density
-        weighted average over its isotopes, so a hydrogenic main ion with 2 < amain < 3 is
-        a D-T mixture with tritium fraction amain - 2. Mass numbers within
-        main_ion_mass_tolerance of an integer are first snapped onto it, so that a single
-        isotope is not mistaken for a mixture through rounding. Other non-integer mass
+        weighted average over its isotopes, which define_ion_species identifies as an HD or DT
+        mixture when it lies between two isotopes, after snapping mass numbers within
+        mass_number_tolerance of an integer onto it. The fractions then follow from the mass
+        number in each time slice, see define_mixture_fractions. Other non-integer mass
         numbers have no unique decomposition and are left lumped.
         """
-        asnapped = self.snap_main_ion_mass(amain)
-        if np.all(asnapped == np.rint(asnapped)):
+        mname, _, _ = define_ion_species(z=float(zmain[-1]), a=float(amain[-1]))
+        fractions = define_mixture_fractions(mname, amain)
+        asnapped = snap_mass_number(amain)
+        if fractions is None:
+            if np.any(asnapped != np.rint(asnapped)):
+                logger.warning(f'{self.format} main ion mass number of {float(amain[-1]):.4f} does not describe a hydrogen isotope mixture, keeping it as a single lumped species...')
             return None
-        if not (np.all(np.isclose(zmain, 1.0)) and np.all((asnapped >= 2.0) & (asnapped <= 3.0))):
-            logger.warning(f'{self.format} main ion mass number of {float(amain[-1]):.4f} does not describe a D-T mixture, keeping it as a single lumped species...')
+        _, _, (light, heavy) = mixture_species[mname]
+        _, la, _ = define_ion_species(short_name=light)
+        _, ha, _ = define_ion_species(short_name=heavy)
+        if not (np.all(np.isclose(zmain, 1.0)) and np.all((asnapped >= la) & (asnapped <= ha))):
+            logger.warning(f'{self.format} main ion mass number varies outside the {mname} mixture range over the time window, keeping it as a single lumped species...')
             return None
-        return asnapped - 2.0
+        return fractions
 
 
     def resolve_ion_species(
         self,
         data: xr.Dataset,
         split_main_ion: bool = True,
-        lumped_main_ion_name: str | None = None,
     ) -> tuple[list[str], list[str], list[NDArray], list[NDArray], list[NDArray], list[NDArray]]:
         """Resolve the ion species carried by a FASTRAN output dataset.
 
         FASTRAN carries a lumped main ion, a thermal helium ash, an arbitrary number of
         impurities indexed on the imp dimension, and fast populations from the neutral beam
-        and from fusion reactions. A main ion lumping D and T together is split into its two
-        isotopes unless split_main_ion is False, see resolve_tritium_fraction, which keeps
+        and from fusion reactions. A main ion lumping two hydrogen isotopes together is split
+        into them unless split_main_ion is False, see resolve_main_ion_fractions, which keeps
         the average mass, quasi-neutrality and the effective charge exactly. A main ion which
-        is a mixture but is kept lumped takes lumped_main_ion_name where given, and otherwise
-        the element name nearest to its average mass. Species
+        is kept lumped takes the mixture name from define_ion_species, HD or DT. Species
         resolving to the same element symbol are merged, which is exactly charge-conserving
         since a shared symbol implies a shared charge, so quasi-neutrality and the effective
         charge are both preserved while only the mass of the merged species becomes
@@ -380,18 +373,16 @@ class fastran_io(io):
         mname, _, _ = define_ion_species(z=float(zmain[-1]), a=float(amain[-1]))
         species = []
         if 'ni' in data:
-            ftrit = self.resolve_tritium_fraction(amain, zmain) if split_main_ion else None
-            if ftrit is not None:
-                logger.warning(f'{self.format} main ion has a mass number of {float(amain[-1]):.4f}, splitting it into D and T with a tritium fraction of {float(ftrit[-1]):.4f}...')
+            fractions = self.resolve_main_ion_fractions(amain, zmain) if split_main_ion else None
+            if fractions is not None:
+                split = ', '.join([f'{iname} {float(np.atleast_1d(frac)[-1]):.4f}' for iname, frac in fractions.items()])
+                logger.warning(f'{self.format} main ion has a mass number of {float(amain[-1]):.4f}, splitting it into {split}...')
                 ni = data['ni'].to_numpy()
-                ftrit_rho = np.expand_dims(ftrit, axis=-1)
-                for fiso, aiso in [(1.0 - ftrit_rho, 2.0), (ftrit_rho, 3.0)]:
-                    iname, imass, _ = define_ion_species(z=1.0, a=aiso)
-                    species.append((f'{iname}', '[therm]', imass * ones, zmain, fiso * ni, ti))
+                for iname, frac in fractions.items():
+                    _, imass, _ = define_ion_species(short_name=iname)
+                    species.append((f'{iname}', '[therm]', imass * ones, zmain, np.expand_dims(frac, axis=-1) * ni, ti))
             else:
-                lumped = not np.all(self.snap_main_ion_mass(amain) == np.rint(amain))
-                lname = lumped_main_ion_name if lumped and lumped_main_ion_name is not None else mname
-                species.append((f'{lname}', '[therm]', amain, zmain, data['ni'].to_numpy(), ti))
+                species.append((f'{mname}', '[therm]', amain, zmain, data['ni'].to_numpy(), ti))
         if 'nhe' in data:
             species.append(('He', '[therm]', 4.0 * ones, 2.0 * ones, data['nhe'].to_numpy(), ti))
         if 'nz' in data and 'aimp' in data and 'zimp' in data and 'imp' in data.coords:

@@ -67,6 +67,43 @@ def constants_si():
 
 fast_species_suffix = '_fast'
 
+# Lumped mixtures of two hydrogen isotopes, carried as a single ion species by codes which do
+# not resolve the isotopes separately, given as (default mass, charge, (lighter, heavier)).
+# The default mass is that of an equal mixture, and a hydrogen-tritium mixture is not defined.
+mixture_species = {
+    'HD': (1.5, 1.0, ('H', 'D')),
+    'DT': (2.5, 1.0, ('D', 'T')),
+}
+
+# Absolute deviation of a mass number from an integer within which it is taken as a single
+# isotope, absorbing floating point noise and isotope masses such as D = 2.016
+mass_number_tolerance = 0.02
+
+
+def snap_mass_number(a):
+    """Snap mass numbers within mass_number_tolerance of an integer onto that integer."""
+    anearest = np.rint(a)
+    return np.where(np.abs(a - anearest) <= mass_number_tolerance, anearest, a)
+
+
+def define_mixture_fractions(short_name, a=None):
+    """Return the isotope density fractions of a lumped hydrogen isotope mixture.
+
+    The fractions follow from the mass number of the mixture, which is the density weighted
+    average over its two isotopes, so that the heavier isotope fraction of a DT mixture with
+    mass a is a - 2. The default mixture mass applies when none is given. Returns a dict from
+    isotope name to fraction, shaped as the given mass, or None if the name is not a mixture.
+    """
+    if isinstance(short_name, string_types) and short_name.endswith(fast_species_suffix):
+        short_name = short_name[:-len(fast_species_suffix)]
+    if not (isinstance(short_name, string_types) and short_name in mixture_species):
+        return None
+    sa, _, (light, heavy) = mixture_species[short_name]
+    _, la, _ = define_ion_species(short_name=light)
+    mass = sa if a is None else snap_mass_number(np.asarray(a, dtype=float))
+    fheavy = np.clip(mass - la, 0.0, 1.0)
+    return {light: 1.0 - fheavy, heavy: fheavy}
+
 
 def define_ion_species(z=None, a=None, short_name=None, long_name=None, user_mass=False, fast=False):
     """Look up element symbol, mass number, and charge number for a plasma ion species.
@@ -78,12 +115,38 @@ def define_ion_species(z=None, a=None, short_name=None, long_name=None, user_mas
     resolves back to itself. Keeping the thermal and fast populations of one element under
     distinct names matters because fusio carries the species name as an xarray coordinate,
     where a duplicate label breaks selection.
+
+    Lumped hydrogen isotope mixtures, HD and DT, are handled separately from the periodic
+    table, see mixture_species. They are selected by name, or by a hydrogenic charge number
+    together with a mass number lying between two isotopes after snap_mass_number. Like the
+    elements, they return their default mass unless user_mass is set, in which case a mass
+    within the range spanned by the two isotopes is returned as given.
     """
 
     is_fast = bool(fast)
     if isinstance(short_name, string_types) and short_name.endswith(fast_species_suffix):
         short_name = short_name[:-len(fast_species_suffix)]
         is_fast = True
+
+    mname = None
+    if isinstance(short_name, string_types):
+        if short_name in mixture_species:
+            mname = short_name
+    elif isinstance(a, number_types) and (z is None or (isinstance(z, number_types) and int(np.rint(z)) == 1)):
+        snapped = float(snap_mass_number(float(a)))
+        if snapped != np.rint(snapped):
+            for key, (_, _, (light, heavy)) in mixture_species.items():
+                _, la, _ = define_ion_species(short_name=light)
+                _, ha, _ = define_ion_species(short_name=heavy)
+                if la < snapped < ha:
+                    mname = key
+    if mname is not None:
+        ma, mz, (light, heavy) = mixture_species[mname]
+        _, la, _ = define_ion_species(short_name=light)
+        _, ha, _ = define_ion_species(short_name=heavy)
+        if user_mass and isinstance(a, number_types) and la <= float(a) <= ha:
+            ma = float(a)
+        return (f'{mname}{fast_species_suffix}' if is_fast else mname), ma, mz
 
     specieslist = {
          "e":  (  0.000544617, -1.0), "n":  (  1.000866492,  0.0),
