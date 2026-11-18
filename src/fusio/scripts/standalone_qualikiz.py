@@ -93,123 +93,146 @@ def generate_qualikiz_run_directories(
     qualikiz_plan: Sequence[Any],
     executable_path: str | Path,
     qualikiz_run_path: str | Path,
-) -> None:
+) -> int:
+    """Write one QuaLiKiz run directory per entry of the plan, returning how many were created.
+
+    Raises an ImportError if qualikiz-pythontools is not installed, since no run can be
+    created without it. A failure within a single run is reported and the remaining runs
+    are still generated.
+    """
 
     try:
         import qualikiz_tools.qualikiz_io.inputfiles as qualikiz_inputtools  # type: ignore[import-untyped, import-not-found]
         import qualikiz_tools.qualikiz_io.qualikizrun as qualikiz_runtools  # type: ignore[import-untyped, import-not-found]
-    except ImportError:
-        logger.error(f'Critical Python package, qualikiz-pythontools, not found in environment. QuaLiKiz run directory generation aborted!')
-        return None
+    except ImportError as err:
+        raise ImportError('Critical Python package, qualikiz-pythontools, not found in environment. QuaLiKiz run directory generation aborted!') from err
 
     execpath = Path(f'{executable_path}')
     runpath = Path(f'{qualikiz_run_path}')
     runpath.mkdir(parents=True, exist_ok=True)
 
+    n_created = 0
     for run_input in qualikiz_plan:
-        meta = qualikiz_inputtools.QuaLiKizXpoint.Meta(
-            maxpts=5e6,
-            numsols=2,
-            separateflux=True,
-            phys_meth=1,
-            rhomin=0.0,
-            rhomax=1.0,
-            maxruns=10,
-        )
-        options = qualikiz_inputtools.QuaLiKizXpoint.Options(
-            recalc_Nustar=False,
-        )
-        # wavenumber grid
-        kthetarhos = [
-            0.02,
-            0.04,
-            0.06,
-            0.08,
-            0.1,
-            0.175,
-            0.25,
-            0.325,
-            0.4,
-            0.5,
-            0.7,
-            1.0,
-            1.8,
-            3.0,
-            9.0,
-            15.0,
-            21.0,
-            27.0,
-            36.0,
-            45.0,
-        ]
-        # magnetic geometry and rotation
-        geometry = qualikiz_inputtools.QuaLiKizXpoint.Geometry(
-            x=0.5,  # will be scan variable
-            rho=0.5,  # will be scan variable
-            Ro=float(run_input['inputs'].pop('Ro').mean()),
-            Rmin=float(run_input['inputs'].pop('Rmin').mean()),
-            Bo=float(run_input['inputs'].pop('Bo').mean()),
-            q=2,  # will be scan variable
-            smag=1,  # will be scan variable
-            alpha=0,  # will be scan variable
-            Machtor=0,
-            Autor=0,
-            Machpar=0,
-            Aupar=0,
-            gammaE=0,
-        )
-        elec = qualikiz_inputtools.Electron(
-            T=5,  # will be scan variable
-            n=1,  # will be scan variable
+        try:
+            _generate_qualikiz_run_directory(run_input, execpath, runpath, qualikiz_inputtools, qualikiz_runtools)
+        except Exception as err:
+            logger.error(f'Creating QuaLiKiz run {run_input.get("location", "")} failed: {err}')
+            continue
+        n_created += 1
+
+    logger.info(f'Created {n_created} of {len(qualikiz_plan)} QuaLiKiz run directories')
+    return n_created
+
+
+def _generate_qualikiz_run_directory(
+    run_input: MutableMapping[str, Any],
+    execpath: Path,
+    runpath: Path,
+    qualikiz_inputtools: Any,
+    qualikiz_runtools: Any,
+) -> None:
+    """Write a single QuaLiKiz run directory from one entry of the plan."""
+    meta = qualikiz_inputtools.QuaLiKizXpoint.Meta(
+        maxpts=5e6,
+        numsols=2,
+        separateflux=True,
+        phys_meth=1,
+        rhomin=0.0,
+        rhomax=1.0,
+        maxruns=10,
+    )
+    options = qualikiz_inputtools.QuaLiKizXpoint.Options(
+        recalc_Nustar=False,
+    )
+    # wavenumber grid
+    kthetarhos = [
+        0.02,
+        0.04,
+        0.06,
+        0.08,
+        0.1,
+        0.175,
+        0.25,
+        0.325,
+        0.4,
+        0.5,
+        0.7,
+        1.0,
+        1.8,
+        3.0,
+        9.0,
+        15.0,
+        21.0,
+        27.0,
+        36.0,
+        45.0,
+    ]
+    # magnetic geometry and rotation
+    geometry = qualikiz_inputtools.QuaLiKizXpoint.Geometry(
+        x=0.5,  # will be scan variable
+        rho=0.5,  # will be scan variable
+        Ro=float(run_input['inputs'].pop('Ro').mean()),
+        Rmin=float(run_input['inputs'].pop('Rmin').mean()),
+        Bo=float(run_input['inputs'].pop('Bo').mean()),
+        q=2,  # will be scan variable
+        smag=1,  # will be scan variable
+        alpha=0,  # will be scan variable
+        Machtor=0,
+        Autor=0,
+        Machpar=0,
+        Aupar=0,
+        gammaE=0,
+    )
+    elec = qualikiz_inputtools.Electron(
+        T=5,  # will be scan variable
+        n=1,  # will be scan variable
+        At=0,  # will be scan variable
+        An=0,  # will be scan variable
+        type=1,
+        anis=1,
+        danisdr=0,
+    )
+    ion_list = []
+    for i in range(run_input.get('nion', 0)):
+        ion_list.append(qualikiz_inputtools.Ion(
+            T=1,  # will be scan variable
+            n=1 if i == 0 else 0,  # will be scan variable
             At=0,  # will be scan variable
             An=0,  # will be scan variable
             type=1,
             anis=1,
             danisdr=0,
-        )
-        ion_list = []
-        for i in range(run_input.get('nion', 0)):
-            ion_list.append(qualikiz_inputtools.Ion(
-                T=1,  # will be scan variable
-                n=1 if i == 0 else 0,  # will be scan variable
-                At=0,  # will be scan variable
-                An=0,  # will be scan variable
-                type=1,
-                anis=1,
-                danisdr=0,
-                A=2 if i == 0 else 20,  # Will be a scan variable
-                Z=1 if i == 0 else 10,  # will be a scan variable
-            ))
-        ions = qualikiz_inputtools.IonList(*ion_list)
-        xpoint_base = qualikiz_inputtools.QuaLiKizXpoint(
-            kthetarhos=kthetarhos,
-            electrons=elec,
-            ions=ions,
-            **geometry,
-            **meta,
-            **options,
-        )
-        plan = qualikiz_inputtools.QuaLiKizPlan(
-            scan_dict=run_input['inputs'], scan_type='parallel', xpoint_base=xpoint_base
-        )
-        rpath = runpath / run_input['location']
-        run = qualikiz_runtools.QuaLiKizRun(
-            parent_dir=str(rpath.parent.resolve()),
-            binaryrelpath=str(execpath.resolve()),
-            name=str(rpath.name),
-            qualikiz_plan=plan,
-            verbose=0,
-        )
-        run.prepare(
-            overwrite=True, overwrite_meta=True, overwrite_imp=True
-        )
-        run.generate_input()
-        with open(rpath / 'field_conversion.txt', 'w+') as g:
-            for c in run_input['field_conversion']:
-                g.write(f'{c:.8f}\n')
-        logger.debug(f'Created {rpath.resolve()}...')
-
-    logger.info(f'Created {len(qualikiz_plan)} QuaLiKiz run directories')
+            A=2 if i == 0 else 20,  # Will be a scan variable
+            Z=1 if i == 0 else 10,  # will be a scan variable
+        ))
+    ions = qualikiz_inputtools.IonList(*ion_list)
+    xpoint_base = qualikiz_inputtools.QuaLiKizXpoint(
+        kthetarhos=kthetarhos,
+        electrons=elec,
+        ions=ions,
+        **geometry,
+        **meta,
+        **options,
+    )
+    plan = qualikiz_inputtools.QuaLiKizPlan(
+        scan_dict=run_input['inputs'], scan_type='parallel', xpoint_base=xpoint_base
+    )
+    rpath = runpath / run_input['location']
+    run = qualikiz_runtools.QuaLiKizRun(
+        parent_dir=str(rpath.parent.resolve()),
+        binaryrelpath=str(execpath.resolve()),
+        name=str(rpath.name),
+        qualikiz_plan=plan,
+        verbose=0,
+    )
+    run.prepare(
+        overwrite=True, overwrite_meta=True, overwrite_imp=True
+    )
+    run.generate_input()
+    with open(rpath / 'field_conversion.txt', 'w+') as g:
+        for c in run_input['field_conversion']:
+            g.write(f'{c:.8f}\n')
+    logger.debug(f'Created {rpath.resolve()}...')
 
 
 def parse_args():
@@ -253,6 +276,7 @@ def main():
     ipaths = standalone.resolve_input_paths(args.ifiles)
     n_generated = 0
     for i, ipath in enumerate(ipaths):
+        # Each input is processed on its own, so that a failure only skips that input
         try:
             qualikiz_plan = convert_to_qualikiz_input(
                 ipath,
@@ -265,12 +289,23 @@ def main():
                 pmap=pmap,
                 **standalone.parameter_kwargs(args),
             )
-        except (ValueError, NotImplementedError, KeyError, OSError) as err:
+        except Exception as err:
             logger.error(f'QuaLiKiz generation from {ipath.name} failed: {err}')
             continue
-        if len(qualikiz_plan) > 0:
-            qualikiz_run_path = f'{args.output}_i{i:03d}' if len(ipaths) > 1 else f'{args.output}'
-            generate_qualikiz_run_directories(qualikiz_plan, xpath, qualikiz_run_path)
+        if len(qualikiz_plan) == 0:
+            logger.error(f'QuaLiKiz generation from {ipath.name} produced no runs')
+            continue
+        qualikiz_run_path = f'{args.output}_i{i:03d}' if len(ipaths) > 1 else f'{args.output}'
+        try:
+            n_created = generate_qualikiz_run_directories(qualikiz_plan, xpath, qualikiz_run_path)
+        except ImportError as err:
+            # Missing for every input alike, so there is no point in continuing
+            logger.error(f'{err}')
+            return 1
+        except Exception as err:
+            logger.error(f'Writing the QuaLiKiz runs from {ipath.name} failed: {err}')
+            continue
+        if n_created == len(qualikiz_plan):
             n_generated += 1
 
     logger.info(f'QuaLiKiz run generation completed for {n_generated} of {len(ipaths)} inputs')

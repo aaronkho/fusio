@@ -325,24 +325,29 @@ def write_input_files(
     """Write one run directory per entry of the plan, each holding a key value input file.
 
     Run directories are regenerated artifacts, so an existing input file is replaced, as
-    the original standalone generators did.
+    the original standalone generators did. A failure within a single run is reported and
+    the remaining runs are still written. Returns how many runs were written.
     """
     runpath = Path(f'{run_path}')
     runpath.mkdir(parents=True, exist_ok=True)
 
     n_written = 0
     for run in plan:
-        rpath = runpath / run['location']
-        ipath = rpath / filename
-        if ipath.exists():
-            logger.debug(f'Replacing the existing {ipath.resolve()}...')
-        rpath.mkdir(parents=True, exist_ok=True)
-        fstr = '\n'.join([f'{key}={val}' for key, val in run['inputs'].items()])
-        with open(ipath, 'w') as f:
-            f.write(fstr)
+        try:
+            rpath = runpath / run['location']
+            ipath = rpath / filename
+            if ipath.exists():
+                logger.debug(f'Replacing the existing {ipath.resolve()}...')
+            rpath.mkdir(parents=True, exist_ok=True)
+            fstr = '\n'.join([f'{key}={val}' for key, val in run['inputs'].items()])
+            with open(ipath, 'w') as f:
+                f.write(fstr)
+        except Exception as err:
+            logger.error(f'Writing {filename} for run {run.get("location", "")} failed: {err}')
+            continue
         n_written += 1
 
-    logger.info(f'Created {n_written} {filename} files under {runpath.resolve()}')
+    logger.info(f'Created {n_written} of {len(plan)} {filename} files under {runpath.resolve()}')
     return n_written
 
 

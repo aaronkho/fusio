@@ -337,3 +337,154 @@ class TestFailureModes:
         with pytest.raises(ValueError, match='Could not determine the format'):
             standalone_cgyro.convert_to_cgyro_input(ipath)
 
+
+
+def _install_fake_qualikiz_tools(monkeypatch, failing_location=None):
+    """Stand in for qualikiz-pythontools, writing a marker file per run directory."""
+    import sys
+    import types
+
+    class _Spec(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(**kwargs)
+
+    class _Xpoint(_Spec):
+        Meta = _Spec
+        Options = _Spec
+        Geometry = _Spec
+
+    class _Run:
+        def __init__(self, parent_dir, binaryrelpath, name, qualikiz_plan, verbose=0):
+            if name == failing_location:
+                raise RuntimeError('broken run')
+            self.path = Path(parent_dir) / name
+
+        def prepare(self, **kwargs):
+            self.path.mkdir(parents=True, exist_ok=True)
+
+        def generate_input(self):
+            (self.path / 'parameters.json').write_text('{}')
+
+    inputfiles = types.ModuleType('qualikiz_tools.qualikiz_io.inputfiles')
+    inputfiles.QuaLiKizXpoint = _Xpoint
+    inputfiles.Electron = _Spec
+    inputfiles.Ion = _Spec
+    inputfiles.IonList = lambda *ions: list(ions)
+    inputfiles.QuaLiKizPlan = _Spec
+    qualikizrun = types.ModuleType('qualikiz_tools.qualikiz_io.qualikizrun')
+    qualikizrun.QuaLiKizRun = _Run
+    package = types.ModuleType('qualikiz_tools')
+    subpackage = types.ModuleType('qualikiz_tools.qualikiz_io')
+    subpackage.inputfiles = inputfiles
+    subpackage.qualikizrun = qualikizrun
+    package.qualikiz_io = subpackage
+    monkeypatch.setitem(sys.modules, 'qualikiz_tools', package)
+    monkeypatch.setitem(sys.modules, 'qualikiz_tools.qualikiz_io', subpackage)
+    monkeypatch.setitem(sys.modules, 'qualikiz_tools.qualikiz_io.inputfiles', inputfiles)
+    monkeypatch.setitem(sys.modules, 'qualikiz_tools.qualikiz_io.qualikizrun', qualikizrun)
+
+
+def _hide_qualikiz_tools(monkeypatch):
+    import sys
+    for name in ['qualikiz_tools', 'qualikiz_tools.qualikiz_io', 'qualikiz_tools.qualikiz_io.inputfiles', 'qualikiz_tools.qualikiz_io.qualikizrun']:
+        monkeypatch.setitem(sys.modules, name, None)
+
+
+def _qualikiz_plan(locations):
+    return [
+        {
+            'inputs': {'Ro': np.array([3.0]), 'Rmin': np.array([1.0]), 'Bo': np.array([5.0]), 'x': np.array([0.5])},
+            'location': location,
+            'nion': 2,
+            'field_conversion': np.ones(1),
+        }
+        for location in locations
+    ]
+
+
+class TestQualikizRunWriting:
+
+    def test_missing_qualikiz_tools_raises(self, tmp_path, monkeypatch):
+        _hide_qualikiz_tools(monkeypatch)
+        with pytest.raises(ImportError, match='qualikiz-pythontools'):
+            standalone_qualikiz.generate_qualikiz_run_directories(_qualikiz_plan(['run_a']), tmp_path / 'qlk', tmp_path / 'runs')
+
+    def test_a_failing_run_does_not_stop_the_others(self, tmp_path, monkeypatch):
+        _install_fake_qualikiz_tools(monkeypatch, failing_location='run_b')
+        plan = _qualikiz_plan(['run_a', 'run_b', 'run_c'])
+        n_created = standalone_qualikiz.generate_qualikiz_run_directories(plan, tmp_path / 'qlk', tmp_path / 'runs')
+        assert n_created == 2
+        assert (tmp_path / 'runs' / 'run_a' / 'field_conversion.txt').is_file()
+        assert (tmp_path / 'runs' / 'run_c' / 'field_conversion.txt').is_file()
+        assert not (tmp_path / 'runs' / 'run_b').exists()
+
+
+class TestQualikizMain:
+
+    @pytest.fixture
+    def cli(self, tmp_path, monkeypatch):
+        executable = tmp_path / 'QuaLiKiz'
+        executable.write_text('')
+        inputs = [tmp_path / 'a.nc', tmp_path / 'b.nc']
+        for ipath in inputs:
+            ipath.write_text('')
+
+        def run(fake_plans):
+            monkeypatch.setattr(standalone_qualikiz, 'convert_to_qualikiz_input', lambda ipath, **kwargs: fake_plans[Path(ipath).name]())
+            monkeypatch.setattr('sys.argv', ['generate_qualikiz_runs', *[str(p) for p in inputs], '-x', str(executable), '-o', str(tmp_path / 'runs')])
+            return standalone_qualikiz.main()
+        return run
+
+    def test_missing_qualikiz_tools_aborts_with_an_error(self, cli, monkeypatch):
+        _hide_qualikiz_tools(monkeypatch)
+        assert cli({'a.nc': lambda: _qualikiz_plan(['run_a']), 'b.nc': lambda: _qualikiz_plan(['run_a'])}) == 1
+
+    def test_a_failing_input_does_not_stop_the_batch(self, cli, monkeypatch, tmp_path):
+        _install_fake_qualikiz_tools(monkeypatch)
+
+        def broken():
+            raise RuntimeError('unreadable')
+
+        assert cli({'a.nc': broken, 'b.nc': lambda: _qualikiz_plan(['run_a'])}) == 1
+        assert (tmp_path / 'runs_i001' / 'run_a' / 'field_conversion.txt').is_file()
+
+    def test_all_inputs_succeeding_returns_zero(self, cli, monkeypatch):
+        _install_fake_qualikiz_tools(monkeypatch)
+        assert cli({'a.nc': lambda: _qualikiz_plan(['run_a']), 'b.nc': lambda: _qualikiz_plan(['run_a'])}) == 0
+
+
+class TestBatchErrorHandling:
+
+    def test_a_failing_run_does_not_stop_the_others(self, tmp_path):
+        plan = [
+            {'inputs': {'A': 1}, 'location': 'run_a'},
+            {'inputs': None, 'location': 'run_b'},
+            {'inputs': {'A': 3}, 'location': 'run_c'},
+        ]
+        assert standalone.write_input_files(plan, tmp_path / 'runs', 'input.test') == 2
+        assert (tmp_path / 'runs' / 'run_a' / 'input.test').is_file()
+        assert (tmp_path / 'runs' / 'run_c' / 'input.test').is_file()
+
+    @pytest.mark.parametrize('module, code', [(standalone_tglf, 'tglf'), (standalone_cgyro, 'cgyro')])
+    def test_a_failing_input_does_not_stop_the_batch(self, module, code, tmp_path, monkeypatch):
+        inputs = [tmp_path / 'a.nc', tmp_path / 'b.nc']
+        for ipath in inputs:
+            ipath.write_text('')
+
+        def fake_plan(ipath, **kwargs):
+            if Path(ipath).name == 'a.nc':
+                raise RuntimeError('unreadable')
+            return [{'inputs': {'A': 1}, 'location': 'run_a'}]
+
+        monkeypatch.setattr(module, f'convert_to_{code}_input', fake_plan)
+        monkeypatch.setattr('sys.argv', [f'generate_{code}_runs', *[str(p) for p in inputs], '-o', str(tmp_path / 'runs')])
+        assert module.main() == 1
+        assert (tmp_path / 'runs_i001' / 'run_a' / f'input.{code}').is_file()
+
+    @pytest.mark.parametrize('module, code', [(standalone_tglf, 'tglf'), (standalone_cgyro, 'cgyro')])
+    def test_all_inputs_succeeding_returns_zero(self, module, code, tmp_path, monkeypatch):
+        ipath = tmp_path / 'a.nc'
+        ipath.write_text('')
+        monkeypatch.setattr(module, f'convert_to_{code}_input', lambda ipath, **kwargs: [{'inputs': {'A': 1}, 'location': 'run_a'}])
+        monkeypatch.setattr('sys.argv', [f'generate_{code}_runs', str(ipath), '-o', str(tmp_path / 'runs')])
+        assert module.main() == 0

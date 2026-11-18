@@ -109,8 +109,8 @@ def convert_torax_to_cgyro_input(
 def generate_cgyro_run_directories(
     cgyro_plan: Sequence[Any],
     cgyro_run_path: str | Path,
-) -> None:
-    standalone.write_input_files(cgyro_plan, cgyro_run_path, 'input.cgyro')
+) -> int:
+    return standalone.write_input_files(cgyro_plan, cgyro_run_path, 'input.cgyro')
 
 
 def parse_args():
@@ -147,6 +147,7 @@ def main():
     ipaths = standalone.resolve_input_paths(args.ifiles)
     n_generated = 0
     for i, ipath in enumerate(ipaths):
+        # Each input is processed on its own, so that a failure only skips that input
         try:
             cgyro_plan = convert_to_cgyro_input(
                 ipath,
@@ -159,12 +160,19 @@ def main():
                 pmap=pmap,
                 **standalone.parameter_kwargs(args),
             )
-        except (ValueError, NotImplementedError, KeyError, OSError) as err:
+        except Exception as err:
             logger.error(f'CGYRO generation from {ipath.name} failed: {err}')
             continue
-        if len(cgyro_plan) > 0:
-            cgyro_run_path = f'{args.output}_i{i:03d}' if len(ipaths) > 1 else f'{args.output}'
-            generate_cgyro_run_directories(cgyro_plan, cgyro_run_path)
+        if len(cgyro_plan) == 0:
+            logger.error(f'CGYRO generation from {ipath.name} produced no runs')
+            continue
+        cgyro_run_path = f'{args.output}_i{i:03d}' if len(ipaths) > 1 else f'{args.output}'
+        try:
+            n_written = generate_cgyro_run_directories(cgyro_plan, cgyro_run_path)
+        except Exception as err:
+            logger.error(f'Writing the CGYRO runs from {ipath.name} failed: {err}')
+            continue
+        if n_written == len(cgyro_plan):
             n_generated += 1
 
     logger.info(f'CGYRO run generation completed for {n_generated} of {len(ipaths)} inputs')
