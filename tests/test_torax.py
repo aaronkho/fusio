@@ -197,6 +197,36 @@ class TestParametersAcrossVersions:
         assert not np.allclose(alpha_total.to_numpy()[:, 1:], alpha_bundled.to_numpy()[:, 1:])
 
 
+class TestFastIonsFromOmas:
+
+    def test_fast_mixture_is_not_a_main_ion(self):
+        o = _omas_state(['D', 'T', 'DT_fast', 'Ne'], [2.0, 3.0, 2.5, 20.0], [1.0, 1.0, 1.0, 10.0], [0.6, 0.3, 0.05, 0.01])
+        t = torax_io.from_omas(o, side='input').input
+        fractions = _main_ion_fractions(t)
+        np.testing.assert_allclose(fractions['D'], 0.6 / 0.9)
+        np.testing.assert_allclose(fractions['T'], 0.3 / 0.9)
+        assert [f'{name}' for name in t['impurity'].to_numpy()] == ['Ne']
+
+    def test_fast_isotope_is_not_an_impurity(self):
+        o = _omas_state(['D', 'Ne', 'D_fast'], [2.0, 20.0, 2.0], [1.0, 10.0, 1.0], [0.9, 0.01, 0.05])
+        t = torax_io.from_omas(o, side='input').input
+        assert set(_main_ion_fractions(t)) == {'D'}
+        assert [f'{name}' for name in t['impurity'].to_numpy()] == ['Ne']
+
+    def test_species_without_thermal_density_is_fast(self):
+        o = _omas_state(['D', 'T', 'Ne'], [2.0, 3.0, 20.0], [1.0, 1.0, 10.0], [0.6, 0.3, 0.01])
+        thermal = o.input['core_profiles.profiles_1d.ion.density'].copy()
+        thermal[:, 1, :] = 0.0
+        o.input = o.input.assign({'core_profiles.profiles_1d.ion.density_thermal': thermal})
+        fractions = _main_ion_fractions(torax_io.from_omas(o, side='input').input)
+        assert set(fractions) == {'D'}
+
+    def test_each_impurity_keeps_its_own_name(self):
+        o = _omas_state(['D', 'Ne', 'W'], [2.0, 20.0, 184.0], [1.0, 10.0, 74.0], [0.9, 0.01, 1.0e-5])
+        t = torax_io.from_omas(o, side='input').input
+        assert [f'{name}' for name in t['impurity'].to_numpy()] == ['Ne', 'W']
+
+
 class TestPlasmaFromToraxVersions:
 
     @pytest.mark.parametrize('version', ['v1', 'v2'])

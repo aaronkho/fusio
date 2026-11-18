@@ -14,6 +14,7 @@ from ..utils.plasma_tools import (
     constants_si,
     define_ion_species,
     define_mixture_fractions,
+    is_fast_species,
 )
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
@@ -3783,10 +3784,27 @@ class torax_io(io):
                 cp_coords['rho'] = data.isel({time_cp: 0}).get(rho_cp, xr.DataArray()).to_numpy().flatten()
                 cp_attrs['numerics.t_initial'] = cp_coords['time'][0]
                 omas_tag = 'core_profiles.profiles_1d.ion.density'
+                # OMAS carries no species type, so fast ions are recognized by their name tag,
+                # or by holding density without any thermal density, as written by imas_io.
+                # They count towards Z_eff but are neither main ions nor impurities in TORAX
+                fastlist = []
+                if omas_tag in data and ion_cp in data:
+                    namelist = data.isel({time_cp: 0}).get(ion_cp, xr.DataArray()).to_numpy().tolist()
+                    thermal_tag = 'core_profiles.profiles_1d.ion.density_thermal'
+                    for ii in range(len(namelist)):
+                        if is_fast_species(namelist[ii]):
+                            fastlist.append(ii)
+                        elif thermal_tag in data:
+                            nth = data.isel({ion_cp_i: ii})[thermal_tag].to_numpy()
+                            ntot = data.isel({ion_cp_i: ii})[omas_tag].to_numpy()
+                            if np.all(np.isclose(nth, 0.0)) and np.any(ntot > 0.0):
+                                fastlist.append(ii)
                 if omas_tag in data and ion_cp in data:
                     namelist = data.isel({time_cp: 0}).get(ion_cp, xr.DataArray()).to_numpy().tolist()
                     mainlist = []
                     for ii in range(len(namelist)):
+                        if ii in fastlist:
+                            continue
                         if namelist[ii] in ['H', 'D', 'T'] or define_mixture_fractions(namelist[ii]) is not None:
                             mainlist.append(ii)
                     maincoord = []
@@ -3819,10 +3837,13 @@ class torax_io(io):
                     #zeff = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     #nqn = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     for ii in range(len(namelist)):
+                        if ii in fastlist:
+                            continue
                         if namelist[ii] not in ['H', 'D', 'T'] and define_mixture_fractions(namelist[ii]) is None:
                             implist.append(ii)
                     nzt = np.zeros_like(data[omas_tag].to_numpy()) # time, ion, rho
                     szt = np.zeros_like(data[omas_tag].to_numpy())
+                    snames = []
                     for ii in range(len(namelist)):
                         sname = namelist[ii]
                         sn, sa, sz = define_ion_species(short_name=sname)
@@ -3857,16 +3878,19 @@ class torax_io(io):
                                 szi = float(np.mean(np.where(szi > 74.0, 74.0, szi)))
                         nzt[:, ii, :] = nzi
                         szt[:, ii, :] = szi
+                        snames.append(sname)
                     nzz = xr.DataArray(data=nzt, coords=data[omas_tag].coords)
                     szz = xr.DataArray(data=szt, coords=data[omas_tag].coords)
                     nqn = (nzz * szz).sum(ion_cp_i) / data['core_profiles.profiles_1d.electrons.density']
                     nzz = nzz / nqn
                     zeff = (nzz * (szz ** 2.0)).sum(ion_cp_i) / data['core_profiles.profiles_1d.electrons.density']
-                    impcomp = {}
+                    impcomp: MutableMapping[str, Any] = {}
                     for ii in range(len(namelist)):
                         if ii in implist:
                             # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
-                            impcomp[sname] = copy.deepcopy(nzz.isel({ion_cp_i: ii}))
+                            # Species collapsed onto the same radiation species are summed
+                            nimp = copy.deepcopy(nzz.isel({ion_cp_i: ii}))
+                            impcomp[snames[ii]] = impcomp[snames[ii]] + nimp if snames[ii] in impcomp else nimp
                     nsum = xr.zeros_like(nqn)
                     for key in impcomp:
                         #impcomp[key] = (impcomp[key] / nsum).mean(rho_cp_i)

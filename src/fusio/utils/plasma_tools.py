@@ -67,6 +67,12 @@ def constants_si():
 
 fast_species_suffix = '_fast'
 
+
+def is_fast_species(short_name):
+    """Return whether a species name carries the fast_species_suffix tag."""
+    return isinstance(short_name, string_types) and short_name.endswith(fast_species_suffix)
+
+
 # Lumped mixtures of two hydrogen isotopes, carried as a single ion species by codes which do
 # not resolve the isotopes separately, given as (default mass, charge, (lighter, heavier)).
 # The default mass is that of an equal mixture, and a hydrogen-tritium mixture is not defined.
