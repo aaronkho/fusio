@@ -2495,7 +2495,7 @@ class torax_io(io):
                         sa = 3.0
                     data_vars[f'Ai{nion:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([sa]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
                     if 'Z_impurity_species' in data:
-                        data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity_species'].sel(impurity_symbol=symbol, drop=True).to_numpy())
+                        data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity_species'].sel(impurity_symbol=symbol, drop=True).interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'}).to_numpy())
                     if 'n_impurity_species' in data:
                         denom = data['n_e'].interp({'rho_norm': coords['rho']})
                         norm = -1.0 * data['R_major']
