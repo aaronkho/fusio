@@ -187,6 +187,49 @@ class TestDerivedGeometry:
 
 
 
+class TestWrite:
+
+    @pytest.mark.parametrize('key, expected', [
+        ('ne', True),
+        ('omega0', True),
+        ('shape_cos0', True),
+        ('shape_cos6', True),
+        ('shape_sin3', True),
+        ('shape_sin6', True),
+        ('shape_sin0', False),
+        ('shape_sin1', False),
+        ('shape_sin2', False),
+        ('s_shape_sin1', False),
+        ('shape_cos', False),
+        ('volp_miller', False),
+    ])
+    def test_base_var_recognition(self, key, expected):
+        assert gacode_io().is_base_var(key) == expected
+
+    def test_round_trip_preserves_file_fields(self, tmp_path, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        g.write(tmp_path / 'input.gacode', side='input', overwrite=True)
+        h = gacode_io(input=tmp_path / 'input.gacode')
+        assert set(h.input.data_vars) == set(g.input.data_vars)
+        assert set(h.input.coords) == set(g.input.coords)
+        for key in g.input.data_vars:
+            if g.input[key].dtype.kind == 'f':
+                np.testing.assert_allclose(h.input[key].to_numpy(), g.input[key].to_numpy(), rtol=1.0e-6)
+
+    def test_derived_quantities_are_kept_but_not_written(self, tmp_path, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        g.compute_derived_quantities(side='input')
+        g.write(tmp_path / 'input.gacode', side='input', overwrite=True)
+        h = gacode_io(input=tmp_path / 'input.gacode')
+        written = [f'{key}' for key in h.input.data_vars] + [f'{key}' for key in h.input.coords if key != 'n']
+        assert all(g.is_base_var(key) for key in written)
+        assert set(written) == set([f'{key}' for key in gacode_io(input=gacode_file_path).input.variables if key != 'n'])
+        # The internal fields, including the sine moments carried by delta and zeta, remain available
+        for key in ['shape_sin0', 'shape_sin1', 'shape_sin2', 's_shape_sin1', 'volp_miller']:
+            assert key in g.input
+
+
+
 class TestFixtureSelfConsistency:
 
     # rho is the normalized toroidal flux coordinate, so Phi(rho) = torfluxa * rho^2 and

@@ -110,6 +110,12 @@ class gacode_io(io):
         'current',
         'time',
     ]
+    # Lowest harmonic written for each shape moment prefix in basevars, the first two sine
+    # moments are carried by delta and zeta in the GACODE file format
+    shape_harmonic_minimum: Final[Mapping[str, int]] = {
+        'shape_cos': 0,
+        'shape_sin': 3,
+    }
     units: Final[Mapping[str, str]] = {
         'torfluxa': 'Wb/radian',
         'rcentr': 'm',
@@ -1279,6 +1285,20 @@ class gacode_io(io):
             self._write_gacode_file(path, self.output, overwrite=overwrite)
 
 
+    def is_base_var(
+        self,
+        key: str,
+    ) -> bool:
+        # The shape moment entries in basevars are prefixes, only their numbered harmonics are fields
+        if key in self.basevars and key not in self.shape_harmonic_minimum:
+            return True
+        for prefix, minimum in self.shape_harmonic_minimum.items():
+            harmonic = key[len(prefix):]
+            if key.startswith(prefix) and harmonic.isdigit():
+                return int(harmonic) >= minimum
+        return False
+
+
     def _read_gacode_file(
         self,
         path: str | Path
@@ -1436,10 +1456,15 @@ class gacode_io(io):
                     newlines.append(' '.join([f'{val:14.7E}' for val in np.atleast_1d(wdata[title].values)]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
+            # Only the fields defined by the file format are written, derived quantities are
+            # retained in the class data and can be saved in full through dump()
             data_fields = [k for k in wdata.coords.keys()] + [k for k in wdata.data_vars.keys()]
+            skipped_titles = [f'{k}' for k in data_fields if k not in processed_titles and not self.is_base_var(f'{k}')]
+            if skipped_titles:
+                logger.debug(f'Omitting {len(skipped_titles)} fields not defined by the {self.format} file format from {opath.name}')
             for title in data_fields:
                 newlines = []
-                if title not in processed_titles:
+                if title not in processed_titles and title not in skipped_titles:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
