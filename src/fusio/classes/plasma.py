@@ -2275,7 +2275,9 @@ class plasma_io(io):
                     sin_coeffs = [np.zeros_like(kappa)]
                     cos_coeffs = []
                     if 'delta' in data:
-                        sin_coeffs.append(np.sin(data['delta'].to_numpy()))
+                        # The first sine coefficient is arcsin of the triangularity, inverting the
+                        # convention used by _compute_derived_geometry, as in from_fastran
+                        sin_coeffs.append(np.arcsin(np.clip(data['delta'].to_numpy(), -1.0, 1.0)))
                     elif 'shape_sin1' in data:
                         sin_coeffs.append(data['shape_sin1'].to_numpy())
                     else:
