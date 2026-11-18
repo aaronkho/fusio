@@ -6,7 +6,7 @@ from collections.abc import MutableMapping, Mapping, MutableSequence, Sequence, 
 from numpy.typing import ArrayLike, NDArray
 import numpy as np
 import contourpy
-from scipy.interpolate import RectBivariateSpline  # type: ignore[import-untyped]
+from scipy.interpolate import RectBivariateSpline, PchipInterpolator  # type: ignore[import-untyped]
 from shapely import Point, Polygon  # type: ignore[import-untyped]
 from megpy import contour as contour_tracer  # type: ignore[import-untyped]
 from megpy.fluxsurface import FluxSurface  # type: ignore[import-untyped]
@@ -534,6 +534,70 @@ def trace_contour_with_megpy(rvec: NDArray, zvec: NDArray, psi: NDArray, level: 
     return contour_out
 
 
+MXH_SHAPE_PARAMETERS: Final[Sequence[str]] = [
+    'rmaj', 'rmin', 'zmag', 'kappa', 'delta', 'zeta',
+    'sin3', 'sin4', 'sin5', 'sin6',
+    'cos0', 'cos1', 'cos2', 'cos3', 'cos4', 'cos5', 'cos6',
+]
+
+
+def mxh_shape_parameters(c: NDArray, s: NDArray, bbox: NDArray) -> MutableMapping[str, float]:
+    """Name the outputs of calculate_mxh_coefficients, fitted with n >= 6, as flux-surface shape parameters."""
+    shape = {
+        'rmaj': bbox[0],
+        'rmin': bbox[1],
+        'zmag': bbox[2],
+        'kappa': bbox[3],
+        'delta': np.sin(s[1]),
+        'zeta': -s[2],
+    }
+    shape.update({f'sin{nn:d}': s[nn] for nn in range(3, 7)})
+    shape.update({f'cos{nn:d}': c[nn] for nn in range(0, 7)})
+    return {key: float(val) for key, val in shape.items()}
+
+
+def calculate_mxh_coefficients_from_contours(
+    rho: NDArray,
+    rc: NDArray,
+    zc: NDArray,
+    rho_out: NDArray,
+) -> MutableMapping[str, NDArray]:
+    """Fit MXH shape parameters to closed flux-surface contours and interpolate them onto rho_out.
+
+    The contours are given as (R, Z) points on an inverse grid, with one surface per rho, as
+    stored by the IMAS inverse_rhotornorm_polar profiles_2d grid. Surfaces with no extent, as
+    on the magnetic axis, or contours which cannot be fitted are skipped, and the parameters
+    are extended to the axis by extrapolation, except the minor radius which vanishes there.
+    """
+    rhos: MutableSequence[float] = []
+    shapes: MutableSequence[MutableMapping[str, float]] = []
+    for k in range(len(rho)):
+        mask = np.isfinite(rc[k]) & np.isfinite(zc[k])
+        r, z = rc[k][mask], zc[k][mask]
+        if len(r) < 8 or not np.isfinite(rho[k]) or 0.5 * (np.max(r) - np.min(r)) < 1.0e-6:
+            continue
+        try:
+            shape = mxh_shape_parameters(*calculate_mxh_coefficients(r, z, n=6))
+        except (ValueError, IndexError, FloatingPointError):
+            continue
+        if all(np.isfinite(val) for val in shape.values()):
+            rhos.append(float(rho[k]))
+            shapes.append(shape)
+    if len(rhos) < 2:
+        raise ValueError('Fewer than two flux-surface contours could be fitted with MXH coefficients.')
+    rho_fit = np.array(rhos)
+    srt = np.argsort(rho_fit)
+    mxh_data: MutableMapping[str, NDArray] = {}
+    for key in MXH_SHAPE_PARAMETERS:
+        x = rho_fit[srt]
+        y = np.array([shape[key] for shape in shapes])[srt]
+        if key == 'rmin' and x[0] > 0.0:
+            x = np.concatenate([[0.0], x])
+            y = np.concatenate([[0.0], y])
+        mxh_data[key] = PchipInterpolator(x, y, extrapolate=True)(rho_out)
+    return mxh_data
+
+
 def calculate_mxh_coefficients_from_eqdsk_dict(
     eqdsk_data: MutableMapping[str, Any],
     psivec: NDArray,
@@ -599,23 +663,9 @@ def calculate_mxh_coefficients_from_eqdsk_dict(
             fpol_interp = np.interp(psi_orig, psi_eqdsk[sort_idx], eqdsk_data['fpol'][sort_idx])
         mxh = {psi: calculate_mxh_coefficients(c[:, 0], c[:, 1], n=6) for psi, c in fs.items()}
         for i, psi in enumerate(psivec):
-            mxh_data['rmaj'].append(mxh[psi][2][0] if psi in mxh else np.nan)
-            mxh_data['rmin'].append(mxh[psi][2][1] if psi in mxh else np.nan)
-            mxh_data['zmag'].append(mxh[psi][2][2] if psi in mxh else np.nan)
-            mxh_data['kappa'].append(mxh[psi][2][3] if psi in mxh else np.nan)
-            mxh_data['delta'].append(np.sin(mxh[psi][1][1]) if psi in mxh else np.nan)
-            mxh_data['zeta'].append(-mxh[psi][1][2] if psi in mxh else np.nan)
-            mxh_data['sin3'].append(mxh[psi][1][3] if psi in mxh else np.nan)
-            mxh_data['sin4'].append(mxh[psi][1][4] if psi in mxh else np.nan)
-            mxh_data['sin5'].append(mxh[psi][1][5] if psi in mxh else np.nan)
-            mxh_data['sin6'].append(mxh[psi][1][6] if psi in mxh else np.nan)
-            mxh_data['cos0'].append(mxh[psi][0][0] if psi in mxh else np.nan)
-            mxh_data['cos1'].append(mxh[psi][0][1] if psi in mxh else np.nan)
-            mxh_data['cos2'].append(mxh[psi][0][2] if psi in mxh else np.nan)
-            mxh_data['cos3'].append(mxh[psi][0][3] if psi in mxh else np.nan)
-            mxh_data['cos4'].append(mxh[psi][0][4] if psi in mxh else np.nan)
-            mxh_data['cos5'].append(mxh[psi][0][5] if psi in mxh else np.nan)
-            mxh_data['cos6'].append(mxh[psi][0][6] if psi in mxh else np.nan)
+            shape = mxh_shape_parameters(*mxh[psi]) if psi in mxh else {}
+            for key in MXH_SHAPE_PARAMETERS:
+                mxh_data[key].append(shape.get(key, np.nan))
             mxh_data['fpol'].append(fpol_interp[i] if fpol_interp is not None else np.nan)
         for key in mxh_data:
             arr = np.array(mxh_data[key])

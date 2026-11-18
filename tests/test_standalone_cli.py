@@ -302,6 +302,29 @@ class TestCgyroEndToEnd:
         assert all('=' in line for line in text.splitlines())
 
 
+class TestCgyroWithoutEqdsk:
+
+    @pytest.fixture(scope='class')
+    def cgyro_plan(self, gacode_file_path):
+        return standalone_cgyro.convert_to_cgyro_input(gacode_file_path, rho=[0.3, 0.6, 0.9])
+
+    def test_one_run_per_requested_radius(self, cgyro_plan):
+        assert len(cgyro_plan) == 3
+
+    def test_geometry_matches_the_gacode_shape(self, cgyro_plan, gacode_file_path):
+        # Without an EQDSK the shape is fitted to the flux-surface contours, which are
+        # built from the GACODE shape coefficients, so those are recovered
+        from fusio.classes.gacode import gacode_io
+        g = gacode_io.from_file(input=gacode_file_path).input.isel(n=0)
+        rho = g['rho'].to_numpy()
+        a = float(g['rmin'].to_numpy()[-1])
+        for run in cgyro_plan:
+            inputs = run['inputs']
+            for key, var, scale in [('KAPPA', 'kappa', 1.0), ('DELTA', 'delta', 1.0), ('ZETA', 'zeta', 1.0), ('SHAPE_SIN3', 'shape_sin3', 1.0), ('RMIN', 'rmin', a), ('RMAJ', 'rmaj', a)]:
+                expected = np.interp(inputs['#RHO'], rho, g[var].to_numpy()) / scale
+                np.testing.assert_allclose(inputs[key], expected, atol=1.0e-3, err_msg=key)
+
+
 class TestFailureModes:
 
     def test_tglf_from_a_non_torax_source_reports_why(self, gacode_file_path):
@@ -314,8 +337,3 @@ class TestFailureModes:
         with pytest.raises(ValueError, match='Could not determine the format'):
             standalone_cgyro.convert_to_cgyro_input(ipath)
 
-    def test_cgyro_without_an_equilibrium_map_reports_why(self, gacode_file_path):
-        # The gacode to plasma to imas route carries no 2-D flux map without an EQDSK,
-        # so the contour tracing the CGYRO parameters rely on cannot run
-        with pytest.raises((ValueError, KeyError)):
-            standalone_cgyro.convert_to_cgyro_input(gacode_file_path, rho=[0.5])

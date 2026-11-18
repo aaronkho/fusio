@@ -177,3 +177,43 @@ def test_imas_ragged_profiles_2d_roundtrip(tmp_path):
         np.testing.assert_allclose(np.asarray(written.psi), expected)
         assert np.asarray(written.grid.dim1).size == expected.shape[0]
         assert np.asarray(written.grid.dim2).size == expected.shape[1]
+
+
+class TestFluxSurfaceShapeWithoutEqdsk:
+
+    @pytest.fixture(scope='class')
+    def imas_without_eqdsk(self, gacode_file_path):
+        p = plasma_io.from_gacode(gacode_io.from_file(input=gacode_file_path), side='input')
+        p.compute_derived_quantities(side='input')
+        return imas_io.from_plasma(p, side='input')
+
+    def test_cgyro_parameters_use_the_flux_surface_contours(self, imas_without_eqdsk):
+        params = imas_without_eqdsk.to_cgyro_parameters(rho=[0.5], side='input')
+        for key in ['KAPPA', 'DELTA', 'RMIN', 'Q', 'S']:
+            assert np.all(np.isfinite(params[key].to_numpy())), key
+
+    def test_missing_geometry_reports_why(self, imas_without_eqdsk):
+        data = imas_without_eqdsk.input
+        dropped = [var for var in data.variables if var.startswith('equilibrium.time_slice.profiles_2d')]
+        bare = imas_io()
+        bare.input = data.drop_vars(dropped)
+        with pytest.raises(ValueError, match='g-EQDSK'):
+            bare.to_cgyro_parameters(rho=[0.5], side='input')
+
+
+def test_mxh_fit_to_contours_recovers_the_shape():
+    from fusio.utils.eqdsk_tools import calculate_mxh_coefficients_from_contours
+    rho = np.linspace(0.0, 1.0, 21)
+    theta = np.linspace(0.0, 2.0 * np.pi, 401)
+    r0, z0, a = 3.0, 0.1, 1.0
+    kappa = 1.2 + 0.5 * rho ** 2
+    delta = 0.4 * rho ** 2
+    rc = r0 + a * rho[:, None] * np.cos(theta[None, :] + np.arcsin(delta)[:, None] * np.sin(theta[None, :]))
+    zc = z0 + a * rho[:, None] * kappa[:, None] * np.sin(theta[None, :])
+    rho_out = np.array([0.0, 0.3, 0.6, 0.9])
+    mxh = calculate_mxh_coefficients_from_contours(rho, rc, zc, rho_out)
+    np.testing.assert_allclose(mxh['kappa'][1:], 1.2 + 0.5 * rho_out[1:] ** 2, atol=1.0e-3)
+    np.testing.assert_allclose(mxh['delta'][1:], 0.4 * rho_out[1:] ** 2, atol=1.0e-3)
+    np.testing.assert_allclose(mxh['rmin'], a * rho_out, atol=1.0e-3)
+    np.testing.assert_allclose(mxh['rmaj'][1:], r0, atol=1.0e-3)
+    np.testing.assert_allclose(mxh['zmag'][1:], z0, atol=1.0e-3)
