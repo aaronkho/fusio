@@ -11,6 +11,7 @@ from packaging.version import Version
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
+from .torax import add_legacy_output_names
 from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
@@ -1846,7 +1847,7 @@ class gacode_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input if side == 'input' else obj.output
+            data = obj.input if side == 'input' else add_legacy_output_names(obj.output)
             if 'rho_norm' in data.coords:
                 time = data['time'].to_numpy()
                 time_window = [float(time[-1])]

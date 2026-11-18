@@ -3,7 +3,8 @@ import numpy as np
 import xarray as xr
 from fusio.classes.gacode import gacode_io
 from fusio.classes.omas import omas_io
-from fusio.classes.torax import torax_io
+from fusio.classes.plasma import plasma_io
+from fusio.classes.torax import torax_io, add_legacy_output_names, TORAX_V2_OUTPUT_RENAMES
 
 
 def _gacode_with_renamed_ion(gacode_file_path, old, new, mass):
@@ -72,3 +73,143 @@ class TestLumpedMainIons:
         np.testing.assert_allclose(fractions['D'], 0.6 * 0.5 / 0.9)
         np.testing.assert_allclose(fractions['T'], (0.4 * 0.5 + 0.4) / 0.9)
         assert [f'{name}' for name in t['impurity'].to_numpy()] == ['Ne']
+
+
+def _torax_v1_output(ntime=2, ncell=10):
+    """Small synthetic TORAX v1 output, with C and W impurities bundled into n_impurity."""
+    face = np.linspace(0.0, 1.0, ncell + 1)
+    cell = 0.5 * (face[1:] + face[:-1])
+    rho = np.concatenate([[0.0], cell, [1.0]])
+    time = np.linspace(1.0, 2.0, ntime)
+    one = np.ones((ntime, 1))
+
+    def prof(core, edge, grid):
+        return one * (edge + (core - edge) * (1.0 - grid ** 2))
+
+    symbols = ['C', 'W']
+    zs = np.stack([np.full((ntime, ncell), 6.0), prof(60.0, 40.0, cell)])
+    ns = np.stack([prof(2.0e18, 1.0e18, cell), prof(1.0e15, 5.0e14, cell)])
+    s1 = (ns * zs).sum(axis=0)
+    s2 = (ns * zs ** 2).sum(axis=0)
+    zbundled = np.array([np.interp(rho, cell, s2[i] / s1[i]) for i in range(ntime)])
+    nbundled = np.array([np.interp(rho, cell, s1[i] ** 2 / s2[i]) for i in range(ntime)])
+    a_minor = np.full(ntime, 1.0)
+    ne = prof(1.0e20, 3.0e19, rho)
+    data = xr.Dataset(
+        coords={'time': time, 'rho_norm': rho, 'rho_face_norm': face, 'rho_cell_norm': cell, 'impurity_symbol': symbols},
+        data_vars={
+            'R_major': (['time'], np.full(ntime, 3.0)),
+            'a_minor': (['time'], a_minor),
+            'B_0': (['time'], np.full(ntime, 5.0)),
+            'z_magnetic_axis': (['time'], np.zeros(ntime)),
+            'R_out': (['time', 'rho_norm'], 3.0 + one * rho),
+            'R_in': (['time', 'rho_norm'], 3.0 - one * rho),
+            'elongation': (['time', 'rho_norm'], prof(1.2, 1.6, rho)),
+            'delta': (['time', 'rho_face_norm'], prof(0.0, 0.3, face)),
+            'psi': (['time', 'rho_norm'], one * rho ** 2),
+            'psi_norm': (['time', 'rho_face_norm'], one * face ** 2),
+            'q': (['time', 'rho_face_norm'], prof(1.0, 4.0, face)),
+            'magnetic_shear': (['time', 'rho_face_norm'], one * 2.0 * face ** 2),
+            'n_e': (['time', 'rho_norm'], ne),
+            'T_e': (['time', 'rho_norm'], prof(10.0, 0.5, rho)),
+            'T_i': (['time', 'rho_norm'], prof(9.0, 0.5, rho)),
+            'n_i': (['time', 'rho_norm'], 0.8 * ne),
+            'A_i': (['time'], np.full(ntime, 2.5)),
+            'Z_i': (['time', 'rho_norm'], one * np.ones_like(rho)),
+            'A_impurity': (['time', 'rho_norm'], one * np.full_like(rho, 20.0)),
+            'Z_eff': (['time', 'rho_norm'], one * np.full_like(rho, 1.5)),
+            'n_impurity': (['time', 'rho_norm'], nbundled),
+            'Z_impurity': (['time', 'rho_norm'], zbundled),
+            'n_impurity_species': (['impurity_symbol', 'time', 'rho_cell_norm'], ns),
+            'Z_impurity_species': (['impurity_symbol', 'time', 'rho_cell_norm'], zs),
+            'Ip': (['time'], np.full(ntime, 1.0e7)),
+            'j_bootstrap': (['time', 'rho_norm'], prof(0.0, 1.0e5, rho)),
+        },
+    )
+    return data
+
+
+def _torax_v2_output(v1):
+    """Rename a v1 output into the TORAX v2 layout, adding the plain impurity sum and average."""
+    ns = v1['n_impurity_species']
+    zs = v1['Z_impurity_species']
+    total = ns.sum('impurity_symbol').interp(rho_cell_norm=v1['rho_norm'].to_numpy(), kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+    average = ((ns * zs).sum('impurity_symbol') / ns.sum('impurity_symbol')).interp(rho_cell_norm=v1['rho_norm'].to_numpy(), kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'})
+    v2 = v1.rename({'n_impurity': 'n_impurity_bundled', 'Z_impurity': 'Z_impurity_bundled', 'Ip': 'I_p', 'j_bootstrap': 'j_toroidal_bootstrap'})
+    return v2.assign(n_impurity_total=total.drop_vars('rho_norm'), Z_impurity_average=average.drop_vars('rho_norm'))
+
+
+def _torax_with_output(data):
+    t = torax_io()
+    t.output = data
+    return t
+
+
+class TestLegacyOutputNames:
+
+    def test_v2_names_are_aliased_onto_v1_names(self):
+        v2 = _torax_v2_output(_torax_v1_output())
+        aliased = add_legacy_output_names(v2)
+        xr.testing.assert_equal(aliased['n_impurity'], v2['n_impurity_bundled'].rename('n_impurity'))
+        xr.testing.assert_equal(aliased['Z_impurity'], v2['Z_impurity_bundled'].rename('Z_impurity'))
+        xr.testing.assert_equal(aliased['Ip'], v2['I_p'].rename('Ip'))
+        assert 'n_impurity' not in v2
+
+    def test_v1_output_is_left_as_is_apart_from_the_total_impurity(self):
+        v1 = _torax_v1_output()
+        aliased = add_legacy_output_names(v1)
+        assert set(aliased.data_vars) - set(v1.data_vars) == {'n_impurity_total'}
+        xr.testing.assert_equal(aliased['n_impurity_total'], v1['n_impurity'].rename('n_impurity_total'))
+
+    def test_v2_total_impurity_is_kept(self):
+        v2 = _torax_v2_output(_torax_v1_output())
+        xr.testing.assert_equal(add_legacy_output_names(v2)['n_impurity_total'], v2['n_impurity_total'])
+
+    def test_rename_targets_are_unique(self):
+        assert len(set(TORAX_V2_OUTPUT_RENAMES.values())) == len(TORAX_V2_OUTPUT_RENAMES)
+
+
+class TestParametersAcrossVersions:
+
+    @pytest.mark.parametrize('code', ['tglf', 'cgyro', 'qualikiz'])
+    @pytest.mark.parametrize('impurity_kwargs', [{}, {'lump_impurities': True}, {'full_impurities': True}])
+    def test_v1_and_v2_give_the_same_parameters(self, code, impurity_kwargs):
+        v1 = _torax_v1_output()
+        v2 = _torax_v2_output(v1)
+        # Pressure takes the total impurity density, which v1 approximated by the bundled one
+        v2 = v2.assign(n_impurity_total=v2['n_impurity_bundled'])
+        p1 = getattr(_torax_with_output(v1), f'to_{code}_parameters')(**impurity_kwargs)
+        p2 = getattr(_torax_with_output(v2), f'to_{code}_parameters')(**impurity_kwargs)
+        assert len(p1.data_vars) > 0
+        xr.testing.assert_allclose(p1, p2)
+
+    def test_v2_lumped_impurity_is_the_bundled_one(self):
+        v2 = _torax_v2_output(_torax_v1_output())
+        params = _torax_with_output(v2).to_tglf_parameters(rho=[0.5])
+        expected = v2['Z_impurity_bundled'].interp(rho_norm=params['rho'].to_numpy()).to_numpy()
+        np.testing.assert_allclose(params['ZS_3'].to_numpy(), expected)
+
+    def test_v2_pressure_uses_the_total_impurity_density(self):
+        v2 = _torax_v2_output(_torax_v1_output())
+        bundled = v2.assign(n_impurity_total=v2['n_impurity_bundled'])
+        alpha_total = _torax_with_output(v2).to_qualikiz_parameters()['alpha']
+        alpha_bundled = _torax_with_output(bundled).to_qualikiz_parameters()['alpha']
+        assert not np.allclose(alpha_total.to_numpy()[:, 1:], alpha_bundled.to_numpy()[:, 1:])
+
+
+class TestPlasmaFromToraxVersions:
+
+    @pytest.mark.parametrize('version', ['v1', 'v2'])
+    def test_impurities_take_their_own_charge(self, version):
+        v1 = _torax_v1_output()
+        data = v1 if version == 'v1' else _torax_v2_output(v1)
+        p = plasma_io.from_torax(_torax_with_output(data), side='output').input
+        charge = p['charge_i'].isel(time=-1)
+        np.testing.assert_allclose(charge.sel(ion='C').to_numpy(), 6.0)
+        expected = v1['Z_impurity_species'].sel(impurity_symbol='W').isel(time=-1).interp(rho_cell_norm=p['radius'].to_numpy(), kwargs={'fill_value': 'extrapolate'})
+        np.testing.assert_allclose(charge.sel(ion='W').to_numpy(), expected.to_numpy())
+
+    def test_v2_plasma_current_is_read(self):
+        v2 = _torax_v2_output(_torax_v1_output())
+        p = plasma_io.from_torax(_torax_with_output(v2), side='output').input
+        np.testing.assert_allclose(p['current'].to_numpy(), v2['I_p'].to_numpy())

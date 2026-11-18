@@ -12,6 +12,7 @@ from packaging.version import Version
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
+from .torax import add_legacy_output_names
 from ..utils.plasma_tools import define_ion_species
 from ..utils.math_tools import (
     vectorized_numpy_derivative,
@@ -2409,7 +2410,7 @@ class plasma_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input if side == 'input' else obj.output
+            data = obj.input if side == 'input' else add_legacy_output_names(obj.output)
             coords: MutableMapping[str, Any] = {}
             data_vars: MutableMapping[str, Any] = {}
             attrs: MutableMapping[str, Any] = {}
@@ -2512,7 +2513,16 @@ class plasma_io(io):
                         z_i = onrad('Z_i')
                         for i in range(len(main_ion_names)):
                             charge_i[:, :, i] = z_i
-                    if impurity_names and 'Z_impurity' in data:
+                    if impurity_names and 'Z_impurity_species' in data:
+                        # Charge per species, matching the per species densities above, since
+                        # Z_impurity is that of the single bundled impurity
+                        for j, name in enumerate(impurity_names):
+                            da = data['Z_impurity_species'].sel(impurity_symbol=name)
+                            rho_dim = next(d for d in da.dims if d != 'time')
+                            vals = (da.to_numpy() if rho_dim == 'rho_norm'
+                                   else da.interp({rho_dim: coords['radius']}, kwargs=ikwargs).to_numpy())
+                            charge_i[:, :, len(main_ion_names) + j] = vals
+                    elif impurity_names and 'Z_impurity' in data:
                         z_imp = onrad('Z_impurity')
                         for j in range(len(impurity_names)):
                             charge_i[:, :, len(main_ion_names) + j] = z_imp
