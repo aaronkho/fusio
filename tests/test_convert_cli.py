@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
+from fusio.classes.io import io
+from fusio.classes.gacode import gacode_io
 from fusio.scripts import convert
 
 
@@ -213,4 +215,40 @@ class TestEndToEnd:
         with pytest.raises(OSError, match='already exists'):
             convert.convert_file(
                 Path(gacode_file_path), 'plasma', output=opath, overwrite=False, cmap=conversion_map,
+            )
+
+    def test_gacode_target_dumps_the_full_field_set(self, tmp_path, gacode_file_path, conversion_map):
+        opath = convert.convert_file(
+            Path(gacode_file_path), 'gacode', output=tmp_path / 'input.gacode', overwrite=True, cmap=conversion_map,
+        )
+        assert opath is not None and opath.is_file()
+        dpath = tmp_path / 'input.gacode.nc'
+        assert dpath.is_file()
+        assert convert.read_dumped_format(dpath) == 'gacode'
+        dumped = io.load(dpath)
+        data = dumped.input if dumped.has_input else dumped.output
+        assert 'volp_miller' in data
+        assert 'shape_sin1' in data
+        written = gacode_io(input=opath).input
+        assert 'volp_miller' not in written
+        assert 'shape_sin1' not in written
+
+    def test_no_dump_skips_the_full_field_set(self, tmp_path, gacode_file_path, conversion_map):
+        convert.convert_file(
+            Path(gacode_file_path), 'gacode', output=tmp_path / 'input.gacode', overwrite=True, dump=False, cmap=conversion_map,
+        )
+        assert (tmp_path / 'input.gacode').is_file()
+        assert not (tmp_path / 'input.gacode.nc').exists()
+
+    def test_other_targets_are_not_dumped(self, tmp_path, gacode_file_path, conversion_map):
+        convert.convert_file(
+            Path(gacode_file_path), 'plasma', output=tmp_path / 'state.nc', overwrite=True, cmap=conversion_map,
+        )
+        assert not (tmp_path / 'state.nc.nc').exists()
+
+    def test_existing_dump_without_overwrite_raises(self, tmp_path, gacode_file_path, conversion_map):
+        (tmp_path / 'input.gacode.nc').write_text('')
+        with pytest.raises(OSError, match='dump path'):
+            convert.convert_file(
+                Path(gacode_file_path), 'gacode', output=tmp_path / 'input.gacode', overwrite=False, cmap=conversion_map,
             )

@@ -55,6 +55,12 @@ WRITE_SIDES: Final[Mapping[str, str]] = {
     'fastran': 'output',
 }
 
+# Formats whose file holds only the fields defined by the format itself, for which the full
+# set of class fields, derived quantities included, is also dumped to a netcdf file
+FULL_DUMP_FORMATS: Final[Sequence[str]] = [
+    'gacode',
+]
+
 # Lightweight content hints for source format detection, tabulated here rather than taken
 # from the format classes so that detection does not require importing all of them
 IMAS_IDS_HINTS: Final[Sequence[str]] = [
@@ -494,6 +500,21 @@ def resolve_output_path(
     return opath
 
 
+def resolve_dump_path(
+    opath: Path,
+    target: str,
+    dump: bool = True,
+) -> Path | None:
+    """Determine where the full set of class fields is dumped, if the target calls for it.
+
+    The netcdf suffix is appended to the full output name, so the dump sits beside the
+    written file and remains recognizable by fusio as a dump of the target format.
+    """
+    if not dump or target not in FULL_DUMP_FORMATS:
+        return None
+    return opath.with_name(f'{opath.name}.nc')
+
+
 def convert_file(
     ipath: Path,
     target: str,
@@ -507,6 +528,7 @@ def convert_file(
     time: float | None = None,
     impurities: str | None = None,
     derive: bool = True,
+    dump: bool = True,
     overwrite: bool = False,
     cmap: Mapping[str, Sequence[str]] | None = None,
 ) -> Path | None:
@@ -528,6 +550,9 @@ def convert_file(
     opath = resolve_output_path(output, ipath, target, total)
     if opath.exists() and not overwrite:
         raise OSError(f'Requested output path, {opath}, already exists! Pass --overwrite to replace it.')
+    dpath = resolve_dump_path(opath, target, dump)
+    if dpath is not None and dpath.exists() and not overwrite:
+        raise OSError(f'Requested dump path, {dpath}, already exists! Pass --overwrite to replace it, or --no-dump to skip it.')
 
     obj, side = read_source(fmt, ipath, read_side)
     if obj is None or obj.is_empty:
@@ -565,6 +590,11 @@ def convert_file(
     obj.write(opath, side=side, overwrite=overwrite)
     if not opath.exists():
         raise OSError(f'Writing the {target} data to {opath} produced no output!')
+    if dpath is not None:
+        obj.dump(dpath, overwrite=overwrite)
+        if not dpath.exists():
+            raise OSError(f'Dumping the full {target} data to {dpath} produced no output!')
+        logger.info(f'Dumped the full set of {target} fields into {dpath}')
     return opath
 
 
@@ -585,6 +615,7 @@ def parse_args():
     parser.add_argument('-i', '--impurities', type=str, default=None, choices=['n_e_ratios', 'fractions'], help='Impurity representation to use when the target format offers a choice')
     parser.add_argument('-r', '--read-side', type=str, default='output', choices=['input', 'output'], help='Side of the source format to take the data from, default is output')
     parser.add_argument('--no-derive', action='store_true', default=False, help='Skip the derived quantity computations which are otherwise run on every format which defines them')
+    parser.add_argument('--no-dump', action='store_true', default=False, help=f'Skip the netcdf dump of the full set of class fields, written beside the output as <output>.nc for targets whose file format holds only a subset of them ({", ".join(FULL_DUMP_FORMATS)})')
     parser.add_argument('--overwrite', action='store_true', default=False, help='Overwrite the converted output if it already exists')
     parser.add_argument('--list', action='store_true', default=False, help='Print the supported conversions and exit')
     parser.add_argument('--quiet', action='store_true', default=False, help='Only report warnings and errors')
@@ -657,6 +688,7 @@ def main():
                 time=args.time,
                 impurities=args.impurities,
                 derive=(not args.no_derive),
+                dump=(not args.no_dump),
                 overwrite=args.overwrite,
                 cmap=cmap,
             )
