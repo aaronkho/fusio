@@ -19,12 +19,17 @@ logger = logging.getLogger('fusio')
 
 class io():
 
+    # Formats with a class providing a read and / or a write function, jintrac is excluded
+    # since it only exposes structure creation helpers so far
     _supported_formats: Final[Sequence[str]] = [
         'plasma',
         'gacode',
         'imas',
         'omas',
         'torax',
+        'fastran',
+        'transp',
+        'astra',
     ]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -177,6 +182,7 @@ class io():
         if isinstance(path, (str, Path)):
             load_path = Path(path)
             if load_path.exists():
+                # NOTE: The CLI format detection opens this file repeatedly beforehand, see the note in torax_io._read_torax_file
                 tree = xr.open_datatree(path)
                 if isinstance(tree, xr.DataTree):
                     fmt = tree.to_dataset().attrs.get('class', 'unknown')

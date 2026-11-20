@@ -185,6 +185,91 @@ class TestDerivedGeometry:
         assert np.median(err) < 1.0e-3
         assert np.max(err) < 1.0e-2
 
+    def test_aspect_local_is_extrapolated_only_on_the_axis(self, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        g._compute_derived_coordinates(side='input')
+        on_axis = g.input['aspect_local'].to_numpy()
+        assert np.all(np.isfinite(on_axis))
+        # A grid which starts off the axis keeps its own innermost value
+        h = gacode_io(input=gacode_file_path)
+        h.input = h.input.isel(rho=slice(1, None))
+        h._compute_derived_coordinates(side='input')
+        off_axis = h.input['aspect_local'].to_numpy()
+        expected = (h.input['rmaj'] / h.input['rmin']).to_numpy()
+        np.testing.assert_allclose(off_axis[..., 0], expected[..., 0])
+
+
+
+class TestWrite:
+
+    @pytest.mark.parametrize('key, expected', [
+        ('ne', True),
+        ('omega0', True),
+        ('shape_cos0', True),
+        ('shape_cos6', True),
+        ('shape_sin3', True),
+        ('shape_sin6', True),
+        ('shape_sin0', False),
+        ('shape_sin1', False),
+        ('shape_sin2', False),
+        ('s_shape_sin1', False),
+        ('shape_cos', False),
+        ('volp_miller', False),
+    ])
+    def test_base_var_recognition(self, key, expected):
+        assert gacode_io().is_base_var(key) == expected
+
+    def test_round_trip_preserves_file_fields(self, tmp_path, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        g.write(tmp_path / 'input.gacode', side='input', overwrite=True)
+        h = gacode_io(input=tmp_path / 'input.gacode')
+        assert set(h.input.data_vars) == set(g.input.data_vars)
+        assert set(h.input.coords) == set(g.input.coords)
+        for key in g.input.data_vars:
+            if g.input[key].dtype.kind == 'f':
+                np.testing.assert_allclose(h.input[key].to_numpy(), g.input[key].to_numpy(), rtol=1.0e-6)
+
+    def test_derived_quantities_are_kept_but_not_written(self, tmp_path, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        g.compute_derived_quantities(side='input')
+        g.write(tmp_path / 'input.gacode', side='input', overwrite=True)
+        h = gacode_io(input=tmp_path / 'input.gacode')
+        written = [f'{key}' for key in h.input.data_vars] + [f'{key}' for key in h.input.coords if key != 'n']
+        assert all(g.is_base_var(key) for key in written)
+        assert set(written) == set([f'{key}' for key in gacode_io(input=gacode_file_path).input.variables if key != 'n'])
+        # The internal fields, including the sine moments carried by delta and zeta, remain available
+        for key in ['shape_sin0', 'shape_sin1', 'shape_sin2', 's_shape_sin1', 'volp_miller']:
+            assert key in g.input
+
+    def test_poloidal_current_function_is_kept_out_of_the_file(self, tmp_path, gacode_file_path):
+        # fpol is not part of the GACODE format, it is only carried through the native dump
+        g = gacode_io(input=gacode_file_path)
+        fpol = np.linspace(5.0, 6.0, g.input.sizes['rho'])
+        g.input = g.input.assign(fpol=(['n', 'rho'], np.expand_dims(fpol, axis=0)))
+        g.write(tmp_path / 'input.gacode', side='input', overwrite=True)
+        assert 'fpol' not in gacode_io(input=tmp_path / 'input.gacode').input
+        g.dump(tmp_path / 'input.gacode.nc', overwrite=True)
+        h = io.load(tmp_path / 'input.gacode.nc')
+        np.testing.assert_allclose(h.input['fpol'].to_numpy().flatten(), fpol)
+
+
+
+class TestLumpedMainIons:
+
+    def test_mixture_name_and_mass_survive_plasma_round_trip(self, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        data = g.input
+        names = [f'{name}' for name in data['name'].to_numpy()]
+        masses = data['mass'].to_numpy().copy()
+        masses[:, names.index('D')] = 2.4
+        names[names.index('D')] = 'DT'
+        g.input = data.assign_coords(name=names).assign(mass=(('n', 'name'), masses))
+        p = plasma_io.from_gacode(g, side='input')
+        np.testing.assert_allclose(p.input['mass_i'].sel(ion='DT').to_numpy(), 2.4)
+        np.testing.assert_allclose(p.input['atomic_number_i'].sel(ion='DT').to_numpy(), 1.0)
+        h = gacode_io.from_plasma(p, side='input').input
+        assert 'DT' in [f'{name}' for name in h['name'].to_numpy()]
+        np.testing.assert_allclose(h['mass'].sel(name='DT').to_numpy(), 2.4)
 
 
 class TestFixtureSelfConsistency:

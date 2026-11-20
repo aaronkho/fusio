@@ -2677,3 +2677,46 @@ class TestPlasmaTools():
             np.testing.assert_allclose(surf[idx], surfi, rtol=1.0e-12)
 
     # def test_calc_vol_from_contour(r, z, rgeo):
+
+
+class TestIonSpecies():
+
+    @pytest.mark.parametrize('kwargs, expected', [
+        ({'short_name': 'D'}, ('D', 2.0, 1.0)),
+        ({'short_name': 'DT'}, ('DT', 2.5, 1.0)),
+        ({'short_name': 'HD'}, ('HD', 1.5, 1.0)),
+        ({'short_name': 'DT_fast'}, ('DT_fast', 2.5, 1.0)),
+        ({'z': 1, 'a': 2.5}, ('DT', 2.5, 1.0)),
+        ({'z': 1, 'a': 1.5}, ('HD', 1.5, 1.0)),
+        ({'a': 2.5}, ('DT', 2.5, 1.0)),
+        ({'z': 1, 'a': 2.4}, ('DT', 2.5, 1.0)),
+        ({'z': 1, 'a': 2.4, 'user_mass': True}, ('DT', 2.4, 1.0)),
+        ({'z': 1, 'a': 2.5, 'fast': True}, ('DT_fast', 2.5, 1.0)),
+        ({'z': 1, 'a': 2.016}, ('D', 2.0, 1.0)),
+        ({'z': 1, 'a': 1.008}, ('H', 1.0, 1.0)),
+        ({'z': 1, 'a': 3.016}, ('T', 3.0, 1.0)),
+        ({'z': 2, 'a': 3}, ('He', 3.0, 2.0)),
+    ])
+    def test_define_ion_species(self, kwargs, expected):
+        assert pt.define_ion_species(**kwargs) == expected
+
+    def test_no_hydrogen_tritium_mixture(self):
+        assert 'HT' not in pt.mixture_species
+        assert pt.define_ion_species(short_name='HT')[0] != 'HT'
+
+    @pytest.mark.parametrize('name, a, expected', [
+        ('DT', None, {'D': 0.5, 'T': 0.5}),
+        ('DT', 2.4, {'D': 0.6, 'T': 0.4}),
+        ('DT', 2.01, {'D': 1.0, 'T': 0.0}),
+        ('HD', 1.25, {'H': 0.75, 'D': 0.25}),
+        ('DT_fast', None, {'D': 0.5, 'T': 0.5}),
+    ])
+    def test_define_mixture_fractions(self, name, a, expected):
+        fractions = pt.define_mixture_fractions(name, a)
+        assert list(fractions) == list(expected)
+        for key in expected:
+            np.testing.assert_allclose(fractions[key], expected[key])
+
+    @pytest.mark.parametrize('name', ['D', 'He', 'W', None])
+    def test_define_mixture_fractions_of_single_species(self, name):
+        assert pt.define_mixture_fractions(name) is None

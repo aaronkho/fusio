@@ -11,6 +11,7 @@ from packaging.version import Version
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
+from .torax import add_legacy_output_names
 from ..utils.plasma_tools import define_ion_species
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
@@ -110,6 +111,12 @@ class gacode_io(io):
         'current',
         'time',
     ]
+    # Lowest harmonic written for each shape moment prefix in basevars, the first two sine
+    # moments are carried by delta and zeta in the GACODE file format
+    shape_harmonic_minimum: Final[Mapping[str, int]] = {
+        'shape_cos': 0,
+        'shape_sin': 3,
+    }
     units: Final[Mapping[str, str]] = {
         'torfluxa': 'Wb/radian',
         'rcentr': 'm',
@@ -314,7 +321,22 @@ class gacode_io(io):
                 newvars['a'] = (['n'], a.to_numpy())
                 newvars['roa'] = (['n', 'rho'], (data['rmin'] / a).to_numpy())
                 if 'rmaj' in data:
-                    newvars['aspect_local'] = (['n', 'rho'], (data['rmaj'] / data['rmin']).to_numpy())
+                    # rmaj / rmin diverges on the magnetic axis, so the axial value is
+                    # extrapolated from the neighbouring surfaces, as done for the other
+                    # quantities which are singular there
+                    rmin_np = data['rmin'].to_numpy()
+                    aspect_local = np.divide(
+                        data['rmaj'].to_numpy(),
+                        rmin_np,
+                        out=np.zeros_like(rmin_np),
+                        where=(rmin_np > 0.0),
+                    )
+                    aspect_local[..., 0] = np.where(
+                        rmin_np[..., 0] > 0.0,
+                        aspect_local[..., 0],
+                        2.0 * aspect_local[..., 1] - aspect_local[..., 2],
+                    )
+                    newvars['aspect_local'] = (['n', 'rho'], aspect_local)
                     newvars['aspect'] = (['n'], (data['rmaj'] / data['rmin']).isel(rho=-1).to_numpy())
                     newvars['eps_local'] = (['n', 'rho'], (data['rmin'] / data['rmaj']).to_numpy())
                     newvars['eps'] = (['n'], (data['rmin'] / data['rmaj']).isel(rho=-1).to_numpy())
@@ -521,7 +543,10 @@ class gacode_io(io):
                     r_t_i = r_t[:, :, i_rho]
                     l_t_i = l_t[:, :, i_rho]
                     dn_normal = np.abs(dr_surf * z_t_i - dz_surf * r_t_i) / np.where(l_t_i > 1.0e-10, l_t_i, 1.0e-10)
-                    grad_psi_mag[:, :, i_rho] = np.where(dn_normal > 1.0e-10, np.abs(dpsi) / dn_normal, 0.0)
+                    # The divisor is masked inside the branch as well, since np.where
+                    # evaluates both of them and dn_normal vanishes on the axis
+                    normal_ok = dn_normal > 1.0e-10
+                    grad_psi_mag[:, :, i_rho] = np.where(normal_ok, np.abs(dpsi) / np.where(normal_ok, dn_normal, 1.0), 0.0)
                 bp_phys = grad_psi_mag / (2.0 * np.pi * r)
                 bp_phys_line_integral = np.sum(bp_phys[:-1] * l_t[:-1], axis=0) * 2.0 * np.pi / float(n_theta - 1)
                 newvars['Ip_profile_miller'] = (['n', 'rho'], bp_phys_line_integral / mu0)
@@ -1265,6 +1290,20 @@ class gacode_io(io):
             self._write_gacode_file(path, self.output, overwrite=overwrite)
 
 
+    def is_base_var(
+        self,
+        key: str,
+    ) -> bool:
+        # The shape moment entries in basevars are prefixes, only their numbered harmonics are fields
+        if key in self.basevars and key not in self.shape_harmonic_minimum:
+            return True
+        for prefix, minimum in self.shape_harmonic_minimum.items():
+            harmonic = key[len(prefix):]
+            if key.startswith(prefix) and harmonic.isdigit():
+                return int(harmonic) >= minimum
+        return False
+
+
     def _read_gacode_file(
         self,
         path: str | Path
@@ -1422,10 +1461,15 @@ class gacode_io(io):
                     newlines.append(' '.join([f'{val:14.7E}' for val in np.atleast_1d(wdata[title].values)]) + '\n')
                     processed_titles.append(title)
                 lines += newlines
+            # Only the fields defined by the file format are written, derived quantities are
+            # retained in the class data and can be saved in full through dump()
             data_fields = [k for k in wdata.coords.keys()] + [k for k in wdata.data_vars.keys()]
+            skipped_titles = [f'{k}' for k in data_fields if k not in processed_titles and not self.is_base_var(f'{k}')]
+            if skipped_titles:
+                logger.debug(f'Omitting {len(skipped_titles)} fields not defined by the {self.format} file format from {opath.name}')
             for title in data_fields:
                 newlines = []
-                if title not in processed_titles:
+                if title not in processed_titles and title not in skipped_titles:
                     newtitle = title
                     if title in self.units:
                         newtitle += f' | {self.units[title]}'
@@ -1807,7 +1851,7 @@ class gacode_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input if side == 'input' else obj.output
+            data = obj.input if side == 'input' else add_legacy_output_names(obj.output)
             if 'rho_norm' in data.coords:
                 time = data['time'].to_numpy()
                 time_window = [float(time[-1])]
@@ -2421,6 +2465,7 @@ class gacode_io(io):
         obj: io,
         side: str = 'output',
         window: Sequence[int | float] | None = None,
+        split_main_ion: bool = True,
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
@@ -2486,7 +2531,7 @@ class gacode_io(io):
                 # number of impurities, all of which share the single ion temperature profile
                 # Resolved by the source class, which owns the FASTRAN-specific field layout;
                 # duck-typed on obj as the input and output properties above already are
-                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data)  # type: ignore[attr-defined]
+                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data, split_main_ion=split_main_ion)  # type: ignore[attr-defined]
                 if len(names) > 0:
                     coords['name'] = np.array(names)
                     data_vars['nion'] = (['n'], np.atleast_1d([len(names)] * len(coords['n'])).astype(int))

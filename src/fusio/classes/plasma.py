@@ -12,6 +12,7 @@ from packaging.version import Version
 import datetime
 from scipy.integrate import trapezoid  # type: ignore[import-untyped]
 from .io import io
+from .torax import add_legacy_output_names
 from ..utils.plasma_tools import define_ion_species
 from ..utils.math_tools import (
     vectorized_numpy_derivative,
@@ -224,6 +225,7 @@ class plasma_io(io):
         if isinstance(path, (str, Path)):
             load_path = Path(path)
             if load_path.exists():
+                # NOTE: The CLI format detection opens this file repeatedly beforehand, see the note in torax_io._read_torax_file
                 data = xr.open_dataset(path, engine='netcdf4')
         return data
 
@@ -703,12 +705,16 @@ class plasma_io(io):
             mxh_z0 = data['z_geometric'].to_numpy()
             mxh_dz0 = vectorized_numpy_derivative(data['r_minor'].to_numpy(), mxh_z0)
             mxh_r = (np.nanmax(contour_r, axis=-1) - np.nanmin(contour_r, axis=-1)) / 2.0
-            mxh_kappa = (np.nanmax(contour_z, axis=-1) - np.nanmin(contour_z, axis=-1)) / (2.0 * mxh_r)
+            # The flux surface collapses onto the magnetic axis, where mxh_r vanishes, so the
+            # divisions by it are masked and the axial values which depend on them are
+            # extrapolated from the neighbouring surfaces further below
+            mxh_r_safe = np.where(mxh_r > 0.0, mxh_r, 1.0)
+            mxh_kappa = (np.nanmax(contour_z, axis=-1) - np.nanmin(contour_z, axis=-1)) / (2.0 * mxh_r_safe)
             mxh_kappa[..., 0] = 2.0 * mxh_kappa[..., 1] - mxh_kappa[..., 2]
             mxh_s_kappa = data['r_minor_norm'].to_numpy() / mxh_kappa * vectorized_numpy_derivative(data['r_minor_norm'].to_numpy(), mxh_kappa)
-            r_norm = (contour_r - np.expand_dims(mxh_r0, axis=-1)) / np.expand_dims(mxh_r, axis=-1)
+            r_norm = (contour_r - np.expand_dims(mxh_r0, axis=-1)) / np.expand_dims(mxh_r_safe, axis=-1)
             r_norm = np.where(r_norm > 1.0, 1.0, np.where(r_norm < -1.0, -1.0, r_norm))
-            z_norm = (contour_z - np.expand_dims(mxh_z0, axis=-1)) / np.expand_dims(mxh_kappa * mxh_r, axis=-1)
+            z_norm = (contour_z - np.expand_dims(mxh_z0, axis=-1)) / np.expand_dims(mxh_kappa * mxh_r_safe, axis=-1)
             z_norm = np.where(z_norm > 1.0, 1.0, np.where(z_norm < -1.0, -1.0, z_norm))
 
             def _arccos2pi(x):
@@ -2270,7 +2276,9 @@ class plasma_io(io):
                     sin_coeffs = [np.zeros_like(kappa)]
                     cos_coeffs = []
                     if 'delta' in data:
-                        sin_coeffs.append(np.sin(data['delta'].to_numpy()))
+                        # The first sine coefficient is arcsin of the triangularity, inverting the
+                        # convention used by _compute_derived_geometry, as in from_fastran
+                        sin_coeffs.append(np.arcsin(np.clip(data['delta'].to_numpy(), -1.0, 1.0)))
                     elif 'shape_sin1' in data:
                         sin_coeffs.append(data['shape_sin1'].to_numpy())
                     else:
@@ -2405,7 +2413,7 @@ class plasma_io(io):
     ) -> Self:
         newobj = cls()
         if isinstance(obj, io):
-            data = obj.input if side == 'input' else obj.output
+            data = obj.input if side == 'input' else add_legacy_output_names(obj.output)
             coords: MutableMapping[str, Any] = {}
             data_vars: MutableMapping[str, Any] = {}
             attrs: MutableMapping[str, Any] = {}
@@ -2508,7 +2516,16 @@ class plasma_io(io):
                         z_i = onrad('Z_i')
                         for i in range(len(main_ion_names)):
                             charge_i[:, :, i] = z_i
-                    if impurity_names and 'Z_impurity' in data:
+                    if impurity_names and 'Z_impurity_species' in data:
+                        # Charge per species, matching the per species densities above, since
+                        # Z_impurity is that of the single bundled impurity
+                        for j, name in enumerate(impurity_names):
+                            da = data['Z_impurity_species'].sel(impurity_symbol=name)
+                            rho_dim = next(d for d in da.dims if d != 'time')
+                            vals = (da.to_numpy() if rho_dim == 'rho_norm'
+                                   else da.interp({rho_dim: coords['radius']}, kwargs=ikwargs).to_numpy())
+                            charge_i[:, :, len(main_ion_names) + j] = vals
+                    elif impurity_names and 'Z_impurity' in data:
                         z_imp = onrad('Z_impurity')
                         for j in range(len(impurity_names)):
                             charge_i[:, :, len(main_ion_names) + j] = z_imp
@@ -2631,6 +2648,7 @@ class plasma_io(io):
         obj: io,
         side: str = 'output',
         window: Sequence[int | float] | None = None,
+        split_main_ion: bool = True,
         **kwargs: Any,
     ) -> Self:
         newobj = cls()
@@ -2698,7 +2716,7 @@ class plasma_io(io):
                 # number of impurities, all of which share the single ion temperature profile
                 # Resolved by the source class, which owns the FASTRAN-specific field layout;
                 # duck-typed on obj as the input and output properties above already are
-                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data)  # type: ignore[attr-defined]
+                names, types, masses, charges, densities, temperatures = obj.resolve_ion_species(data, split_main_ion=split_main_ion)  # type: ignore[attr-defined]
                 ni = len(names)
                 if ni > 0:
                     coords['ion'] = np.array(names)

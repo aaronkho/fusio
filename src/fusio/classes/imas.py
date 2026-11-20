@@ -18,6 +18,7 @@ from imas.ids_structure import IDSStructure  # type: ignore[import-untyped]
 from imas.ids_struct_array import IDSStructArray  # type: ignore[import-untyped]
 from .io import io
 from ..utils.eqdsk_tools import (
+    calculate_mxh_coefficients_from_contours,
     calculate_mxh_coefficients_from_eqdsk_dict,
     convert_cocos,
     define_cocos_converter,
@@ -432,6 +433,7 @@ class imas_io(io):
             ipath = Path(path)  # TODO: Add consideration for db paths
             if ipath.is_file():
                 idsmap = {}
+                # NOTE: The CLI format detection opens this file repeatedly beforehand, see the note in torax_io._read_torax_file
                 root = xr.load_dataset(ipath)
                 dd_version = root.attrs.get('data_dictionary_version', None)
                 if isinstance(dd_version, str) and 'data_dictionary_version' not in attrs:
@@ -996,6 +998,40 @@ class imas_io(io):
         return xr.Dataset(coords=coords, data_vars=data_vars, attrs=attrs)
 
 
+    def _compute_flux_surface_shape(
+        self,
+        eqd: xr.Dataset,
+        eq_index: int,
+        psi_f: NDArray,
+        rho_f: NDArray,
+        side: str = 'output',
+    ) -> MutableMapping[str, Any]:
+        """Compute the MXH shape parameters of the flux surfaces on the given grid.
+
+        The surfaces are traced on the rectangular poloidal flux map when the equilibrium holds
+        one, as written when the source carries a g-EQDSK equilibrium. Otherwise the MXH
+        coefficients are fitted directly to the flux-surface contours stored on the inverse
+        grid, which carry the shape of sources such as GACODE without any g-EQDSK.
+        """
+        tag = 'equilibrium.time_slice.profiles_2d.grid_type.name'
+        names = [f'{name}' for name in np.atleast_1d(eqd[tag].to_numpy())] if tag in eqd else []
+        if 'rectangular' in names:
+            eqdsk = self.to_eqdsk(time_index=eq_index, side=side)
+            return calculate_mxh_coefficients_from_eqdsk_dict(copy.deepcopy(eqdsk), psi_f.copy())
+        if 'inverse_rhotornorm_polar' in names:
+            p2d = eqd.isel({'equilibrium.time_slice.profiles_2d:i': names.index('inverse_rhotornorm_polar')})
+            return calculate_mxh_coefficients_from_contours(
+                p2d['equilibrium.time_slice.profiles_2d.grid.dim1'].to_numpy(),
+                p2d['equilibrium.time_slice.profiles_2d.r'].to_numpy(),
+                p2d['equilibrium.time_slice.profiles_2d.z'].to_numpy(),
+                rho_f,
+            )
+        raise ValueError(
+            'The equilibrium holds neither a rectangular poloidal flux map nor flux-surface contours, '
+            'so the flux-surface geometry cannot be computed. Provide a g-EQDSK file to add one.'
+        )
+
+
     def _compute_cgyro_parameters_slice(
         self,
         data: xr.Dataset,
@@ -1025,8 +1061,7 @@ class imas_io(io):
         # --- Flux-surface geometry from MXH contour tracing on the fine grid ---
         rho_f = np.linspace(0.0, 1.0, n_fine)
         psi_f = psi_interp(rho_f)
-        eqdsk = self.to_eqdsk(time_index=eq_index, side=side)
-        mxh = calculate_mxh_coefficients_from_eqdsk_dict(copy.deepcopy(eqdsk), psi_f.copy())
+        mxh = self._compute_flux_surface_shape(eqd, eq_index, psi_f, rho_f, side=side)
         rmin = np.asarray(mxh['rmin'], dtype=float)
         rmaj = np.asarray(mxh['rmaj'], dtype=float)
         zmag = np.asarray(mxh['zmag'], dtype=float)

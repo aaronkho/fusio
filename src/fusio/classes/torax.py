@@ -13,12 +13,69 @@ from .io import io
 from ..utils.plasma_tools import (
     constants_si,
     define_ion_species,
+    define_mixture_fractions,
+    is_fast_species,
 )
 from ..utils.eqdsk_tools import (
     define_cocos_converter,
 )
 
 logger = logging.getLogger('fusio')
+
+
+# Output variables renamed in TORAX v2, as v1 name -> v2 name, following the TORAX migration
+# guide. The bundled impurity of v2 is the single effective species which v1 reported as
+# n_impurity and Z_impurity, preserving both quasineutrality and Z_eff, while the v2
+# n_impurity_total and Z_impurity_average are the plain sum and density weighted average
+TORAX_V2_OUTPUT_RENAMES: Final[Mapping[str, str]] = {
+    'Ip': 'I_p',
+    'Ip_profile': 'I_p_profile',
+    'Ip_profile_from_geo': 'I_p_profile_from_geo',
+    'psi_from_Ip': 'psi_from_I_p',
+    'fgw_n_e_volume_avg': 'f_GW_n_e_volume_avg',
+    'fgw_n_e_line_avg': 'f_GW_n_e_line_avg',
+    'I_aux_generic': 'I_generic_current',
+    'P_aux_generic_i': 'P_generic_heat_i',
+    'P_aux_generic_e': 'P_generic_heat_e',
+    'P_aux_generic_total': 'P_generic_heat_total',
+    'P_cyclotron_e': 'P_cyclotron_radiation_e',
+    'P_radiation_e': 'P_impurity_radiation_e',
+    'P_LH': 'P_LH_martin',
+    'P_LH_high_density': 'P_LH_martin_high_density',
+    'P_LH_low_density': 'P_LH_martin_low_density',
+    'P_LH_min': 'P_LH_martin_min',
+    'j_total': 'j_toroidal_total',
+    'j_ohmic': 'j_toroidal_ohmic',
+    'j_bootstrap': 'j_toroidal_bootstrap',
+    'j_external': 'j_toroidal_external',
+    'j_ecrh': 'j_toroidal_ecrh',
+    'j_generic_current': 'j_toroidal_generic_current',
+    'j_non_inductive': 'j_toroidal_non_inductive',
+    'ei_exchange': 'p_ei_exchange_i',
+    'n_impurity': 'n_impurity_bundled',
+    'Z_impurity': 'Z_impurity_bundled',
+}
+
+
+def add_legacy_output_names(
+    data: xr.Dataset,
+) -> xr.Dataset:
+    """Fill in the TORAX v1 output names from their v2 equivalents, where only the latter exist.
+
+    The output consumers are written against the v1 names, so this lets them read either
+    version. The aliases share the underlying arrays and the given dataset is not modified.
+    The total impurity density, which v2 uses in the thermal pressure, falls back onto the
+    v1 effective impurity density, which v1 used in its place.
+    """
+    aliases: MutableMapping[str, Any] = {}
+    for v1name, v2name in TORAX_V2_OUTPUT_RENAMES.items():
+        if v1name not in data and v2name in data:
+            aliases[v1name] = data[v2name]
+    if 'n_impurity_total' not in data and 'n_impurity' in data:
+        aliases['n_impurity_total'] = data['n_impurity']
+    elif 'n_impurity_total' not in data and 'n_impurity' in aliases:
+        aliases['n_impurity_total'] = aliases['n_impurity']
+    return data.assign(aliases) if aliases else data
 
 
 class torax_io(io):
@@ -546,6 +603,13 @@ class torax_io(io):
         if isinstance(path, (str, Path)):
             ipath = Path(path)
             if ipath.exists():
+                # NOTE: Read through fusio_convert or the run generators, a netcdf source is
+                # opened up to four times: twice during format detection, by the dump check in
+                # convert.read_dumped_format and the variable scoring in
+                # convert.detect_netcdf_format, again by the dump check in convert.read_source,
+                # and finally here. The opens are lazy so only the metadata is parsed each time,
+                # but it adds up for large files with many groups or long batches. Folding the
+                # detection into one open and passing its result on to read_source would halve it.
                 dt = xr.open_datatree(ipath)
                 dslist = []
                 auxlist = []
@@ -2419,6 +2483,16 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def _check_parameter_side(
+        self,
+        side: str,
+    ) -> None:
+        # The input side holds a run configuration, which is laid out differently from the
+        # simulation output and cannot simply be read in its place
+        if side != 'output':
+            raise NotImplementedError(f'{self.format} computes standalone code parameters only from simulation output, not from its {side} side.')
+
+
     def to_qualikiz_parameters(
         self,
         time: float | Sequence[float] | NDArray | None = None,
@@ -2426,10 +2500,12 @@ class torax_io(io):
         full_impurities: bool = False,
         lump_impurities: bool = False,
         use_cell_grid: bool = False,
+        side: str = 'output',
     ) -> xr.Dataset:
+        self._check_parameter_side(side)
         #TODO: Use plasma_tools utility functions
         c = constants_si()
-        data = self.output
+        data = add_legacy_output_names(self.output)
         coords: MutableMapping[str, Any] = {}
         data_vars: MutableMapping[str, Any] = {}
         attrs: MutableMapping[str, Any] = {}
@@ -2494,7 +2570,7 @@ class torax_io(io):
                         sa = 3.0
                     data_vars[f'Ai{nion:d}'] = (['time', 'rho'], np.repeat(np.repeat(np.atleast_2d([sa]), len(coords['rho']), axis=1), len(coords['time']), axis=0))
                     if 'Z_impurity_species' in data:
-                        data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity_species'].sel(impurity_symbol=symbol, drop=True).to_numpy())
+                        data_vars[f'Zi{nion:d}'] = (['time', 'rho'], data['Z_impurity_species'].sel(impurity_symbol=symbol, drop=True).interp({'rho_cell_norm': coords['rho']}, kwargs={'fill_value': 'extrapolate'}).rename({'rho_cell_norm': 'rho_norm'}).to_numpy())
                     if 'n_impurity_species' in data:
                         denom = data['n_e'].interp({'rho_norm': coords['rho']})
                         norm = -1.0 * data['R_major']
@@ -2572,7 +2648,7 @@ class torax_io(io):
             if 'q' in data:
                 drdrho = ((data['R_out'] - data['R_in']) / 2.0).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 q = data['q'].interp({'rho_face_norm': coords['rho']}).rename({'rho_face_norm': 'rho_norm'})
-                pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity_total'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prho = (q ** 2) * (-2.0 * c['mu'] * data['R_major'] * pprime / (data['B_0'] ** 2) / drdrho)
                 data_vars['alpha'] = (['time', 'rho'], prho.fillna(0.0).to_numpy())
             # Use internal nuei calc
@@ -2589,10 +2665,12 @@ class torax_io(io):
         full_impurities: bool = False,
         lump_impurities: bool = False,
         use_cell_grid: bool = False,
+        side: str = 'output',
     ) -> xr.Dataset:
+        self._check_parameter_side(side)
         #TODO: Use plasma_tools utility functions
         c = constants_si()
-        data = self.output
+        data = add_legacy_output_names(self.output)
         coords: MutableMapping[str, Any] = {}
         data_vars: MutableMapping[str, Any] = {}
         attrs: MutableMapping[str, Any] = {}
@@ -2755,7 +2833,7 @@ class torax_io(io):
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
                 if np.isclose(bunit['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
                     bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
-                pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity_total'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prho = q * (2.0 * c['mu'] / (8.0 * np.pi)) * (data['a_minor'] / roa) * pprime / (bunit ** 2) / drdrho
                 if np.isclose(prho['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
                     prho.loc[dict(rho_norm=0)] = 0.0
@@ -2807,10 +2885,12 @@ class torax_io(io):
         full_impurities: bool = False,
         lump_impurities: bool = False,
         use_cell_grid: bool = False,
+        side: str = 'output',
     ) -> xr.Dataset:
+        self._check_parameter_side(side)
         #TODO: Use plasma_tools utility functions
         c = constants_si()
-        data = self.output
+        data = add_legacy_output_names(self.output)
         coords: MutableMapping[str, Any] = {}
         data_vars: MutableMapping[str, Any] = {}
         attrs: MutableMapping[str, Any] = {}
@@ -2984,7 +3064,7 @@ class torax_io(io):
                 bunit = (psi.differentiate('rho_norm') * q) / (np.pi * (data['R_out'] - data['R_in'])).interp({'rho_norm': coords['rho']}) / drdrho
                 if np.isclose(bunit['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
                     bunit.loc[dict(rho_norm=0)] = 2.0 * bunit.isel(rho_norm=1) - bunit.isel(rho_norm=2)
-                pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
+                pprime = (c['e'] * 1.0e3 * (data['n_e'] * data['T_e'] + data['n_i'] * data['T_i'] + data['n_impurity_total'] * data['T_i'])).interp({'rho_norm': coords['rho']}).differentiate('rho_norm')
                 prho = q * (2.0 * c['mu'] / (8.0 * np.pi)) * (data['a_minor'] / roa) * pprime / (bunit ** 2) / drdrho
                 if np.isclose(prho['rho_norm'].isel(rho_norm=0).to_numpy(), 0.0):
                     prho.loc[dict(rho_norm=0)] = 0.0
@@ -3062,7 +3142,7 @@ class torax_io(io):
                 'nu_Te': ('T_e', 0, 'T_e_volume_avg', ''),
                 'nu_Ti': ('T_i', 0, 'T_i_volume_avg', ''),
             }
-            data = self.output.isel(time=-1)
+            data = add_legacy_output_names(self.output).isel(time=-1)
             for key, sspecs in fields.items():
                 var, scale, units = sspecs
                 val = data[var] / scale
@@ -3476,12 +3556,20 @@ class torax_io(io):
                     nfilt = ((data['type'] == '[therm]') & np.isclose(data['z'], 1.0)).any('n')
                     if np.any(nfilt):
                         namelist = data['name'].to_numpy()[nfilt].tolist()
-                        print(namelist)
                         nfuelsum = data['ni'].sel(name=namelist).sum('name')
+                        # Lumped hydrogen isotope mixtures are expanded into their isotopes, since TORAX
+                        # only takes those as main ions, with the split given by the mixture mass
+                        fuel: MutableMapping[str, Any] = {}
                         for ii in range(len(namelist)):
-                            species.append(namelist[ii])
-                            density.append(np.expand_dims((data['ni'].sel(name=namelist[ii]) / nfuelsum).mean('rho').to_numpy().flatten(), axis=0))
-                        coords['main_ion'] = np.array(species).flatten()
+                            nfrac = (data['ni'].sel(name=namelist[ii]) / nfuelsum).mean('rho')
+                            smass = data['mass'].sel(name=namelist[ii]).to_numpy() if 'mass' in data else None
+                            fractions = define_mixture_fractions(namelist[ii], smass)
+                            for iname, ifrac in (fractions if fractions is not None else {namelist[ii]: 1.0}).items():
+                                weight = xr.DataArray(np.broadcast_to(ifrac, (len(data['n']), )), dims=['n'])
+                                fuel[iname] = fuel[iname] + nfrac * weight if iname in fuel else nfrac * weight
+                        for iname, nfrac in fuel.items():
+                            species.append(iname)
+                            density.append(np.expand_dims(nfrac.to_numpy().flatten(), axis=0))
                     else:
                         species = ['D']
                         density = [np.atleast_2d([1.0])]
@@ -3494,9 +3582,9 @@ class torax_io(io):
                         namelist = data['name'].to_numpy().tolist()
                         implist = []
                         for ii in range(len(namelist)):
-                            if namelist[ii] not in ['H', 'D', 'T']:
+                            if namelist[ii] not in ['H', 'D', 'T'] and define_mixture_fractions(namelist[ii]) is None:
                                 implist.append(ii)
-                        impcomp = {}
+                        impcomp: MutableMapping[str, Any] = {}
                         zeff = xr.zeros_like(data['ne'])
                         nsum = xr.zeros_like(data['ne'])
                         for ii in range(len(namelist)):
@@ -3523,7 +3611,8 @@ class torax_io(io):
                                         sname = 'He4'
                                 if ii in implist:
                                     # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
-                                    impcomp[sname] = copy.deepcopy(nz)
+                                    # Species collapsed onto the same radiation species are summed
+                                    impcomp[sname] = impcomp[sname] + nz if sname in impcomp else copy.deepcopy(nz)
                                 nsum += nz
                             zeff += (data['ni'] * data['z'] ** 2.0 / data['ne']).isel(name=ii)
                         impcoord = []
@@ -3719,18 +3808,48 @@ class torax_io(io):
                 cp_coords['rho'] = data.isel({time_cp: 0}).get(rho_cp, xr.DataArray()).to_numpy().flatten()
                 cp_attrs['numerics.t_initial'] = cp_coords['time'][0]
                 omas_tag = 'core_profiles.profiles_1d.ion.density'
+                # OMAS carries no species type, so fast ions are recognized by their name tag,
+                # or by holding density without any thermal density, as written by imas_io.
+                # They count towards Z_eff but are neither main ions nor impurities in TORAX
+                fastlist = []
+                if omas_tag in data and ion_cp in data:
+                    namelist = data.isel({time_cp: 0}).get(ion_cp, xr.DataArray()).to_numpy().tolist()
+                    thermal_tag = 'core_profiles.profiles_1d.ion.density_thermal'
+                    for ii in range(len(namelist)):
+                        if is_fast_species(namelist[ii]):
+                            fastlist.append(ii)
+                        elif thermal_tag in data:
+                            nth = data.isel({ion_cp_i: ii})[thermal_tag].to_numpy()
+                            ntot = data.isel({ion_cp_i: ii})[omas_tag].to_numpy()
+                            if np.all(np.isclose(nth, 0.0)) and np.any(ntot > 0.0):
+                                fastlist.append(ii)
                 if omas_tag in data and ion_cp in data:
                     namelist = data.isel({time_cp: 0}).get(ion_cp, xr.DataArray()).to_numpy().tolist()
                     mainlist = []
                     for ii in range(len(namelist)):
-                        if namelist[ii] in ['H', 'D', 'T']:
+                        if ii in fastlist:
+                            continue
+                        if namelist[ii] in ['H', 'D', 'T'] or define_mixture_fractions(namelist[ii]) is not None:
                             mainlist.append(ii)
                     maincoord = []
                     mainfracs = []
                     total_main = data.isel({ion_cp_i: mainlist})[omas_tag].sum(ion_cp_i)
+                    # Lumped hydrogen isotope mixtures are expanded into their isotopes, since TORAX
+                    # only takes those as main ions, with the split given by the mixture mass
+                    mass_tag = 'core_profiles.profiles_1d.ion.element.a'
+                    fuel: MutableMapping[str, Any] = {}
                     for ii in mainlist:
-                        maincoord.append(namelist[ii])
-                        mainfracs.append(np.expand_dims(np.atleast_1d((data.isel({ion_cp_i: ii})[omas_tag] / total_main).mean(rho_cp_i).to_numpy()), axis=0))
+                        nfrac = np.atleast_1d((data.isel({ion_cp_i: ii})[omas_tag] / total_main).mean(rho_cp_i).to_numpy())
+                        smass = None
+                        if mass_tag in data:
+                            sdata = data.isel({ion_cp_i: ii})[mass_tag]
+                            smass = sdata.isel({dim: 0 for dim in sdata.dims if dim != time_cp}).to_numpy()
+                        fractions = define_mixture_fractions(namelist[ii], smass)
+                        for iname, ifrac in (fractions if fractions is not None else {namelist[ii]: 1.0}).items():
+                            fuel[iname] = fuel[iname] + nfrac * ifrac if iname in fuel else nfrac * ifrac
+                    for iname, nfrac in fuel.items():
+                        maincoord.append(iname)
+                        mainfracs.append(np.expand_dims(nfrac, axis=0))
                     if len(mainlist) == 0:
                         maincoord = ['D']
                         mainfracs = [np.atleast_2d([1.0])]
@@ -3742,10 +3861,13 @@ class torax_io(io):
                     #zeff = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     #nqn = xr.zeros_like(data['core_profiles.profiles_1d.electrons.density'])
                     for ii in range(len(namelist)):
-                        if namelist[ii] not in ['H', 'D', 'T']:
+                        if ii in fastlist:
+                            continue
+                        if namelist[ii] not in ['H', 'D', 'T'] and define_mixture_fractions(namelist[ii]) is None:
                             implist.append(ii)
                     nzt = np.zeros_like(data[omas_tag].to_numpy()) # time, ion, rho
                     szt = np.zeros_like(data[omas_tag].to_numpy())
+                    snames = []
                     for ii in range(len(namelist)):
                         sname = namelist[ii]
                         sn, sa, sz = define_ion_species(short_name=sname)
@@ -3780,16 +3902,19 @@ class torax_io(io):
                                 szi = float(np.mean(np.where(szi > 74.0, 74.0, szi)))
                         nzt[:, ii, :] = nzi
                         szt[:, ii, :] = szi
+                        snames.append(sname)
                     nzz = xr.DataArray(data=nzt, coords=data[omas_tag].coords)
                     szz = xr.DataArray(data=szt, coords=data[omas_tag].coords)
                     nqn = (nzz * szz).sum(ion_cp_i) / data['core_profiles.profiles_1d.electrons.density']
                     nzz = nzz / nqn
                     zeff = (nzz * (szz ** 2.0)).sum(ion_cp_i) / data['core_profiles.profiles_1d.electrons.density']
-                    impcomp = {}
+                    impcomp: MutableMapping[str, Any] = {}
                     for ii in range(len(namelist)):
                         if ii in implist:
                             # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
-                            impcomp[sname] = copy.deepcopy(nzz.isel({ion_cp_i: ii}))
+                            # Species collapsed onto the same radiation species are summed
+                            nimp = copy.deepcopy(nzz.isel({ion_cp_i: ii}))
+                            impcomp[snames[ii]] = impcomp[snames[ii]] + nimp if snames[ii] in impcomp else nimp
                     nsum = xr.zeros_like(nqn)
                     for key in impcomp:
                         #impcomp[key] = (impcomp[key] / nsum).mean(rho_cp_i)

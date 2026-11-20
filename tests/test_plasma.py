@@ -489,3 +489,13 @@ class TestFieldComponents:
         estimate = mu0 * np.abs(d['current'].to_numpy()) / (2.0 * np.pi * d['r_minor_lcfs'].to_numpy())
         bp_out = np.abs(d['field_outer'].sel(direction='poloidal').isel(radius=-1).to_numpy())
         np.testing.assert_allclose(bp_out, estimate, rtol=0.5)
+
+
+def test_gacode_shape_survives_a_round_trip_through_plasma(gacode_file_path):
+    g = gacode_io.from_file(input=gacode_file_path)
+    p = plasma_io.from_gacode(g, side='input')
+    p.compute_derived_quantities(side='input')
+    g2 = gacode_io.from_plasma(p, side='input')
+    # The innermost surfaces are extrapolated towards the axis by the derived geometry
+    for var in ['kappa', 'delta', 'zeta']:
+        np.testing.assert_allclose(g2.input[var].to_numpy()[:, 3:], g.input[var].to_numpy()[:, 3:], atol=5.0e-3, err_msg=var)

@@ -24,6 +24,25 @@ Format conversion is done via:
 | `astra_io` | `classes/astra.py` | ASTRA transport code output | incomplete
 | `jintrac_io` | `classes/jintrac.py` | JINTRAC (JET integrated modelling) binary output | incomplete
 
+## Direct Conversions
+
+A converter is a `from_<source>` classmethod on the target class. Implemented direct links (target ← sources):
+
+| Target | Sources |
+|---|---|
+| `plasma` | `gacode`, `imas`, `torax`, `fastran` |
+| `gacode` | `plasma`, `torax`, `imas`, `fastran`, `astra` (`from_astra` is partial: `te`/`ti` only, last time slice) |
+| `imas` | `plasma`, `gacode`, `omas` |
+| `torax` | `gacode`, `omas` (produces a run configuration, not output profiles) |
+| `omas` | — |
+| `fastran`, `transp` | — (`from_plasma` exists but raises `NotImplementedError`) |
+| `astra`, `jintrac` | — |
+
+- `gacode`, `imas` and `omas` also have same-format `from_<self>` methods, which copy the data across sides rather than convert it.
+- `imas_io.to_eqdsk()` and `omas_io.to_eqdsk()` export a g-EQDSK, but EQDSK is not a format class.
+- Run generator sources (`to_<code>_parameters()`): `torax` → TGLF, QuaLiKiz, CGYRO; `imas` → CGYRO.
+- Any other pair needs a multi-step route, e.g. `torax → plasma → imas` or `omas → imas → plasma`. `fusio_convert --list` prints the live table.
+
 ## Central Hub: `plasma_io`
 
 `plasma_io` is the internal intermediate format. Data is stored as xarray NetCDF files with radial profiles indexed by `(time, radius, ion, source, direction)`.
@@ -48,12 +67,36 @@ Format conversion is done via:
 | `utils/plasma_tools.py` | Ion species definitions |
 | `utils/field_definitions.py` | Physical field metadata |
 
+## Conventions
+
+- `torax_io` reads both TORAX v1 and v2 output files. Code consuming TORAX output uses the v1
+  variable names, with v2 files mapped onto them by `add_legacy_output_names()` in `classes/torax.py`.
+- Fast (non-thermal) ion species carry the `_fast` name suffix (`fast_species_suffix` in
+  `utils/plasma_tools.py`), keeping them distinct from the thermal species of the same element.
+
 ## CLI Scripts
 
 Registered as package entry points:
 
-- `generate_tglf_runs` (`scripts/standalone_tglf.py`) — converts TORAX output → TGLF standalone input files
-- `generate_qualikiz_runs` (`scripts/standalone_qualikiz.py`) — converts TORAX output → QuaLiKiz input files
+- `fusio_convert` (`scripts/convert.py`) — generic class-to-class format conversion
+- `generate_tglf_runs` (`scripts/standalone_tglf.py`) — TGLF standalone input files
+- `generate_qualikiz_runs` (`scripts/standalone_qualikiz.py`) — QuaLiKiz input files
+- `generate_cgyro_runs` (`scripts/standalone_cgyro.py`) — CGYRO input files
+
+Shared plumbing for the three run generators lives in `scripts/standalone.py`.
+
+- The CLIs discover what is supported by introspecting the format classes: `from_<source>`
+  methods define the conversions, `to_<code>_parameters()` methods define the run generator
+  sources. New methods become available on the command line without CLI changes. `--list`
+  prints what is supported.
+- The source format is detected from the file name and contents unless given with `-f`.
+- Conversions use direct `from_<source>` methods unless intermediates are requested with
+  `--via <fmt> ...`, or `--via auto` for the shortest route.
+- An optional g-EQDSK (`-e`) is folded into the data at the `plasma` hub when the route
+  passes through it. Without one, flux-surface geometry comes from the shape carried by the
+  source data.
+- TORAX run generators read TORAX *output* files directly; a TORAX object produced by
+  conversion holds a configuration, not output profiles.
 
 ## Typical Workflow
 

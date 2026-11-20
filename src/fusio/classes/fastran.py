@@ -8,7 +8,7 @@ import numpy as np
 import xarray as xr
 
 from .io import io
-from ..utils.plasma_tools import define_ion_species
+from ..utils.plasma_tools import define_ion_species, define_mixture_fractions, mixture_species, snap_mass_number
 
 logger = logging.getLogger('fusio')
 
@@ -230,6 +230,7 @@ class fastran_io(io):
         if isinstance(path, (str, Path)):
             load_path = Path(path)
             if load_path.exists():
+                # NOTE: The CLI format detection opens this file repeatedly beforehand, see the note in torax_io._read_torax_file
                 temp_data = xr.open_dataset(load_path, engine='netcdf4', decode_times=False)
                 ntime = int(temp_data.sizes.get('time', 0))
                 coords: MutableMapping[str, Any] = {}
@@ -308,20 +309,55 @@ class fastran_io(io):
             logger.error(f'Invalid path argument given to {self.format} write function! Aborting write...')
 
 
+    def resolve_main_ion_fractions(
+        self,
+        amain: NDArray,
+        zmain: NDArray,
+    ) -> Mapping[str, NDArray] | None:
+        """Resolve the isotope fractions of a lumped hydrogenic main ion, or None for a single isotope.
+
+        FASTRAN carries the hydrogenic fuel as one main ion whose mass number is the density
+        weighted average over its isotopes, which define_ion_species identifies as an HD or DT
+        mixture when it lies between two isotopes, after snapping mass numbers within
+        mass_number_tolerance of an integer onto it. The fractions then follow from the mass
+        number in each time slice, see define_mixture_fractions. Other non-integer mass
+        numbers have no unique decomposition and are left lumped.
+        """
+        mname, _, _ = define_ion_species(z=float(zmain[-1]), a=float(amain[-1]))
+        fractions = define_mixture_fractions(mname, amain)
+        asnapped = snap_mass_number(amain)
+        if fractions is None:
+            if np.any(asnapped != np.rint(asnapped)):
+                logger.warning(f'{self.format} main ion mass number of {float(amain[-1]):.4f} does not describe a hydrogen isotope mixture, keeping it as a single lumped species...')
+            return None
+        _, _, (light, heavy) = mixture_species[mname]
+        _, la, _ = define_ion_species(short_name=light)
+        _, ha, _ = define_ion_species(short_name=heavy)
+        if not (np.all(np.isclose(zmain, 1.0)) and np.all((asnapped >= la) & (asnapped <= ha))):
+            logger.warning(f'{self.format} main ion mass number varies outside the {mname} mixture range over the time window, keeping it as a single lumped species...')
+            return None
+        return fractions
+
+
     def resolve_ion_species(
         self,
         data: xr.Dataset,
+        split_main_ion: bool = True,
     ) -> tuple[list[str], list[str], list[NDArray], list[NDArray], list[NDArray], list[NDArray]]:
         """Resolve the ion species carried by a FASTRAN output dataset.
 
         FASTRAN carries a lumped main ion, a thermal helium ash, an arbitrary number of
         impurities indexed on the imp dimension, and fast populations from the neutral beam
-        and from fusion reactions. Species resolving to the same element symbol are merged,
-        which is exactly charge-conserving since a shared symbol implies a shared charge, so
-        quasi-neutrality and the effective charge are both preserved while only the mass of
-        the merged species becomes approximate. Fast species take a _fast suffix to keep them
-        distinct from the thermal species of the same element, applied through
-        define_ion_species' fast keyword and only where a name would otherwise be duplicated.
+        and from fusion reactions. A main ion lumping two hydrogen isotopes together is split
+        into them unless split_main_ion is False, see resolve_main_ion_fractions, which keeps
+        the average mass, quasi-neutrality and the effective charge exactly. A main ion which
+        is kept lumped takes the mixture name from define_ion_species, HD or DT. Species
+        resolving to the same element symbol are merged, which is exactly charge-conserving
+        since a shared symbol implies a shared charge, so quasi-neutrality and the effective
+        charge are both preserved while only the mass of the merged species becomes
+        approximate. Fast species take a _fast suffix to keep them distinct from the thermal
+        species of the same element, applied through define_ion_species' fast keyword and
+        only where a name would otherwise be duplicated.
 
         Expects a dataset already reduced to the desired time window. Returns the species
         names, types, masses, charges, densities and temperatures as lists, with masses and
@@ -338,7 +374,16 @@ class fastran_io(io):
         mname, _, _ = define_ion_species(z=float(zmain[-1]), a=float(amain[-1]))
         species = []
         if 'ni' in data:
-            species.append((f'{mname}', '[therm]', amain, zmain, data['ni'].to_numpy(), ti))
+            fractions = self.resolve_main_ion_fractions(amain, zmain) if split_main_ion else None
+            if fractions is not None:
+                split = ', '.join([f'{iname} {float(np.atleast_1d(frac)[-1]):.4f}' for iname, frac in fractions.items()])
+                logger.warning(f'{self.format} main ion has a mass number of {float(amain[-1]):.4f}, splitting it into {split}...')
+                ni = data['ni'].to_numpy()
+                for iname, frac in fractions.items():
+                    _, imass, _ = define_ion_species(short_name=iname)
+                    species.append((f'{iname}', '[therm]', imass * ones, zmain, np.expand_dims(frac, axis=-1) * ni, ti))
+            else:
+                species.append((f'{mname}', '[therm]', amain, zmain, data['ni'].to_numpy(), ti))
         if 'nhe' in data:
             species.append(('He', '[therm]', 4.0 * ones, 2.0 * ones, data['nhe'].to_numpy(), ti))
         if 'nz' in data and 'aimp' in data and 'zimp' in data and 'imp' in data.coords:
