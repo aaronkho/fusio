@@ -230,6 +230,7 @@ class fastran_io(io):
         if isinstance(path, (str, Path)):
             load_path = Path(path)
             if load_path.exists():
+                # NOTE: The CLI format detection opens this file repeatedly beforehand, see the note in torax_io._read_torax_file
                 temp_data = xr.open_dataset(load_path, engine='netcdf4', decode_times=False)
                 ntime = int(temp_data.sizes.get('time', 0))
                 coords: MutableMapping[str, Any] = {}

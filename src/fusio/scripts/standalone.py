@@ -97,6 +97,9 @@ def resolve_producer_route(
     Unlike a format to format conversion there is no target format to name, so the
     shortest route to any producer is taken unless via spells one out.
     """
+    # NOTE: A source which already computes the parameters is used directly, even when via
+    # spells out a route. Rerouting it, e.g. imas -> plasma -> imas to refill the profiles,
+    # is not supported yet and the given via is silently ignored.
     if source in producers:
         return [source]
     if via:

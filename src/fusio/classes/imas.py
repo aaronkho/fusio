@@ -433,6 +433,7 @@ class imas_io(io):
             ipath = Path(path)  # TODO: Add consideration for db paths
             if ipath.is_file():
                 idsmap = {}
+                # NOTE: The CLI format detection opens this file repeatedly beforehand, see the note in torax_io._read_torax_file
                 root = xr.load_dataset(ipath)
                 dd_version = root.attrs.get('data_dictionary_version', None)
                 if isinstance(dd_version, str) and 'data_dictionary_version' not in attrs:

@@ -182,6 +182,7 @@ class io():
         if isinstance(path, (str, Path)):
             load_path = Path(path)
             if load_path.exists():
+                # NOTE: The CLI format detection opens this file repeatedly beforehand, see the note in torax_io._read_torax_file
                 tree = xr.open_datatree(path)
                 if isinstance(tree, xr.DataTree):
                     fmt = tree.to_dataset().attrs.get('class', 'unknown')

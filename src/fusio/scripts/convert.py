@@ -368,6 +368,7 @@ def read_source(
     differ from the requested side when reading a fusio dump file.
     """
     ipath = Path(path)
+    # NOTE: This repeats the dump check already made during detection, see the note in torax_io._read_torax_file
     if read_dumped_format(ipath) == fmt:
         obj = io.load(ipath)
         newside = side

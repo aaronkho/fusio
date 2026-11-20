@@ -225,6 +225,7 @@ class plasma_io(io):
         if isinstance(path, (str, Path)):
             load_path = Path(path)
             if load_path.exists():
+                # NOTE: The CLI format detection opens this file repeatedly beforehand, see the note in torax_io._read_torax_file
                 data = xr.open_dataset(path, engine='netcdf4')
         return data
 

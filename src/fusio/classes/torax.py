@@ -603,6 +603,13 @@ class torax_io(io):
         if isinstance(path, (str, Path)):
             ipath = Path(path)
             if ipath.exists():
+                # NOTE: Read through fusio_convert or the run generators, a netcdf source is
+                # opened up to four times: twice during format detection, by the dump check in
+                # convert.read_dumped_format and the variable scoring in
+                # convert.detect_netcdf_format, again by the dump check in convert.read_source,
+                # and finally here. The opens are lazy so only the metadata is parsed each time,
+                # but it adds up for large files with many groups or long batches. Folding the
+                # detection into one open and passing its result on to read_source would halve it.
                 dt = xr.open_datatree(ipath)
                 dslist = []
                 auxlist = []
