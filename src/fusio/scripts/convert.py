@@ -474,20 +474,42 @@ def resolve_output_path(
     ipath: Path,
     target: str,
     total: int,
+    qualify: bool = False,
 ) -> Path:
     """Determine where the converted data is written.
 
     A given output path is used as-is for a single input, and as a containing directory
-    when several inputs are converted in one call.
+    when several inputs are converted in one call. Qualifying prefixes the name of the
+    directory holding the input, to separate inputs which share a file name.
     """
     suffix = OUTPUT_SUFFIXES.get(target, '')
-    default_name = f'{ipath.stem}_{target}{suffix}'
+    stem = f'{ipath.parent.name}_{ipath.stem}' if qualify else f'{ipath.stem}'
+    default_name = f'{stem}_{target}{suffix}'
     if output is None:
         return ipath.parent / default_name
     opath = Path(output)
     if total > 1:
         return opath / default_name
     return opath
+
+
+def resolve_output_paths(
+    output: str | Path | None,
+    ipaths: Sequence[Path],
+    target: str,
+) -> list[Path | None]:
+    """Determine the output path of every input in a batch, keeping them distinct.
+
+    Inputs whose default output names clash are qualified by their parent directory name,
+    and any which still clash are given None, as they cannot be written without one
+    replacing another.
+    """
+    total = len(ipaths)
+    opaths = [resolve_output_path(output, ip, target, total) for ip in ipaths]
+    if total > 1:
+        clashing = [opaths.count(op) > 1 for op in opaths]
+        opaths = [resolve_output_path(output, ip, target, total, qualify=True) if clash else op for ip, op, clash in zip(ipaths, opaths, clashing)]
+    return [op if opaths.count(op) == 1 else None for op in opaths]
 
 
 def resolve_dump_path(
@@ -663,15 +685,17 @@ def main():
             return 2
 
     n_converted = 0
-    for ipath in ipaths:
+    for ipath, ipath_output in zip(ipaths, resolve_output_paths(args.output, ipaths, args.target)):
+        if ipath_output is None:
+            logger.error(f'Output path of {ipath} clashes with that of another input, convert them in separate calls')
+            continue
         try:
             opath = convert_file(
                 ipath,
                 args.target,
                 source=args.format,
                 via=args.via,
-                output=args.output,
-                total=len(ipaths),
+                output=ipath_output,
                 read_side=args.read_side,
                 eqdsk=epath,
                 window=args.window,

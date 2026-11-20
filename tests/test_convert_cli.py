@@ -173,6 +173,20 @@ class TestOutputPaths:
         opath = convert.resolve_output_path(None, Path('/data/in.gacode'), 'imas', 1)
         assert opath == Path('/data/in_imas')
 
+    def test_shared_file_names_are_qualified_by_directory(self, tmp_path):
+        ipaths = [Path('/data/run1/input.gacode'), Path('/data/run2/input.gacode'), Path('/data/run3/other.gacode')]
+        opaths = convert.resolve_output_paths(tmp_path, ipaths, 'plasma')
+        assert opaths == [tmp_path / 'run1_input_plasma.nc', tmp_path / 'run2_input_plasma.nc', tmp_path / 'other_plasma.nc']
+
+    def test_unresolvable_clashes_are_dropped(self, tmp_path):
+        ipaths = [Path('/a/run/input.gacode'), Path('/b/run/input.gacode'), Path('/c/run/other.gacode')]
+        opaths = convert.resolve_output_paths(tmp_path, ipaths, 'plasma')
+        assert opaths == [None, None, tmp_path / 'other_plasma.nc']
+
+    def test_single_input_is_not_qualified(self, tmp_path):
+        opaths = convert.resolve_output_paths(tmp_path / 'out.nc', [Path('/data/run1/input.gacode')], 'plasma')
+        assert opaths == [tmp_path / 'out.nc']
+
 
 class TestEndToEnd:
 
