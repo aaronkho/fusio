@@ -241,6 +241,17 @@ class TestWrite:
         for key in ['shape_sin0', 'shape_sin1', 'shape_sin2', 's_shape_sin1', 'volp_miller']:
             assert key in g.input
 
+    def test_poloidal_current_function_is_kept_out_of_the_file(self, tmp_path, gacode_file_path):
+        # fpol is not part of the GACODE format, it is only carried through the native dump
+        g = gacode_io(input=gacode_file_path)
+        fpol = np.linspace(5.0, 6.0, g.input.sizes['rho'])
+        g.input = g.input.assign(fpol=(['n', 'rho'], np.expand_dims(fpol, axis=0)))
+        g.write(tmp_path / 'input.gacode', side='input', overwrite=True)
+        assert 'fpol' not in gacode_io(input=tmp_path / 'input.gacode').input
+        g.dump(tmp_path / 'input.gacode.nc', overwrite=True)
+        h = io.load(tmp_path / 'input.gacode.nc')
+        np.testing.assert_allclose(h.input['fpol'].to_numpy().flatten(), fpol)
+
 
 
 class TestLumpedMainIons:
