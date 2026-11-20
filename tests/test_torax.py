@@ -243,3 +243,17 @@ class TestPlasmaFromToraxVersions:
         v2 = _torax_v2_output(_torax_v1_output())
         p = plasma_io.from_torax(_torax_with_output(v2), side='output').input
         np.testing.assert_allclose(p['current'].to_numpy(), v2['I_p'].to_numpy())
+
+
+class TestImpuritiesFromGacode:
+
+    def test_impurities_collapsed_onto_one_species_are_summed(self, gacode_file_path):
+        reference = torax_io.from_gacode(gacode_io(input=gacode_file_path), side='input').input
+        g = _gacode_with_renamed_ion(gacode_file_path, 'He', 'Na', 23.0)
+        t = torax_io.from_gacode(g, side='input').input
+        assert [f'{name}' for name in t['impurity'].to_numpy()] == ['Ne']
+        # Na is radiated as Ne, with its density rescaled to keep the charge it carries
+        data = g.input
+        nna = (data['ni'].sel(name='Na') / data['ne']).to_numpy().flatten() * 11.0 / 10.0
+        nne = reference['plasma_composition.impurity.species'].sel(impurity='Ne').to_numpy().flatten()
+        np.testing.assert_allclose(t['plasma_composition.impurity.species'].sel(impurity='Ne').to_numpy().flatten(), nne + nna)

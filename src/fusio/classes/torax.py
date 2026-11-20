@@ -3588,7 +3588,8 @@ class torax_io(io):
                                         sname = 'He4'
                                 if ii in implist:
                                     # Intentional mismatch between composition and Zeff densities to handle species changes for radiation calculation
-                                    impcomp[sname] = copy.deepcopy(nz)
+                                    # Species collapsed onto the same radiation species are summed
+                                    impcomp[sname] = impcomp[sname] + nz if sname in impcomp else copy.deepcopy(nz)
                                 nsum += nz
                             zeff += (data['ni'] * data['z'] ** 2.0 / data['ne']).isel(name=ii)
                         impcoord = []
