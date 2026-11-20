@@ -267,6 +267,17 @@ class TestEndToEnd:
                 Path(gacode_file_path), 'gacode', output=tmp_path / 'input.gacode', overwrite=False, cmap=conversion_map,
             )
 
+    def test_torax_json_without_input_side_raises(self, tmp_path, conversion_map):
+        jpath = tmp_path / 'config.json'
+        jpath.write_text(json.dumps({
+            'profile_conditions': {},
+            'numerics': {},
+            'geometry': {},
+            'sources': {},
+        }))
+        with pytest.raises(ValueError, match='--read-side input'):
+            convert.convert_file(jpath, 'gacode', output=tmp_path / 'input.gacode', cmap=conversion_map)
+
     def test_batch_continues_past_unexpected_errors(self, tmp_path, gacode_file_path, monkeypatch):
         bad = tmp_path / 'bad.gacode'
         bad.write_text('')

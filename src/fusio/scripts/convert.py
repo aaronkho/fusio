@@ -377,6 +377,9 @@ def read_source(
             newside = 'output'
         logger.info(f'Loaded dumped {fmt} data from {ipath.name}, using its {newside} side')
         return obj, newside
+    if fmt == 'torax' and ipath.suffix.lower() == '.json' and side != 'input':
+        # A TORAX JSON file holds a run configuration, which only exists on the input side
+        raise ValueError(f'{ipath.name} is a TORAX configuration, which can only be read with --read-side input.')
     cls = load_format_class(fmt)
     if fmt == 'astra':
         # ASTRA spreads its data over subdirectories of a run directory
