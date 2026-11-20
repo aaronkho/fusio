@@ -24,6 +24,25 @@ Format conversion is done via:
 | `astra_io` | `classes/astra.py` | ASTRA transport code output | incomplete
 | `jintrac_io` | `classes/jintrac.py` | JINTRAC (JET integrated modelling) binary output | incomplete
 
+## Direct Conversions
+
+A converter is a `from_<source>` classmethod on the target class. Implemented direct links (target ← sources):
+
+| Target | Sources |
+|---|---|
+| `plasma` | `gacode`, `imas`, `torax`, `fastran` |
+| `gacode` | `plasma`, `torax`, `imas`, `fastran`, `astra` (`from_astra` is partial: `te`/`ti` only, last time slice) |
+| `imas` | `plasma`, `gacode`, `omas` |
+| `torax` | `gacode`, `omas` (produces a run configuration, not output profiles) |
+| `omas` | — |
+| `fastran`, `transp` | — (`from_plasma` exists but raises `NotImplementedError`) |
+| `astra`, `jintrac` | — |
+
+- `gacode`, `imas` and `omas` also have same-format `from_<self>` methods, which copy the data across sides rather than convert it.
+- `imas_io.to_eqdsk()` and `omas_io.to_eqdsk()` export a g-EQDSK, but EQDSK is not a format class.
+- Run generator sources (`to_<code>_parameters()`): `torax` → TGLF, QuaLiKiz, CGYRO; `imas` → CGYRO.
+- Any other pair needs a multi-step route, e.g. `torax → plasma → imas` or `omas → imas → plasma`. `fusio_convert --list` prints the live table.
+
 ## Central Hub: `plasma_io`
 
 `plasma_io` is the internal intermediate format. Data is stored as xarray NetCDF files with radial profiles indexed by `(time, radius, ion, source, direction)`.
