@@ -682,7 +682,7 @@ def main():
                 overwrite=args.overwrite,
                 cmap=cmap,
             )
-        except (ValueError, NotImplementedError, KeyError, OSError) as err:
+        except Exception as err:
             logger.error(f'Conversion of {ipath.name} failed: {err}')
             continue
         if opath is not None:

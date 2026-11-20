@@ -252,3 +252,21 @@ class TestEndToEnd:
             convert.convert_file(
                 Path(gacode_file_path), 'gacode', output=tmp_path / 'input.gacode', overwrite=False, cmap=conversion_map,
             )
+
+    def test_batch_continues_past_unexpected_errors(self, tmp_path, gacode_file_path, monkeypatch):
+        bad = tmp_path / 'bad.gacode'
+        bad.write_text('')
+        good = Path(gacode_file_path)
+        original = convert.convert_file
+
+        def flaky_convert_file(ipath, *args, **kwargs):
+            if Path(ipath).name == bad.name:
+                raise TypeError('unexpected failure')
+            return original(ipath, *args, **kwargs)
+
+        monkeypatch.setattr(convert, 'convert_file', flaky_convert_file)
+        monkeypatch.setattr('sys.argv', [
+            'fusio_convert', str(bad), str(good), '-t', 'plasma', '-o', str(tmp_path), '--overwrite',
+        ])
+        assert convert.main() == 1
+        assert (tmp_path / f'{good.stem}_plasma.nc').is_file()
