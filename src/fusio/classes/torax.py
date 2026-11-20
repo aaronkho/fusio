@@ -2476,6 +2476,16 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def _check_parameter_side(
+        self,
+        side: str,
+    ) -> None:
+        # The input side holds a run configuration, which is laid out differently from the
+        # simulation output and cannot simply be read in its place
+        if side != 'output':
+            raise NotImplementedError(f'{self.format} computes standalone code parameters only from simulation output, not from its {side} side.')
+
+
     def to_qualikiz_parameters(
         self,
         time: float | Sequence[float] | NDArray | None = None,
@@ -2483,7 +2493,9 @@ class torax_io(io):
         full_impurities: bool = False,
         lump_impurities: bool = False,
         use_cell_grid: bool = False,
+        side: str = 'output',
     ) -> xr.Dataset:
+        self._check_parameter_side(side)
         #TODO: Use plasma_tools utility functions
         c = constants_si()
         data = add_legacy_output_names(self.output)
@@ -2646,7 +2658,9 @@ class torax_io(io):
         full_impurities: bool = False,
         lump_impurities: bool = False,
         use_cell_grid: bool = False,
+        side: str = 'output',
     ) -> xr.Dataset:
+        self._check_parameter_side(side)
         #TODO: Use plasma_tools utility functions
         c = constants_si()
         data = add_legacy_output_names(self.output)
@@ -2864,7 +2878,9 @@ class torax_io(io):
         full_impurities: bool = False,
         lump_impurities: bool = False,
         use_cell_grid: bool = False,
+        side: str = 'output',
     ) -> xr.Dataset:
+        self._check_parameter_side(side)
         #TODO: Use plasma_tools utility functions
         c = constants_si()
         data = add_legacy_output_names(self.output)

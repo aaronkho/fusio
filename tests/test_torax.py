@@ -257,3 +257,20 @@ class TestImpuritiesFromGacode:
         nna = (data['ni'].sel(name='Na') / data['ne']).to_numpy().flatten() * 11.0 / 10.0
         nne = reference['plasma_composition.impurity.species'].sel(impurity='Ne').to_numpy().flatten()
         np.testing.assert_allclose(t['plasma_composition.impurity.species'].sel(impurity='Ne').to_numpy().flatten(), nne + nna)
+
+
+class TestParameterSide:
+
+    @pytest.mark.parametrize('code', ['tglf', 'cgyro', 'qualikiz'])
+    def test_input_side_is_refused(self, code):
+        t = _torax_with_output(_torax_v1_output())
+        with pytest.raises(NotImplementedError, match='only from simulation output'):
+            getattr(t, f'to_{code}_parameters')(side='input')
+
+    def test_generator_does_not_overwrite_the_output(self):
+        from fusio.scripts import standalone
+        v1 = _torax_v1_output()
+        t = _torax_with_output(v1)
+        with pytest.raises(NotImplementedError):
+            standalone.call_parameter_generator(t, 'tglf', 'input')
+        xr.testing.assert_identical(t.output, v1)

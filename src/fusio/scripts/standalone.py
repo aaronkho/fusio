@@ -153,8 +153,8 @@ def call_parameter_generator(
 ) -> xr.Dataset:
     """Invoke to_<code>_parameters, passing only the arguments its signature accepts.
 
-    The producers do not share a signature, e.g. only the IMAS one takes a side and the
-    contour tracing controls, so the accepted names are read off the function itself.
+    The producers do not share a signature, e.g. only the IMAS one takes the contour
+    tracing controls, so the accepted names are read off the function itself.
     """
     generator = getattr(obj, f'to_{code}_parameters', None)
     if generator is None:
