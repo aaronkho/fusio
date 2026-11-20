@@ -331,7 +331,11 @@ class gacode_io(io):
                         out=np.zeros_like(rmin_np),
                         where=(rmin_np > 0.0),
                     )
-                    aspect_local[..., 0] = 2.0 * aspect_local[..., 1] - aspect_local[..., 2]
+                    aspect_local[..., 0] = np.where(
+                        rmin_np[..., 0] > 0.0,
+                        aspect_local[..., 0],
+                        2.0 * aspect_local[..., 1] - aspect_local[..., 2],
+                    )
                     newvars['aspect_local'] = (['n', 'rho'], aspect_local)
                     newvars['aspect'] = (['n'], (data['rmaj'] / data['rmin']).isel(rho=-1).to_numpy())
                     newvars['eps_local'] = (['n', 'rho'], (data['rmin'] / data['rmaj']).to_numpy())

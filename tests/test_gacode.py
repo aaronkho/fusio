@@ -185,6 +185,19 @@ class TestDerivedGeometry:
         assert np.median(err) < 1.0e-3
         assert np.max(err) < 1.0e-2
 
+    def test_aspect_local_is_extrapolated_only_on_the_axis(self, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        g._compute_derived_coordinates(side='input')
+        on_axis = g.input['aspect_local'].to_numpy()
+        assert np.all(np.isfinite(on_axis))
+        # A grid which starts off the axis keeps its own innermost value
+        h = gacode_io(input=gacode_file_path)
+        h.input = h.input.isel(rho=slice(1, None))
+        h._compute_derived_coordinates(side='input')
+        off_axis = h.input['aspect_local'].to_numpy()
+        expected = (h.input['rmaj'] / h.input['rmin']).to_numpy()
+        np.testing.assert_allclose(off_axis[..., 0], expected[..., 0])
+
 
 
 class TestWrite:
