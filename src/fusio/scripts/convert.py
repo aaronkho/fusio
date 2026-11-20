@@ -622,7 +622,7 @@ def parse_args():
     parser.add_argument('-o', '--output', type=str, default=None, help='Path of the converted output, treated as a containing directory when multiple inputs are given')
     parser.add_argument('--via', type=str, nargs='*', default=None, help='Intermediate formats to route the conversion through, or auto to use the shortest available route')
     parser.add_argument('-e', '--eqdsk', type=str, default=None, help='Path to a g-EQDSK file whose equilibrium is folded into the route, at the plasma hub where the route passes through it')
-    parser.add_argument('-w', '--window', type=float, nargs='*', default=None, help='Time window, given as a minimum and a maximum, to select from transient input data')
+    parser.add_argument('-w', '--window', type=float, nargs=2, default=None, metavar=('TMIN', 'TMAX'), help='Time window, given as a minimum and a maximum, to select from transient input data')
     parser.add_argument('--time', type=float, default=None, help='Time stamp to assign when converting from a format which carries no plasma time')
     parser.add_argument('-i', '--impurities', type=str, default=None, choices=['n_e_ratios', 'fractions'], help='Impurity representation to use when the target format offers a choice')
     parser.add_argument('-r', '--read-side', type=str, default='output', choices=['input', 'output'], help='Side of the source format to take the data from, default is output')

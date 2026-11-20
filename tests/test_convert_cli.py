@@ -284,3 +284,9 @@ class TestEndToEnd:
         ])
         assert convert.main() == 1
         assert (tmp_path / f'{good.stem}_plasma.nc').is_file()
+
+    @pytest.mark.parametrize('window', [['2.5'], ['1.0', '2.0', '3.0']])
+    def test_window_needs_a_minimum_and_a_maximum(self, window, monkeypatch):
+        monkeypatch.setattr('sys.argv', ['fusio_convert', 'in.gacode', '-t', 'plasma', '-w'] + window)
+        with pytest.raises(SystemExit):
+            convert.parse_args()
