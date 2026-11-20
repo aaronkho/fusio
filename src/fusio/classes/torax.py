@@ -3584,7 +3584,7 @@ class torax_io(io):
                         for ii in range(len(namelist)):
                             if namelist[ii] not in ['H', 'D', 'T'] and define_mixture_fractions(namelist[ii]) is None:
                                 implist.append(ii)
-                        impcomp = {}
+                        impcomp: MutableMapping[str, Any] = {}
                         zeff = xr.zeros_like(data['ne'])
                         nsum = xr.zeros_like(data['ne'])
                         for ii in range(len(namelist)):
