@@ -738,8 +738,8 @@ class torax_io(io):
         newvars['profile_conditions.T_e'] = (['time', 'rho'], np.full((len(time), len(rho)), tebc / tref))
         newvars['profile_conditions.T_i'] = (['time', 'rho'], np.full((len(time), len(rho)), tibc / tref))
         newvars['profile_conditions.n_e'] = (['time', 'rho'], np.full((len(time), len(rho)), nebc))
-        newattrs['profile_conditions.normalize_n_e_to_nbar'] = False
-        newattrs['profile_conditions.n_e_nbar_is_fGW'] = False
+        newattrs['profile_conditions.normalize_n_e'] = False
+        newattrs['profile_conditions.n_e_bar_is_f_GW'] = False
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
@@ -764,8 +764,8 @@ class torax_io(io):
         newvars['profile_conditions.T_e'] = (['time', 'rho'], np.repeat(np.expand_dims(te / tref, axis=0), len(time), axis=0))
         newvars['profile_conditions.T_i'] = (['time', 'rho'], np.repeat(np.expand_dims(ti / tref, axis=0), len(time), axis=0))
         newvars['profile_conditions.n_e'] = (['time', 'rho'], np.repeat(np.expand_dims(ne, axis=0), len(time), axis=0))
-        newattrs['profile_conditions.normalize_n_e_to_nbar'] = False
-        newattrs['profile_conditions.n_e_nbar_is_fGW'] = False
+        newattrs['profile_conditions.normalize_n_e'] = False
+        newattrs['profile_conditions.n_e_bar_is_f_GW'] = False
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
 
@@ -1111,42 +1111,31 @@ class torax_io(io):
         geotype: str,
         geofiles: str | Mapping[str, str] | None = None,
         geodir: str | None = None,
-        **kwargs: MutableMapping[str, Any],
+        ip_from_parameters: bool = False,
+        **kwargs: Any,
     ) -> None:
-        data = self.input
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
-        newattrs['profile_conditions.initial_psi_mode'] = 'geometry'
+        newattrs['profile_conditions.psi_source'] = 'j' if geotype == 'circular' else 'geometry'
         newattrs['geometry.hires_factor'] = 4
-        newattrs['geometry.geometry_type'] = f'{geotype}'
+        newattrs['geometry.model_name'] = f'{geotype}'
         if geodir is not None:
             newattrs['geometry.geometry_directory'] = f'{geodir}'
-        if isinstance(geofiles, dict):
-            geoconfig = {}
-            for time, geofile in geofiles.items():
-                geotime: MutableMapping[str, Any] = {}
-                geotime['geometry_file'] = f'{geofile}'
-                if geotype == 'eqdsk':
-                    geotime['cocos'] = kwargs.get('cocos', 2)
-                    geotime['n_surfaces'] = kwargs.get('n_surfaces', 251)
-                    geotime['last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
-                geoconfig[time] = geotime
-            if geotype == 'eqdsk':
-                newattrs['geometry.geometry_configs'] = geoconfig
-                newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
-                newattrs['geometry.cocos'] = kwargs.get('cocos', 2)
-        else:
-            if geotype == 'circular':
-                newattrs['geometry.R_major'] = kwargs.get('R_major', 6.2)
-                newattrs['geometry.a_minor'] = kwargs.get('a_minor', 2.0)
-                newattrs['geometry.B_0'] = kwargs.get('B_0', 5.3)
-                newattrs['geometry.elongation_LCFS'] = kwargs.get('elongation_LCFS', 1.72)
-            if geotype == 'eqdsk':
+        if geotype == 'circular':
+            newattrs['profile_conditions.I_p_source'] = 'profile_conditions'
+            newattrs['geometry.R_major'] = kwargs.get('R_major', 6.2)
+            newattrs['geometry.a_minor'] = kwargs.get('a_minor', 2.0)
+            newattrs['geometry.B_0'] = kwargs.get('B_0', 5.3)
+            newattrs['geometry.elongation_LCFS'] = kwargs.get('elongation_LCFS', 1.72)
+        elif geotype == 'eqdsk':
+            if isinstance(geofiles, Mapping):
+                newattrs['geometry.geometry_file'] = {t: f'{geofile}' for t, geofile in geofiles.items()}
+            else:
                 newattrs['geometry.geometry_file'] = f'{geofiles}'
-                newattrs['geometry.Ip_from_parameters'] = bool(data.attrs.get('profile_conditions.Ip_tot', False))
-                newattrs['geometry.cocos'] = kwargs.get('cocos', 2)
-                newattrs['geometry.n_surfaces'] = kwargs.get('n_surfaces', 251)
-                newattrs['geometry.last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
+            newattrs['profile_conditions.I_p_source'] = 'profile_conditions' if ip_from_parameters else 'geometry'
+            newattrs['geometry.cocos'] = kwargs.get('cocos', 2)
+            newattrs['geometry.n_surfaces'] = kwargs.get('n_surfaces', 251)
+            newattrs['geometry.last_surface_factor'] = kwargs.get('last_surface_factor', 0.9999)
         self.update_input_attrs(newattrs)
 
 
@@ -1157,6 +1146,8 @@ class torax_io(io):
             'profile_conditions.psi',
         ]
         self.delete_input_data_vars(delvars)
+        if self.input.attrs.get('profile_conditions.psi_source') == 'profile_conditions':
+            self.update_input_attrs({'profile_conditions.psi_source': 'j'})
 
 
     def set_defined_current_psi(
@@ -1166,7 +1157,7 @@ class torax_io(io):
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_psi'] = False
-        newattrs['profile_conditions.initial_psi_from_j'] = True
+        newattrs['profile_conditions.psi_source'] = 'j'
         newattrs['profile_conditions.current_profile_nu'] = float(nu)
         newattrs['profile_conditions.initial_j_is_total_current'] = use_total
         self.update_input_attrs(newattrs)
@@ -1175,7 +1166,7 @@ class torax_io(io):
     def _pedestal_top_rho(
         self,
     ) -> float | None:
-        wrho = self.input.get('pedestal.structure_model.rho_norm_ped_top', None)
+        wrho = self.input.get('pedestal.structure_model.rho_norm_top', None)
         return float(wrho.mean().to_numpy()) if wrho is not None else None
 
 
@@ -1189,14 +1180,14 @@ class torax_io(io):
         data = self.input
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
-        newvars['pedestal.structure_model.P_ped'] = (['time'], np.zeros_like(time) + pped)
-        newvars['pedestal.structure_model.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
+        newvars['pedestal.structure_model.p_top'] = (['time'], np.zeros_like(time) + pped)
+        newvars['pedestal.structure_model.n_e_top'] = (['time'], np.zeros_like(time) + nped)
         newvars['pedestal.structure_model.T_i_T_e_ratio'] = (['time'], np.zeros_like(time) + tpedratio)
-        newvars['pedestal.structure_model.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
+        newvars['pedestal.structure_model.rho_norm_top'] = (['time'], np.zeros_like(time) + wrho)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['pedestal.structure_model.model_name'] = 'set_P_ped_n_ped'
-        newattrs['pedestal.structure_model.n_e_ped_is_fGW'] = False
+        newattrs['pedestal.structure_model.model_name'] = 'set_p_top_n_top'
+        newattrs['pedestal.structure_model.n_e_top_is_f_GW'] = False
         self.update_input_attrs(newattrs)
 
 
@@ -1210,14 +1201,14 @@ class torax_io(io):
         time = data.get('time', xr.DataArray()).to_numpy().flatten()
         tref = 1.0e3
         newvars: MutableMapping[str, Any] = {}
-        newvars['pedestal.structure_model.n_e_ped'] = (['time'], np.zeros_like(time) + nped)
-        newvars['pedestal.structure_model.T_e_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
-        newvars['pedestal.structure_model.T_i_ped'] = (['time'], np.zeros_like(time) + (tped / tref))
-        newvars['pedestal.structure_model.rho_norm_ped_top'] = (['time'], np.zeros_like(time) + wrho)
+        newvars['pedestal.structure_model.n_e_top'] = (['time'], np.zeros_like(time) + nped)
+        newvars['pedestal.structure_model.T_e_top'] = (['time'], np.zeros_like(time) + (tped / tref))
+        newvars['pedestal.structure_model.T_i_top'] = (['time'], np.zeros_like(time) + (tped / tref))
+        newvars['pedestal.structure_model.rho_norm_top'] = (['time'], np.zeros_like(time) + wrho)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['pedestal.structure_model.model_name'] = 'set_T_ped_n_ped'
-        newattrs['pedestal.structure_model.n_e_ped_is_fGW'] = False
+        newattrs['pedestal.structure_model.model_name'] = 'set_T_top_n_top'
+        newattrs['pedestal.structure_model.n_e_top_is_f_GW'] = False
         self.update_input_attrs(newattrs)
 
 
@@ -1364,14 +1355,14 @@ class torax_io(io):
         te_bc = data['profile_conditions.T_e'].interp(rho=rho).to_numpy().flatten()
         ti_bc = data['profile_conditions.T_i'].interp(rho=rho).to_numpy().flatten()
         newvars: MutableMapping[str, Any] = {}
-        newvars['pedestal.structure_model.n_e_ped'] = (['time'], ne_bc)
-        newvars['pedestal.structure_model.T_e_ped'] = (['time'], te_bc)
-        newvars['pedestal.structure_model.T_i_ped'] = (['time'], ti_bc)
-        newvars['pedestal.structure_model.rho_norm_ped_top'] = (['time'], np.zeros_like(ne_bc) + rho)
+        newvars['pedestal.structure_model.n_e_top'] = (['time'], ne_bc)
+        newvars['pedestal.structure_model.T_e_top'] = (['time'], te_bc)
+        newvars['pedestal.structure_model.T_i_top'] = (['time'], ti_bc)
+        newvars['pedestal.structure_model.rho_norm_top'] = (['time'], np.zeros_like(ne_bc) + rho)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['pedestal.structure_model.model_name'] = 'set_T_ped_n_ped'
-        newattrs['pedestal.structure_model.n_e_ped_is_fGW'] = False
+        newattrs['pedestal.structure_model.model_name'] = 'set_T_top_n_top'
+        newattrs['pedestal.structure_model.n_e_top_is_f_GW'] = False
         self.update_input_attrs(newattrs)
 
 
@@ -2358,22 +2349,44 @@ class torax_io(io):
         self.update_input_data_vars(newvars)
 
 
+    def _clear_newton_raphson_solver_attrs(
+        self,
+    ) -> None:
+        self.delete_input_attrs([
+            'solver.log_iterations',
+            'solver.initial_guess_mode',
+            'solver.residual_tol',
+            'solver.residual_coarse_tol',
+            'solver.delta_reduction_factor',
+            'solver.n_max_iterations',
+            'solver.tau_min',
+            'solver.max_linesearch_steps',
+            'solver.vmap_linesearch',
+        ])
+
+
     def add_fixed_linear_solver(
         self,
         dt_fixed: float | None = None,
         single: bool = False,
     ) -> None:
+        self._clear_newton_raphson_solver_attrs()
+        self.delete_input_attrs([
+            'time_step_calculator.max_dt',
+            'time_step_calculator.chi_timestep_prefactor',
+            'time_step_calculator.max_steps',
+        ])
         newattrs: MutableMapping[str, Any] = {}
         newattrs['solver.solver_type'] = 'linear'
         newattrs['solver.theta_implicit'] = 1.0
-        newattrs['solver.use_predictor_corrector'] = True
-        newattrs['solver.n_corrector_steps'] = 10
+        newattrs['solver.use_fixed_point'] = True
+        newattrs['solver.n_fixed_point_iterations'] = 10
         newattrs['solver.use_pereverzev'] = True
         newattrs['solver.chi_pereverzev'] = 30.0
         newattrs['solver.D_pereverzev'] = 15.0
         newattrs['time_step_calculator.calculator_type'] = 'fixed'
         newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
-        newattrs['numerics.fixed_dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
+        newattrs['time_step_calculator.dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
         self.update_input_attrs(newattrs)
 
 
@@ -2381,18 +2394,28 @@ class torax_io(io):
         self,
         dt_mult: float | None = None,
         single: bool = False,
+        max_dt: float | None = None,
+        max_steps: int | None = None,
     ) -> None:
+        self._clear_newton_raphson_solver_attrs()
+        self.delete_input_attrs(['time_step_calculator.dt'])
         newattrs: MutableMapping[str, Any] = {}
         newattrs['solver.solver_type'] = 'linear'
         newattrs['solver.theta_implicit'] = 1.0
-        newattrs['solver.use_predictor_corrector'] = True
-        newattrs['solver.n_corrector_steps'] = 10
+        newattrs['solver.use_fixed_point'] = True
+        newattrs['solver.n_fixed_point_iterations'] = 10
         newattrs['solver.use_pereverzev'] = True
         newattrs['solver.chi_pereverzev'] = 30.0
         newattrs['solver.D_pereverzev'] = 15.0
         newattrs['time_step_calculator.calculator_type'] = 'chi'
         newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
-        newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
+        newattrs['time_step_calculator.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
+        if max_dt is not None:
+            newattrs['time_step_calculator.max_dt'] = float(max_dt)
+        elif 'time_step_calculator.max_dt' not in self.input.attrs:
+            newattrs['time_step_calculator.max_dt'] = 1.0e-1
+        if max_steps is not None:
+            newattrs['time_step_calculator.max_steps'] = int(max_steps)
         self.update_input_attrs(newattrs)
 
 
@@ -2401,11 +2424,16 @@ class torax_io(io):
         dt_fixed: float | None = None,
         single: bool = False,
     ) -> None:
+        self.delete_input_attrs([
+            'time_step_calculator.max_dt',
+            'time_step_calculator.chi_timestep_prefactor',
+            'time_step_calculator.max_steps',
+        ])
         newattrs: MutableMapping[str, Any] = {}
         newattrs['solver.solver_type'] = 'newton_raphson'
         newattrs['solver.theta_implicit'] = 1.0
-        newattrs['solver.use_predictor_corrector'] = True
-        newattrs['solver.n_corrector_steps'] = 10
+        newattrs['solver.use_fixed_point'] = True
+        newattrs['solver.n_fixed_point_iterations'] = 10
         newattrs['solver.use_pereverzev'] = True
         newattrs['solver.chi_pereverzev'] = 30.0
         newattrs['solver.D_pereverzev'] = 15.0
@@ -2418,7 +2446,7 @@ class torax_io(io):
         newattrs['solver.tau_min'] = 0.01
         newattrs['time_step_calculator.calculator_type'] = 'fixed'
         newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
-        newattrs['numerics.fixed_dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
+        newattrs['time_step_calculator.dt'] = float(dt_fixed) if isinstance(dt_fixed, (float, int)) else 1.0e-1
         self.update_input_attrs(newattrs)
 
 
@@ -2426,12 +2454,15 @@ class torax_io(io):
         self,
         dt_mult: float | None = None,
         single: bool = False,
+        max_dt: float | None = None,
+        max_steps: int | None = None,
     ) -> None:
+        self.delete_input_attrs(['time_step_calculator.dt'])
         newattrs: MutableMapping[str, Any] = {}
         newattrs['solver.solver_type'] = 'newton_raphson'
         newattrs['solver.theta_implicit'] = 1.0
-        newattrs['solver.use_predictor_corrector'] = True
-        newattrs['solver.n_corrector_steps'] = 10
+        newattrs['solver.use_fixed_point'] = True
+        newattrs['solver.n_fixed_point_iterations'] = 10
         newattrs['solver.use_pereverzev'] = True
         newattrs['solver.chi_pereverzev'] = 30.0
         newattrs['solver.D_pereverzev'] = 15.0
@@ -2444,7 +2475,13 @@ class torax_io(io):
         newattrs['solver.tau_min'] = 0.01
         newattrs['time_step_calculator.calculator_type'] = 'chi'
         newattrs['time_step_calculator.tolerance'] = 1.0e-7 if not single else 1.0e-5
-        newattrs['numerics.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
+        newattrs['time_step_calculator.chi_timestep_prefactor'] = float(dt_mult) if isinstance(dt_mult, (float, int)) else 50.0
+        if max_dt is not None:
+            newattrs['time_step_calculator.max_dt'] = float(max_dt)
+        elif 'time_step_calculator.max_dt' not in self.input.attrs:
+            newattrs['time_step_calculator.max_dt'] = 1.0e-1
+        if max_steps is not None:
+            newattrs['time_step_calculator.max_steps'] = int(max_steps)
         self.update_input_attrs(newattrs)
 
 
@@ -2456,11 +2493,12 @@ class torax_io(io):
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
         newattrs['geometry.n_rho'] = 25 if 'geometry.n_rho' not in self.input.attrs else int(self.input.attrs['geometry.n_rho'])
-        newattrs['numerics.t_initial'] = float(t_initial)
-        newattrs['numerics.t_final'] = float(t_final)
-        newattrs['numerics.exact_t_final'] = True
-        newattrs['numerics.max_dt'] = 1.0e-1
-        newattrs['numerics.min_dt'] = 1.0e-8
+        newattrs['time_step_calculator.t_initial'] = float(t_initial)
+        newattrs['time_step_calculator.t_final'] = float(t_final)
+        newattrs['time_step_calculator.exact_t_final'] = True
+        if self.input.attrs.get('time_step_calculator.calculator_type') != 'fixed':
+            newattrs['time_step_calculator.max_dt'] = 1.0e-1
+        newattrs['time_step_calculator.min_dt'] = 1.0e-8
         newattrs['numerics.evolve_electron_heat'] = (isinstance(eqs, (list, tuple)) and 'te' in eqs)
         newattrs['numerics.evolve_ion_heat'] = (isinstance(eqs, (list, tuple)) and 'ti' in eqs)
         newattrs['numerics.evolve_density'] = (isinstance(eqs, (list, tuple)) and 'ne' in eqs)
@@ -3289,6 +3327,10 @@ class torax_io(io):
                     if all(f'{pvtag}{sfx}' in datadict for sfx in suffixes):
                         datadict[pvtag] = tuple(datadict.pop(f'{pvtag}{sfx}') for sfx in suffixes)
                         break
+        if datadict.get('time_step_calculator.calculator_type') == 'fixed':
+            datadict.pop('time_step_calculator.max_dt', None)
+            datadict.pop('time_step_calculator.chi_timestep_prefactor', None)
+            datadict.pop('time_step_calculator.max_steps', None)
         datadict.pop('use_psi', None)
         datadict.pop('use_generic_heat', None)
         datadict.pop('use_generic_particle', None)
@@ -3381,6 +3423,8 @@ class torax_io(io):
                         pre_coords[f'time_{field}_{variable}'] = np.asarray(time_bc)
                         pre_coords[f'rho_{field}_{variable}'] = np.asarray([rho_bc])
                         data_vars[f'{key}.{field}.{variable}'] = (dims, np.expand_dims(np.asarray(val_bc), axis=-1))
+                elif key == 'geometry' and field == 'geometry_file' and isinstance(json_dict[key][field], dict):
+                    attrs[f'{key}.{field}'] = copy.deepcopy(json_dict[key][field])
                 elif isinstance(json_dict[key][field], dict):
                     for k, v in json_dict[key][field].items():
                         if isinstance(v, (tuple, list)):
@@ -3547,7 +3591,7 @@ class torax_io(io):
                     if np.any(window_mask):
                         time_window_indices = data['n'].to_numpy().astype(int)[window_mask]
                 data = data.sel(n=time_window_indices).drop_duplicates('n')  # Fine because data is a copy
-                attrs['numerics.t_initial'] = float(time[0])
+                attrs['time_step_calculator.t_initial'] = float(time[0])
                 coords['time'] = np.array([time]).flatten()
                 coords['rho'] = data['rho'].to_numpy().flatten()
                 if 'z' in data and 'name' in data and 'type' in data and 'ni' in data:
@@ -3638,11 +3682,11 @@ class torax_io(io):
                         data_vars['plasma_composition.impurity.species'] = (['impurity', 'time', 'rho'], np.concatenate(impfracs, axis=0))
                     data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 if 'current' in data:
-                    data_vars['profile_conditions.Ip'] = (['time'], 1.0e6 * np.abs(data['current'].to_numpy()))
+                    data_vars['profile_conditions.I_p'] = (['time'], 1.0e6 * np.abs(data['current'].to_numpy()))
                 if 'ne' in data:
                     data_vars['profile_conditions.n_e'] = (['time', 'rho'], 1.0e19 * data['ne'].to_numpy())
-                    attrs['profile_conditions.normalize_n_e_to_nbar'] = False
-                    attrs['profile_conditions.n_e_nbar_is_fGW'] = False
+                    attrs['profile_conditions.normalize_n_e'] = False
+                    attrs['profile_conditions.n_e_bar_is_f_GW'] = False
                 if 'te' in data:
                     data_vars['profile_conditions.T_e'] = (['time', 'rho'], data['te'].to_numpy())
                 if 'ti' in data and 'z' in data:
@@ -3654,7 +3698,10 @@ class torax_io(io):
                     data_vars['profile_conditions.T_i'] = (['time', 'rho'], tfuel.to_numpy())
                 if 'polflux' in data:
                     attrs['use_psi'] = True
+                    attrs['profile_conditions.psi_source'] = 'profile_conditions'
                     data_vars['profile_conditions.psi'] = (['time', 'rho'], data['polflux'].to_numpy())
+                else:
+                    attrs['profile_conditions.psi_source'] = 'j'
                 if 'q' in data:
                     data_vars['profile_conditions.q'] = (['time', 'rho'], data['q'].to_numpy())
                 # Place the sources
@@ -3806,7 +3853,8 @@ class torax_io(io):
                 data = data.swap_dims({time_cp_i: time_cp})
                 cp_coords['time'] = data.get(time_cp, xr.DataArray()).to_numpy().flatten()
                 cp_coords['rho'] = data.isel({time_cp: 0}).get(rho_cp, xr.DataArray()).to_numpy().flatten()
-                cp_attrs['numerics.t_initial'] = cp_coords['time'][0]
+                cp_attrs['time_step_calculator.t_initial'] = cp_coords['time'][0]
+                cp_attrs['profile_conditions.psi_source'] = 'j'
                 omas_tag = 'core_profiles.profiles_1d.ion.density'
                 # OMAS carries no species type, so fast ions are recognized by their name tag,
                 # or by holding density without any thermal density, as written by imas_io.
@@ -3941,12 +3989,12 @@ class torax_io(io):
                     cp_data_vars['plasma_composition.Z_eff'] = (['time', 'rho'], zeff.to_numpy())
                 omas_tag = 'core_profiles.global_quantities.ip'
                 if omas_tag in data:
-                    cp_data_vars['profile_conditions.Ip'] = (['time'], np.abs(data[omas_tag].to_numpy()))
+                    cp_data_vars['profile_conditions.I_p'] = (['time'], np.abs(data[omas_tag].to_numpy()))
                 omas_tag = 'core_profiles.profiles_1d.electrons.density'
                 if omas_tag in data:
                     cp_data_vars['profile_conditions.n_e'] = (['time', 'rho'], data[omas_tag].to_numpy())
-                    cp_attrs['profile_conditions.normalize_n_e_to_nbar'] = False
-                    cp_attrs['profile_conditions.n_e_nbar_is_fGW'] = False
+                    cp_attrs['profile_conditions.normalize_n_e'] = False
+                    cp_attrs['profile_conditions.n_e_bar_is_f_GW'] = False
                 omas_tag = 'core_profiles.profiles_1d.electrons.temperature'
                 if omas_tag in data:
                     cp_data_vars['profile_conditions.T_e'] = (['time', 'rho'], 1.0e-3 * data[omas_tag].to_numpy())
@@ -3962,7 +4010,7 @@ class torax_io(io):
                 omas_tag = 'core_profiles.global_quantities.v_loop'
                 if omas_tag in data:
                     cp_data_vars['profile_conditions.v_loop_lcfs'] = (['time'], data[omas_tag].to_numpy())
-                    cp_attrs['profile_conditions.use_v_loop_lcfs_boundary_condition'] = False
+                    cp_attrs['profile_conditions.psi_bc_source'] = 'I_p'
                 #core_profiles.profiles_1d.conductivity_parallel              (time_cp, rho_cp)
                 #core_profiles.profiles_1d.current_parallel_inside            (time_cp, rho_cp)
                 #core_profiles.profiles_1d.j_tor                              (time_cp, rho_cp)
