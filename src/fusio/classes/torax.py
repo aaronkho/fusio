@@ -1426,6 +1426,7 @@ class torax_io(io):
         newcoords: MutableMapping[str, Any] = {}
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
+        tvec: NDArray
         if time is not None:
             tvec = np.asarray(time, dtype=float).flatten()
             tcoord = f'time_{name}'
@@ -1436,6 +1437,7 @@ class torax_io(io):
         raw_channels = {'chi_i': chi_i, 'chi_e': chi_e, 'D_e': D_e, 'V_e': V_e}
         arr_channels = {k: np.asarray(v, dtype=float) for k, v in raw_channels.items()}
         non_scalar_rlen = [a.shape[-1] for a in arr_channels.values() if a.ndim >= 1]
+        xrho: NDArray
         if rho is not None:
             xrho = np.asarray(rho, dtype=float).flatten()
         elif non_scalar_rlen:
@@ -1445,7 +1447,7 @@ class torax_io(io):
                 raise ValueError('Radial coordinate "rho" must be provided or match input dataset rho length when passing array transport coefficients')
         else:
             nrho = n_rho if isinstance(n_rho, int) else 2
-            xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, nrho)
+            xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, nrho).flatten()
         channels: MutableMapping[str, NDArray] = {}
         for k, a in arr_channels.items():
             if a.ndim == 0:
