@@ -274,3 +274,98 @@ class TestParameterSide:
         with pytest.raises(NotImplementedError):
             standalone.call_parameter_generator(t, 'tglf', 'input')
         xr.testing.assert_identical(t.output, v1)
+
+
+try:
+    import torax as _torax_pkg
+    _HAS_TORAX = True
+except ImportError:
+    _torax_pkg = None
+    _HAS_TORAX = False
+
+
+def _base_circular_torax(t_initial=0.0, t_final=0.05):
+    t = torax_io()
+    t.time_coordinate([t_initial, t_final])
+    t.radial_coordinate(np.linspace(0.0, 1.0, 11))
+    t.set_cosine_initial_and_constant_kinetic_boundary_condition(
+        tebc=200.0,
+        tibc=200.0,
+        nebc=2.0e19,
+        tecore=5.0e3,
+        ticore=5.0e3,
+        necore=8.0e19,
+    )
+    t.update_input_data_vars({
+        'profile_conditions.I_p': (['time'], np.array([1.0e7, 1.0e7])),
+    })
+    t.set_constant_flat_main_ion_composition({'D': 0.5, 'T': 0.5})
+    t.set_constant_flat_impurity_composition_by_electron_density_fraction({'Ne': 0.01})
+    t.add_geometry('circular')
+    t.set_numerics(t_initial, t_final)
+    t.add_fixed_linear_solver(dt_fixed=0.05)
+    return t
+
+
+class TestPrescribedTransport:
+
+    def test_scalars_1d_and_2d_arrays_on_distinct_grids(self):
+        t = _base_circular_torax(0.0, 0.1)
+        rho1 = np.linspace(0.0, 1.0, 6)
+        chi_1d = np.linspace(0.5, 2.0, 6)
+        t.add_prescribed_transport(chi_i=chi_1d, chi_e=1.5, D_e=0.0, V_e=-0.1, rho=rho1)
+
+        rho2 = np.linspace(0.0, 0.5, 4)
+        times2 = np.array([0.0, 0.05, 0.1])
+        chi_2d = np.outer(np.array([1.0, 1.2, 1.4]), np.linspace(0.2, 0.8, 4))
+        t.add_prescribed_transport(chi_i=chi_2d, chi_e=chi_2d, D_e=0.3, V_e=0.0, rho=rho2, time=times2, rho_max=0.5, merge_mode='overwrite')
+
+        cfg = t.to_config(json_compatible=True)
+        m0 = cfg['transport']['core_transport_models']['prescribed_0']
+        m1 = cfg['transport']['core_transport_models']['prescribed_1']
+        assert m0['model_name'] == 'prescribed'
+        assert m0['disable_D_e'] is True
+        assert 'D_e' not in m0
+        np.testing.assert_allclose(m0['chi_i'][1], rho1)
+        np.testing.assert_allclose(m0['chi_i'][2][0], chi_1d)
+        assert m1['merge_mode'] == 'overwrite'
+        np.testing.assert_allclose(m1['chi_i'][0], times2)
+        np.testing.assert_allclose(m1['chi_i'][1], rho2)
+        np.testing.assert_allclose(m1['chi_i'][2], chi_2d)
+
+        rt = torax_io()
+        rt.input = rt.from_dict(cfg)
+        rt_cfg = rt.to_config(json_compatible=True)
+        np.testing.assert_allclose(rt_cfg['transport']['core_transport_models']['prescribed_1']['chi_i'][2], chi_2d)
+        if _HAS_TORAX:
+            _torax_pkg.ToraxConfig.from_dict(cfg)
+            _torax_pkg.ToraxConfig.from_dict(rt_cfg)
+
+    def test_1d_array_uses_dataset_rho_when_omitted(self):
+        t = _base_circular_torax()
+        chi = np.linspace(0.5, 1.5, 11)
+        t.add_prescribed_transport(chi_i=chi, chi_e=chi, D_e=0.4)
+        cfg = t.to_config()
+        da = cfg['transport']['core_transport_models']['prescribed_0']['chi_i']
+        np.testing.assert_allclose(da['rho_norm'].to_numpy(), np.linspace(0.0, 1.0, 11))
+        np.testing.assert_allclose(da.isel(time=0).to_numpy(), chi)
+        if _HAS_TORAX:
+            _torax_pkg.ToraxConfig.from_dict(cfg)
+
+    def test_invalid_shapes_and_nonpositive_values_raise(self):
+        t = _base_circular_torax()
+        with pytest.raises(ValueError, match='rho'):
+            t.add_prescribed_transport(chi_i=np.ones(5))
+        with pytest.raises(ValueError, match='length'):
+            t.add_prescribed_transport(chi_i=np.ones(5), rho=np.linspace(0.0, 1.0, 4))
+        with pytest.raises(ValueError, match='shape'):
+            t.add_prescribed_transport(chi_i=np.ones((3, 4)), rho=np.linspace(0.0, 1.0, 4))
+        with pytest.raises(ValueError, match='strictly positive'):
+            t.add_prescribed_transport(chi_i=np.array([0.0, 1.0]), rho=np.array([0.0, 1.0]))
+
+    def test_add_constant_transport_alias_matches_prescribed(self):
+        t1 = _base_circular_torax()
+        t2 = _base_circular_torax()
+        t1.add_constant_transport(chi_i=1.0, chi_e=2.0, D_e=0.5, V_e=-0.1, rho_min=0.1, rho_max=0.9, merge_mode='overwrite')
+        t2.add_prescribed_transport(chi_i=1.0, chi_e=2.0, D_e=0.5, V_e=-0.1, rho_min=0.1, rho_max=0.9, merge_mode='overwrite')
+        assert t1.to_config(json_compatible=True) == t2.to_config(json_compatible=True)

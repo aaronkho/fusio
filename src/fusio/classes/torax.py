@@ -1220,12 +1220,16 @@ class torax_io(io):
         channels: Mapping[str, NDArray],
         newvars: MutableMapping[str, Any],
         newattrs: MutableMapping[str, Any],
+        tcoord: str = 'time',
     ) -> None:
         for key, val in channels.items():
             if key != 'V_e' and np.all(val == 0.0):
                 newattrs[f'{prefix}.disable_{key}'] = True
             else:
-                newvars[f'{prefix}.{key}'] = (['time', coord], np.repeat(np.expand_dims(val, axis=0), len(time), axis=0))
+                if key != 'V_e' and np.any(val <= 0.0):
+                    raise ValueError(f'Prescribed transport channel "{key}" must be strictly positive or identically zero')
+                arr = val if val.ndim == 2 else np.repeat(np.expand_dims(val, axis=0), len(time), axis=0)
+                newvars[f'{prefix}.{key}'] = ([tcoord, coord], arr)
 
 
     def add_pedestal_constant_transport(
@@ -1308,14 +1312,14 @@ class torax_io(io):
         wrho = self._pedestal_top_rho()
         if wrho is not None:
             models = data.attrs.get('map_pedestal_transport_model_names', [])
-            name = f'CGM_{len(models):d}'
+            name = f'cgm_{len(models):d}'
             prefix = f'transport.pedestal_transport_models.{name}'
             newvars[f'{prefix}.chi_e_i_ratio'] = (['time'], np.zeros_like(time) + ei_ratio)
             newvars[f'{prefix}.chi_D_ratio'] = (['time'], np.zeros_like(time) + D_ratio)
             newvars[f'{prefix}.VR_D_ratio'] = (['time'], np.zeros_like(time) + peaking)
             newattrs[f'{prefix}.alpha'] = float(alpha)
             newattrs[f'{prefix}.chi_stiff'] = float(chi_grad)
-            newattrs[f'{prefix}.model_name'] = 'CGM'
+            newattrs[f'{prefix}.model_name'] = 'cgm'
             models.append(name)
             newattrs['map_pedestal_transport_model_names'] = models
         self.update_input_coords(newcoords)
@@ -1394,45 +1398,77 @@ class torax_io(io):
             self.input['sources.generic_current.prescribed_values'] = data['sources.generic_current.prescribed_values'] - data['profile_conditions.j_bootstrap']
 
 
-    def add_constant_transport(
+    def add_prescribed_transport(
         self,
-        chi_i: float = 0.0,
-        chi_e: float = 0.0,
-        D_e: float = 0.0,
-        V_e: float = 0.0,
+        chi_i: float | ArrayLike = 0.0,
+        chi_e: float | ArrayLike = 0.0,
+        D_e: float | ArrayLike = 0.0,
+        V_e: float | ArrayLike = 0.0,
+        rho: ArrayLike | None = None,
         rho_min: float | None = None,
         rho_max: float | None = None,
         n_rho: int | None = None,
+        merge_mode: str = 'add',
+        time: ArrayLike | None = None,
     ) -> None:
+        if merge_mode not in ['add', 'overwrite']:
+            raise ValueError(f'Invalid transport merge_mode "{merge_mode}", must be "add" or "overwrite"')
         data = self.input
-        time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        newcoords: MutableMapping[str, Any] = {}
-        newvars: MutableMapping[str, Any] = {}
-        newattrs: MutableMapping[str, Any] = {}
         models = data.attrs.get('map_core_transport_model_names', [])
         name = f'prescribed_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
+        newcoords: MutableMapping[str, Any] = {}
+        newvars: MutableMapping[str, Any] = {}
+        newattrs: MutableMapping[str, Any] = {}
+        if time is not None:
+            tvec = np.asarray(time, dtype=float).flatten()
+            tcoord = f'time_{name}'
+            newcoords[tcoord] = tvec
+        else:
+            tvec = self.time_coordinate().to_numpy().flatten()
+            tcoord = 'time'
+        raw_channels = {'chi_i': chi_i, 'chi_e': chi_e, 'D_e': D_e, 'V_e': V_e}
+        arr_channels = {k: np.asarray(v, dtype=float) for k, v in raw_channels.items()}
+        non_scalar_rlen = [a.shape[-1] for a in arr_channels.values() if a.ndim >= 1]
+        if rho is not None:
+            xrho = np.asarray(rho, dtype=float).flatten()
+        elif non_scalar_rlen:
+            if 'rho' in data.coords and len(data['rho']) == non_scalar_rlen[0]:
+                xrho = data['rho'].to_numpy().flatten()
+            else:
+                raise ValueError('Radial coordinate "rho" must be provided or match input dataset rho length when passing array transport coefficients')
+        else:
+            nrho = n_rho if isinstance(n_rho, int) else 2
+            xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, nrho)
+        channels: MutableMapping[str, NDArray] = {}
+        for k, a in arr_channels.items():
+            if a.ndim == 0:
+                channels[k] = np.full((len(tvec), len(xrho)), float(a))
+            elif a.ndim == 1:
+                if a.shape[0] != len(xrho):
+                    raise ValueError(f'Prescribed transport channel "{k}" length ({a.shape[0]}) does not match rho length ({len(xrho)})')
+                channels[k] = np.repeat(np.expand_dims(a, axis=0), len(tvec), axis=0)
+            elif a.ndim == 2:
+                if a.shape != (len(tvec), len(xrho)):
+                    raise ValueError(f'Prescribed transport channel "{k}" shape {a.shape} does not match (time, rho) shape {(len(tvec), len(xrho))}')
+                channels[k] = a
+            else:
+                raise ValueError(f'Prescribed transport channel "{k}" must be scalar, 1D, or 2D')
         wrho = self._pedestal_top_rho()
         if wrho is not None:
             newattrs[f'{prefix}.rho_max'] = wrho
         models.append(name)
         newattrs['map_core_transport_model_names'] = models
         if rho_min is not None:
-            #newvars[f'{prefix}.rho_min'] = (['time'], np.zeros_like(time) + rho_min)
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
-            #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
         newattrs[f'{prefix}.model_name'] = 'prescribed'
-        nrho = n_rho if isinstance(n_rho, int) else 2
-        xrho = np.linspace(rho_min if rho_min is not None else 0.0, rho_max if rho_max is not None else 1.0, nrho)
-        #factor = np.abs((xrho - np.nanmin(xrho)) / (1.0 - np.nanmin(xrho)))
-        #chirho = 0.01 * np.exp(-factor / 0.2)
-        #drho = 0.01 * np.exp(-factor / 0.2)
-        #vrho = np.zeros_like(factor)
-        newcoords['rho_const'] = xrho.flatten()
-        channels = {'chi_i': chi_i, 'chi_e': chi_e, 'D_e': D_e, 'V_e': V_e}
-        self._add_prescribed_transport_channels(prefix, 'rho_const', time, {k: np.zeros_like(xrho) + v for k, v in channels.items()}, newvars, newattrs)
+        if merge_mode != 'add':
+            newattrs[f'{prefix}.merge_mode'] = merge_mode
+        rcoord = f'rho_{name}'
+        newcoords[rcoord] = xrho.flatten()
+        self._add_prescribed_transport_channels(prefix, rcoord, tvec, channels, newvars, newattrs, tcoord=tcoord)
         newattrs['transport.chi_min'] = 0.05
         newattrs['transport.chi_max'] = 100.0
         newattrs['transport.D_e_min'] = 0.05
@@ -1443,6 +1479,29 @@ class torax_io(io):
         self.update_input_coords(newcoords)
         self.update_input_data_vars(newvars)
         self.update_input_attrs(newattrs)
+
+
+    def add_constant_transport(
+        self,
+        chi_i: float = 0.0,
+        chi_e: float = 0.0,
+        D_e: float = 0.0,
+        V_e: float = 0.0,
+        rho_min: float | None = None,
+        rho_max: float | None = None,
+        n_rho: int | None = None,
+        merge_mode: str = 'add',
+    ) -> None:
+        self.add_prescribed_transport(
+            chi_i=chi_i,
+            chi_e=chi_e,
+            D_e=D_e,
+            V_e=V_e,
+            rho_min=rho_min,
+            rho_max=rho_max,
+            n_rho=n_rho,
+            merge_mode=merge_mode,
+        )
 
 
     def add_critical_gradient_transport(
@@ -1463,7 +1522,7 @@ class torax_io(io):
         newvars: MutableMapping[str, Any] = {}
         newattrs: MutableMapping[str, Any] = {}
         models = data.attrs.get('map_core_transport_model_names', [])
-        name = f'CGM_{len(models):d}'
+        name = f'cgm_{len(models):d}'
         prefix = f'transport.core_transport_models.{name}'
         wrho = self._pedestal_top_rho()
         if wrho is not None:
@@ -1476,7 +1535,7 @@ class torax_io(io):
         if rho_max is not None:
             #newvars[f'{prefix}.rho_max'] = (['time'], np.zeros_like(time) + rho_max)
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
-        newattrs[f'{prefix}.model_name'] = 'CGM'
+        newattrs[f'{prefix}.model_name'] = 'cgm'
         newvars[f'{prefix}.chi_e_i_ratio'] = (['time'], np.zeros_like(time) + ei_ratio)
         newvars[f'{prefix}.chi_D_ratio'] = (['time'], np.zeros_like(time) + D_ratio)
         newvars[f'{prefix}.VR_D_ratio'] = (['time'], np.zeros_like(time) + peaking)
@@ -1677,7 +1736,7 @@ class torax_io(io):
             newattrs[f'{prefix}.rho_min'] = float(rho_min)
         if rho_max is not None:
             newattrs[f'{prefix}.rho_max'] = float(rho_max)
-        newattrs[f'{prefix}.model_name'] = 'tglfnn-ukaea'
+        newattrs[f'{prefix}.model_name'] = 'tglfnn_ukaea'
         newattrs[f'{prefix}.machine'] = machine
         newattrs[f'{prefix}.DV_effective'] = True
         newattrs[f'{prefix}.An_min'] = 0.01
@@ -1708,12 +1767,13 @@ class torax_io(io):
         rho: float,
         tstart: float | None = None,
         tend: float | None = None,
+        merge_mode: str = 'overwrite',
     ) -> None:
-        self.add_constant_transport(chii, chie, de, ve, rho_max=rho)
+        self.add_prescribed_transport(chii, chie, de, ve, rho_max=rho, merge_mode=merge_mode)
 
 
     def add_transport_outer_patch(
-        self, 
+        self,
         de: float,
         ve: float,
         chii: float,
@@ -1721,8 +1781,9 @@ class torax_io(io):
         rho: float,
         tstart: float | None = None,
         tend: float | None = None,
+        merge_mode: str = 'overwrite',
     ) -> None:
-        self.add_constant_transport(chii, chie, de, ve, rho_min=rho)
+        self.add_prescribed_transport(chii, chie, de, ve, rho_min=rho, merge_mode=merge_mode)
 
 
     def reset_mhd_sawtooth_trigger(
