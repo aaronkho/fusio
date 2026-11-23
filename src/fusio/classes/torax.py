@@ -1553,6 +1553,57 @@ class torax_io(io):
         self.update_input_attrs(newattrs)
 
 
+    def add_bohm_gyrobohm_transport(
+        self,
+        bohm_multiplier: float = 1.0,
+        gyrobohm_multiplier: float = 1.0,
+        d_c1: float = 1.0,
+        d_c2: float = 0.3,
+        v_coeff: float = -0.1,
+        rho_min: float | None = None,
+        rho_max: float | None = None,
+        merge_mode: str = 'add',
+    ) -> None:
+        if bohm_multiplier <= 0.0 or gyrobohm_multiplier <= 0.0:
+            raise ValueError('Bohm-gyroBohm transport model requires bohm_multiplier > 0 and gyrobohm_multiplier > 0')
+        if d_c1 <= 0.0 or d_c2 <= 0.0:
+            raise ValueError('Bohm-gyroBohm transport model requires d_c1 > 0 and d_c2 > 0')
+        if merge_mode not in ['add', 'overwrite']:
+            raise ValueError(f'Invalid transport merge_mode "{merge_mode}", must be "add" or "overwrite"')
+        data = self.input
+        newattrs: MutableMapping[str, Any] = {}
+        models = data.attrs.get('map_core_transport_model_names', [])
+        name = f'bohm_gyrobohm_{len(models):d}'
+        prefix = f'transport.core_transport_models.{name}'
+        wrho = self._pedestal_top_rho()
+        if wrho is not None:
+            newattrs[f'{prefix}.rho_max'] = wrho
+        models.append(name)
+        newattrs['map_core_transport_model_names'] = models
+        if rho_min is not None:
+            newattrs[f'{prefix}.rho_min'] = float(rho_min)
+        if rho_max is not None:
+            newattrs[f'{prefix}.rho_max'] = float(rho_max)
+        newattrs[f'{prefix}.model_name'] = 'bohm_gyrobohm'
+        if merge_mode != 'add':
+            newattrs[f'{prefix}.merge_mode'] = merge_mode
+        newattrs[f'{prefix}.chi_e_bohm_multiplier'] = float(bohm_multiplier)
+        newattrs[f'{prefix}.chi_i_bohm_multiplier'] = float(bohm_multiplier)
+        newattrs[f'{prefix}.chi_e_gyrobohm_multiplier'] = float(gyrobohm_multiplier)
+        newattrs[f'{prefix}.chi_i_gyrobohm_multiplier'] = float(gyrobohm_multiplier)
+        newattrs[f'{prefix}.D_face_c1'] = float(d_c1)
+        newattrs[f'{prefix}.D_face_c2'] = float(d_c2)
+        newattrs[f'{prefix}.V_face_coeff'] = float(v_coeff)
+        newattrs['transport.chi_min'] = 0.05
+        newattrs['transport.chi_max'] = 100.0
+        newattrs['transport.D_e_min'] = 0.05
+        newattrs['transport.D_e_max'] = 100.0
+        newattrs['transport.V_e_min'] = -50.0
+        newattrs['transport.V_e_max'] = 50.0
+        newattrs['transport.smoothing_width'] = 0.1
+        self.update_input_attrs(newattrs)
+
+
     def add_qualikiz_transport(
         self,
         rho_min: float | None = None,

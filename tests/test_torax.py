@@ -307,6 +307,181 @@ def _base_circular_torax(t_initial=0.0, t_final=0.05):
     return t
 
 
+class TestBohmGyroBohmTransport:
+
+    def test_default_and_custom_multipliers(self):
+        t = _base_circular_torax()
+        t.add_pedestal_by_temperature(nped=5.0e19, tped=2.0e3, wrho=0.9)
+        t.add_bohm_gyrobohm_transport(
+            bohm_multiplier=1.5,
+            gyrobohm_multiplier=0.75,
+            d_c1=0.8,
+            d_c2=0.25,
+            v_coeff=-0.2,
+            rho_min=0.1,
+            merge_mode='overwrite',
+        )
+        cfg = t.to_config()
+        model = cfg['transport']['core_transport_models']['bohm_gyrobohm_0']
+        assert model['model_name'] == 'bohm_gyrobohm'
+        assert model['chi_e_bohm_multiplier'] == 1.5
+        assert model['chi_i_bohm_multiplier'] == 1.5
+        assert model['chi_e_gyrobohm_multiplier'] == 0.75
+        assert model['chi_i_gyrobohm_multiplier'] == 0.75
+        assert model['D_face_c1'] == 0.8
+        assert model['D_face_c2'] == 0.25
+        assert model['V_face_coeff'] == -0.2
+        assert model['rho_min'] == 0.1
+        assert np.isclose(model['rho_max'], 0.9)
+        assert model['merge_mode'] == 'overwrite'
+
+    @pytest.mark.parametrize('kwargs', [
+        {'bohm_multiplier': 0.0},
+        {'bohm_multiplier': -1.0},
+        {'gyrobohm_multiplier': 0.0},
+        {'d_c1': 0.0},
+        {'d_c2': -0.1},
+        {'merge_mode': 'invalid'},
+    ])
+    def test_invalid_arguments_raise(self, kwargs):
+        t = _base_circular_torax()
+        with pytest.raises(ValueError):
+            t.add_bohm_gyrobohm_transport(**kwargs)
+
+    @pytest.mark.skipif(not _HAS_TORAX, reason='torax is not installed')
+    def test_torax_v2_validation_and_simulation(self, tmp_path):
+        t = _base_circular_torax(0.0, 0.05)
+        t.add_bohm_gyrobohm_transport(bohm_multiplier=1.2, gyrobohm_multiplier=0.8)
+        t.set_default_exchange_source()
+        t.set_default_ohmic_source()
+        t.set_gaussian_generic_heat_source(0.0, 0.2, 1.0e7)
+        cfg = t.to_config()
+        torax_cfg = _torax_pkg.ToraxConfig.from_dict(cfg)
+        bgb_cfg = torax_cfg.transport.core_transport_models['bohm_gyrobohm_0']
+        assert bgb_cfg.model_name == 'bohm_gyrobohm'
+        np.testing.assert_allclose(bgb_cfg.chi_e_bohm_multiplier.get_value(0.0), 1.2)
+        np.testing.assert_allclose(bgb_cfg.chi_i_bohm_multiplier.get_value(0.0), 1.2)
+        np.testing.assert_allclose(bgb_cfg.chi_e_gyrobohm_multiplier.get_value(0.0), 0.8)
+        np.testing.assert_allclose(bgb_cfg.chi_i_gyrobohm_multiplier.get_value(0.0), 0.8)
+        state_history = _torax_pkg.run_simulation(torax_cfg)
+        assert state_history.sim_error == _torax_pkg.SimError.NO_ERROR
+        out_path = tmp_path / 'bgb_out.nc'
+        state_history.simulation_output_to_xr().to_netcdf(out_path)
+        loaded = torax_io(output=out_path).output
+        assert 'T_e' in loaded
+        assert 'turbulent_transport.core.bohm_gyrobohm_0.chi_bohm_e' in loaded
+        assert 'turbulent_transport.core.bohm_gyrobohm_0.chi_gyrobohm_i' in loaded
+
+
+class TestToraxV2Config:
+
+    def test_prescribed_sources_and_json_roundtrip(self):
+        t = _base_circular_torax()
+        rho = np.linspace(0.0, 1.0, 11)
+        t.add_constant_transport(chi_i=1.0, chi_e=0.0, D_e=0.5, V_e=0.0)
+        t.set_prescribed_generic_heat_source(rho, np.full_like(rho, 1.0e5), np.full_like(rho, 2.0e5))
+        t.set_prescribed_generic_particle_source(rho, np.full_like(rho, 1.0e19))
+        t.set_prescribed_generic_current_source(rho, np.full_like(rho, 1.0e5))
+        t.set_prescribed_fusion_source(rho, np.full_like(rho, 5.0e4), np.full_like(rho, 2.0e4))
+        t.set_prescribed_ohmic_source(rho, np.full_like(rho, 1.0e4))
+        t.set_prescribed_exchange_source(rho, np.full_like(rho, 1.0e4))
+        cfg = t.to_config(json_compatible=True)
+        assert cfg['sources']['generic_heat']['mode'] == 'prescribed'
+        assert set(cfg['sources']['generic_heat']['prescribed_values']) == {'power_density_i', 'power_density_e'}
+        assert set(cfg['sources']['generic_particle']['prescribed_values']) == {'particle_source_e'}
+        assert set(cfg['sources']['generic_current']['prescribed_values']) == {'j_parallel'}
+        assert set(cfg['sources']['fusion']['prescribed_values']) == {'power_density_i', 'power_density_e'}
+        assert set(cfg['sources']['ohmic']['prescribed_values']) == {'power_density_e'}
+        assert cfg['sources']['ei_exchange']['mode'] == 'zero'
+        assert 'prescribed_values' not in cfg['sources']['ei_exchange']
+        rt = torax_io()
+        rt.input = rt.from_dict(cfg)
+        rt_cfg = rt.to_config(json_compatible=True)
+        assert set(rt_cfg['sources']['generic_heat']['prescribed_values']) == {'power_density_i', 'power_density_e'}
+        assert rt_cfg['transport']['core_transport_models']['prescribed_0']['disable_chi_e'] is True
+        if _HAS_TORAX:
+            _torax_pkg.ToraxConfig.from_dict(rt_cfg)
+
+    def test_solver_switching_and_fixed_vs_adaptive_keys(self):
+        t = _base_circular_torax()
+        t.add_constant_transport(chi_i=1.0, chi_e=1.0, D_e=0.5, V_e=0.0)
+        t.add_adaptive_newton_raphson_solver(dt_mult=25.0, max_dt=0.2, max_steps=500)
+        cfg_adapt = t.to_config()
+        assert cfg_adapt['solver']['use_fixed_point'] is True
+        assert cfg_adapt['solver']['n_fixed_point_iterations'] == 10
+        assert cfg_adapt['time_step_calculator']['calculator_type'] == 'chi'
+        assert cfg_adapt['time_step_calculator']['max_dt'] == 0.2
+        assert cfg_adapt['time_step_calculator']['max_steps'] == 500
+        assert 'dt' not in cfg_adapt['time_step_calculator']
+        if _HAS_TORAX:
+            _torax_pkg.ToraxConfig.from_dict(cfg_adapt)
+
+        t.add_fixed_linear_solver(dt_fixed=0.05)
+        cfg_fixed = t.to_config()
+        assert cfg_fixed['solver']['solver_type'] == 'linear'
+        assert 'log_iterations' not in cfg_fixed['solver']
+        assert cfg_fixed['time_step_calculator']['calculator_type'] == 'fixed'
+        assert cfg_fixed['time_step_calculator']['dt'] == 0.05
+        assert 'max_dt' not in cfg_fixed['time_step_calculator']
+        assert 'max_steps' not in cfg_fixed['time_step_calculator']
+        if _HAS_TORAX:
+            _torax_pkg.ToraxConfig.from_dict(cfg_fixed)
+
+    def test_multitime_eqdsk_dict_roundtrip(self):
+        t = _base_circular_torax()
+        t.add_geometry('eqdsk', geofiles={0.0: 'a.eqdsk', 1.0: 'b.eqdsk'}, geodir='/tmp', cocos=11)
+        cfg = t.to_config(json_compatible=True)
+        assert cfg['geometry']['model_name'] == 'eqdsk'
+        assert cfg['geometry']['geometry_file'] == {0.0: 'a.eqdsk', 1.0: 'b.eqdsk'}
+        assert 'Ip_from_parameters' not in cfg['geometry']
+        assert cfg['profile_conditions']['psi_source'] == 'geometry'
+        assert cfg['profile_conditions']['I_p_source'] == 'geometry'
+        rt = torax_io()
+        rt.input = rt.from_dict(cfg)
+        rt_cfg = rt.to_config(json_compatible=True)
+        assert rt_cfg['geometry']['geometry_file'] == {0.0: 'a.eqdsk', 1.0: 'b.eqdsk'}
+        t.add_geometry('eqdsk', geofiles={0.0: 'a.eqdsk', 1.0: 'b.eqdsk'}, geodir='/tmp', ip_from_parameters=True, cocos=11)
+        assert t.to_config()['profile_conditions']['I_p_source'] == 'profile_conditions'
+
+    @pytest.mark.skipif(not _HAS_TORAX, reason='torax is not installed')
+    def test_pedestals_ibc_patches_and_transport_models_validate(self):
+        # Pressure pedestal + QLKNN + inner/outer patches
+        t1 = _base_circular_torax()
+        t1.add_pedestal_by_pressure(pped=5.0e4, nped=5.0e19, tpedratio=1.0, wrho=0.9)
+        t1.add_qlknn_transport(rho_min=0.1, rho_max=0.85)
+        t1.add_transport_inner_patch(0.5, 0.0, 1.0, 1.0, rho=0.1)
+        t1.add_transport_outer_patch(0.2, 0.0, 0.5, 0.5, rho=0.85)
+        t1.add_pedestal_critical_gradient_transport()
+        t1.set_gaussian_generic_current_source(0.3, 0.1, 1.0e5)
+        cfg1 = t1.to_config()
+        assert cfg1['transport']['core_transport_models']['prescribed_1']['merge_mode'] == 'overwrite'
+        assert cfg1['transport']['core_transport_models']['prescribed_2']['merge_mode'] == 'overwrite'
+        _torax_pkg.ToraxConfig.from_dict(cfg1)
+
+        # Temperature pedestal via IBC + CGM
+        t2 = _base_circular_torax()
+        t2.add_internal_boundary_with_pedestal(rho=0.85)
+        t2.add_critical_gradient_transport()
+        _torax_pkg.ToraxConfig.from_dict(t2.to_config())
+
+        # Prescribed IBC + TGLFNN
+        t3 = _base_circular_torax()
+        t3.add_internal_boundary('T_e', rho=0.85)
+        t3.add_tglfnn_transport()
+        cfg3 = t3.to_config(json_compatible=True)
+        assert cfg3['transport']['core_transport_models']['tglfnn_0']['model_name'] == 'tglfnn_ukaea'
+        _torax_pkg.ToraxConfig.from_dict(cfg3)
+
+    @pytest.mark.skipif(not _HAS_TORAX, reason='torax is not installed')
+    def test_from_gacode_validates_in_torax_v2(self, gacode_file_path):
+        g = gacode_io(input=gacode_file_path)
+        t = torax_io.from_gacode(g, side='input')
+        t.add_geometry('circular')
+        t.add_bohm_gyrobohm_transport()
+        t.set_numerics(0.0, 0.1)
+        t.add_fixed_linear_solver(dt_fixed=0.05)
+        _torax_pkg.ToraxConfig.from_dict(t.to_config())
+
 class TestPrescribedTransport:
 
     def test_scalars_1d_and_2d_arrays_on_distinct_grids(self):
