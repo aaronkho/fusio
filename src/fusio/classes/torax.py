@@ -44,6 +44,7 @@ TORAX_V2_OUTPUT_RENAMES: Final[Mapping[str, str]] = {
     'P_LH_high_density': 'P_LH_martin_high_density',
     'P_LH_low_density': 'P_LH_martin_low_density',
     'P_LH_min': 'P_LH_martin_min',
+    'n_e_min_P_LH': 'n_e_min_P_LH_martin',
     'j_total': 'j_toroidal_total',
     'j_ohmic': 'j_toroidal_ohmic',
     'j_bootstrap': 'j_toroidal_bootstrap',
