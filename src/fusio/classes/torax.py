@@ -1770,7 +1770,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ei_exchange.mode'] = 'ZERO'
+        newattrs['sources.ei_exchange.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delattrs = [
             'sources.ei_exchange.Qei_multiplier'
@@ -1787,7 +1787,7 @@ class torax_io(io):
     ) -> None:
         self.reset_exchange_source()
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ei_exchange.mode'] = 'MODEL_BASED'
+        newattrs['sources.ei_exchange.mode'] = 'model_based'
         newattrs['sources.ei_exchange.Qei_multiplier'] = 1.0
         self.update_input_attrs(newattrs)
 
@@ -1797,25 +1797,15 @@ class torax_io(io):
         rho: NDArray,
         values: NDArray,
     ) -> None:
-        # TODO: Should make 2D version
         self.reset_exchange_source()
-        data = self.input
-        time = data.get('time', xr.DataArray()).to_numpy().flatten()
-        newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
-        newvals = np.interp(newrho, rho, values)
-        newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ei_exchange.mode'] = 'PRESCRIBED'
-        self.update_input_attrs(newattrs)
-        newvars: MutableMapping[str, Any] = {}
-        newvars['sources.ei_exchange.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
-        self.update_input_data_vars(newvars)
+        logger.warning('TORAX v2 does not support prescribed ei_exchange, keeping mode="zero"')
 
 
     def reset_ohmic_source(
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ohmic.mode'] = 'ZERO'
+        newattrs['sources.ohmic.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.ohmic.prescribed_values',
@@ -1828,7 +1818,7 @@ class torax_io(io):
     ) -> None:
         self.reset_ohmic_source()
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ohmic.mode'] = 'MODEL_BASED'
+        newattrs['sources.ohmic.mode'] = 'model_based'
         self.update_input_attrs(newattrs)
         if 'sources.generic_current.prescribed_values' in self.input and 'profile_conditions.j_ohmic' in self.input:
             self.input['sources.generic_current.prescribed_values'] = self.input['sources.generic_current.prescribed_values'] - self.input['profile_conditions.j_ohmic']
@@ -1846,7 +1836,7 @@ class torax_io(io):
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ohmic.mode'] = 'PRESCRIBED'
+        newattrs['sources.ohmic.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.ohmic.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
@@ -1857,7 +1847,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.fusion.mode'] = 'ZERO'
+        newattrs['sources.fusion.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.fusion.prescribed_values',
@@ -1871,7 +1861,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.fusion.mode'] = 'MODEL_BASED'
+        newattrs['sources.fusion.mode'] = 'model_based'
         self.update_input_attrs(newattrs)
 
 
@@ -1889,7 +1879,7 @@ class torax_io(io):
         neweheat = np.interp(newrho, rho, eheat)
         newiheat = np.interp(newrho, rho, iheat)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.fusion.mode'] = 'PRESCRIBED'
+        newattrs['sources.fusion.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.fusion.prescribed_values_el'] = (['time', 'rho'], np.repeat(np.atleast_2d(neweheat), len(time), axis=0))
@@ -1901,7 +1891,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.gas_puff.mode'] = 'ZERO'
+        newattrs['sources.gas_puff.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.gas_puff.puff_decay_length',
@@ -1923,7 +1913,7 @@ class torax_io(io):
         newvars['sources.gas_puff.S_total'] = (['time'], np.zeros_like(time) + total)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.gas_puff.mode'] = 'MODEL_BASED'
+        newattrs['sources.gas_puff.mode'] = 'model_based'
         self.update_input_attrs(newattrs)
 
 
@@ -1939,7 +1929,7 @@ class torax_io(io):
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.gas_puff.mode'] = 'PRESCRIBED'
+        newattrs['sources.gas_puff.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.gas_puff.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
@@ -1956,7 +1946,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.bremsstrahlung.mode'] = 'ZERO'
+        newattrs['sources.bremsstrahlung.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.bremsstrahlung.prescribed_values',
@@ -1973,7 +1963,7 @@ class torax_io(io):
     ) -> None:
         self.reset_bremsstrahlung_source()
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.bremsstrahlung.mode'] = 'MODEL_BASED'
+        newattrs['sources.bremsstrahlung.mode'] = 'model_based'
         newattrs['sources.bremsstrahlung.use_relativistic_correction'] = True
         self.update_input_attrs(newattrs)
 
@@ -1990,7 +1980,7 @@ class torax_io(io):
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
+        newattrs['sources.bremsstrahlung.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
@@ -2001,7 +1991,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.impurity_radiation.mode'] = 'ZERO'
+        newattrs['sources.impurity_radiation.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.impurity_radiation.prescribed_values',
@@ -2019,7 +2009,7 @@ class torax_io(io):
     ) -> None:
         self.reset_line_radiation_source()
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.impurity_radiation.mode'] = 'MODEL_BASED'
+        newattrs['sources.impurity_radiation.mode'] = 'model_based'
         newattrs['sources.impurity_radiation.model_name'] = 'mavrin_fit'
         newattrs['sources.impurity_radiation.radiation_multiplier'] = 1.0
         self.update_input_attrs(newattrs)
@@ -2039,7 +2029,7 @@ class torax_io(io):
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
+        newattrs['sources.impurity_radiation.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
@@ -2050,7 +2040,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.cyclotron_radiation.mode'] = 'ZERO'
+        newattrs['sources.cyclotron_radiation.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.cyclotron_radiation.prescribed_values',
@@ -2070,7 +2060,7 @@ class torax_io(io):
     ) -> None:
         self.reset_synchrotron_source()
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.cyclotron_radiation.mode'] = 'MODEL_BASED'
+        newattrs['sources.cyclotron_radiation.mode'] = 'model_based'
         newattrs['sources.cyclotron_radiation.wall_reflection_coeff'] = 0.9
         newattrs['sources.cyclotron_radiation.beta_min'] = 0.5
         newattrs['sources.cyclotron_radiation.beta_max'] = 8.0
@@ -2090,7 +2080,7 @@ class torax_io(io):
         newrho = data.get('rho', xr.DataArray()).to_numpy().flatten()
         newvals = np.interp(newrho, rho, values)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.cyclotron_radiation.mode'] = 'PRESCRIBED'
+        newattrs['sources.cyclotron_radiation.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.cyclotron_radiation.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newvals), len(time), axis=0))
@@ -2117,7 +2107,8 @@ class torax_io(io):
         newvars['sources.icrh.P_total'] = (['time'], np.zeros_like(time) + total)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.icrh.mode'] = 'MODEL_BASED'
+        newattrs['sources.icrh.model_name'] = 'toric_nn'
+        newattrs['sources.icrh.mode'] = 'model_based'
         newattrs['sources.icrh.minority_species'] = 'He3'
         newattrs['sources.icrh.wall_inner'] = iwall
         newattrs['sources.icrh.wall_outer'] = owall
@@ -2128,9 +2119,8 @@ class torax_io(io):
         self,
         path: str | Path
     ) -> None:
-        data = self.input
         newattrs: MutableMapping[str, Any] = {}
-        if self.input.attrs.get('sources.icrh.mode', 'ZERO') == 'MODEL_BASED':
+        if str(self.input.attrs.get('sources.icrh.mode', 'zero')).lower() == 'model_based':
             newattrs['sources.icrh.model_path'] = f'{path}'
         self.update_input_attrs(newattrs)
 
@@ -2152,7 +2142,7 @@ class torax_io(io):
         newvars['sources.ecrh.current_drive_efficiency'] = (['time', 'rho'], np.repeat(np.expand_dims(np.zeros_like(time) + efficiency, axis=-1), len(data['rho']), axis=-1))
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.ecrh.mode'] = 'MODEL_BASED'
+        newattrs['sources.ecrh.mode'] = 'model_based'
         self.update_input_attrs(newattrs)
 
 
@@ -2160,7 +2150,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.generic_heat.mode'] = 'ZERO'
+        newattrs['sources.generic_heat.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.generic_heat.prescribed_values',
@@ -2183,7 +2173,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.generic_particle.mode'] = 'ZERO'
+        newattrs['sources.generic_particle.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.generic_particle.prescribed_values',
@@ -2202,7 +2192,7 @@ class torax_io(io):
         self,
     ) -> None:
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.generic_current.mode'] = 'ZERO'
+        newattrs['sources.generic_current.mode'] = 'zero'
         self.update_input_attrs(newattrs)
         delvars = [
             'sources.generic_current.prescribed_values',
@@ -2238,7 +2228,7 @@ class torax_io(io):
         newvars['sources.generic_heat.absorption_fraction'] = (['time'], np.zeros_like(time) + afrac)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.generic_heat.mode'] = 'MODEL_BASED'
+        newattrs['sources.generic_heat.mode'] = 'model_based'
         self.update_input_attrs(newattrs)
 
 
@@ -2264,7 +2254,7 @@ class torax_io(io):
         newvars['sources.generic_particle.S_total'] = ([tvar], np.zeros_like(time) + total)
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.generic_particle.mode'] = 'MODEL_BASED'
+        newattrs['sources.generic_particle.mode'] = 'model_based'
         self.update_input_attrs(newattrs)
 
 
@@ -2281,10 +2271,9 @@ class torax_io(io):
         newvars['sources.generic_current.gaussian_location'] = (['time'], np.zeros_like(time) + mu)
         newvars['sources.generic_current.gaussian_width'] = (['time'], np.zeros_like(time) + sigma)
         newvars['sources.generic_current.I_generic'] = (['time'], np.zeros_like(time) + total)
-        newvars['sources.generic_current.fraction_of_total_current'] = (['time'], np.ones_like(time))
         self.update_input_data_vars(newvars)
         newattrs: MutableMapping[str, Any] = {}
-        newattrs['sources.generic_current.mode'] = 'MODEL_BASED'
+        newattrs['sources.generic_current.mode'] = 'model_based'
         newattrs['sources.generic_current.use_absolute_current'] = True
         self.update_input_attrs(newattrs)
 
@@ -2303,7 +2292,7 @@ class torax_io(io):
         newiheat = np.interp(newrho, rho, iheat)
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_generic_heat'] = True
-        newattrs['sources.generic_heat.mode'] = 'PRESCRIBED'
+        newattrs['sources.generic_heat.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], np.repeat(np.atleast_2d(neweheat), len(time), axis=0))
@@ -2323,7 +2312,7 @@ class torax_io(io):
         newparticle = np.interp(newrho, rho, particle)
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_generic_particle'] = True
-        newattrs['sources.generic_particle.mode'] = 'PRESCRIBED'
+        newattrs['sources.generic_particle.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newparticle), len(time), axis=0))
@@ -2342,7 +2331,7 @@ class torax_io(io):
         newcurrent = np.interp(newrho, rho, current)
         newattrs: MutableMapping[str, Any] = {}
         newattrs['use_generic_current'] = True
-        newattrs['sources.generic_current.mode'] = 'PRESCRIBED'
+        newattrs['sources.generic_current.mode'] = 'prescribed'
         self.update_input_attrs(newattrs)
         newvars: MutableMapping[str, Any] = {}
         newvars['sources.generic_current.prescribed_values'] = (['time', 'rho'], np.repeat(np.atleast_2d(newcurrent), len(time), axis=0))
@@ -3194,16 +3183,20 @@ class torax_io(io):
                 print(f'{key:10}: {val:.2f} {units}')
 
 
-    @staticmethod
-    def _prescribed_value_suffixes(
-        field: str,
-        n: int,
-    ) -> list[str]:
-        if n == 1:
-            return ['']
-        if field == 'ecrh':
-            return ['_el', '_j']
-        return ['_ion', '_el']
+    _prescribed_value_channels: Final[Mapping[str, Sequence[tuple[str, str]]]] = {
+        'generic_heat': (('power_density_i', '_ion'), ('power_density_e', '_el')),
+        'fusion': (('power_density_i', '_ion'), ('power_density_e', '_el')),
+        'icrh': (('power_density_i', '_ion'), ('power_density_e', '_el')),
+        'ecrh': (('power_density_e', '_el'), ('j_parallel', '_j')),
+        'ohmic': (('power_density_e', ''),),
+        'bremsstrahlung': (('power_density_e', ''),),
+        'impurity_radiation': (('power_density_e', ''),),
+        'cyclotron_radiation': (('power_density_e', ''),),
+        'generic_current': (('j_parallel', ''),),
+        'generic_particle': (('particle_source_e', ''),),
+        'gas_puff': (('particle_source_e', ''),),
+        'pellet': (('particle_source_e', ''),),
+    }
 
 
     def to_dict(
@@ -3315,18 +3308,23 @@ class torax_io(io):
         for srctag in srctags:
             field = srctag.split('.')[-1]
             pvtag = f'{srctag}.prescribed_values'
-            if datadict.get(f'{srctag}.mode', 'MODEL_BASED') != 'PRESCRIBED':
+            mode = datadict.get(f'{srctag}.mode', 'model_based')
+            if isinstance(mode, str):
+                mode = mode.lower()
+                if f'{srctag}.mode' in datadict:
+                    datadict[f'{srctag}.mode'] = mode
+            if mode != 'prescribed' or field == 'ei_exchange':
                 for k in [k for k in datadict if k.startswith(pvtag)]:
                     datadict.pop(k)
-            elif field == 'ei_exchange' and pvtag in datadict:
-                val = datadict.pop(pvtag)
-                neg = -val if isinstance(val, xr.DataArray) else (*val[:-1], (-np.asarray(val[-1])).tolist())
-                datadict[pvtag] = (val, neg)
+                if field == 'ei_exchange' and mode == 'prescribed':
+                    datadict[f'{srctag}.mode'] = 'zero'
             else:
-                for suffixes in (self._prescribed_value_suffixes(field, 2), self._prescribed_value_suffixes(field, 1)):
-                    if all(f'{pvtag}{sfx}' in datadict for sfx in suffixes):
-                        datadict[pvtag] = tuple(datadict.pop(f'{pvtag}{sfx}') for sfx in suffixes)
-                        break
+                pvdict: MutableMapping[str, Any] = {}
+                for channel, sfx in self._prescribed_value_channels.get(field, ()):
+                    if f'{pvtag}{sfx}' in datadict:
+                        pvdict[channel] = datadict.pop(f'{pvtag}{sfx}')
+                if pvdict:
+                    datadict[pvtag] = pvdict
         if datadict.get('time_step_calculator.calculator_type') == 'fixed':
             datadict.pop('time_step_calculator.max_dt', None)
             datadict.pop('time_step_calculator.chi_timestep_prefactor', None)
@@ -3452,17 +3450,19 @@ class torax_io(io):
             for field in json_dict[key]:
                 for k, v in json_dict[key][field].items():
                     if k == 'prescribed_values':
-                        suffixes: Sequence[str | None] = ['', None] if field == 'ei_exchange' and len(v) > 1 else self._prescribed_value_suffixes(field, len(v))
-                        for vv, sfx in zip(v, suffixes):
-                            if sfx is None:
-                                continue
-                            ndim = len(vv) - 1
-                            dims = [f'time_{field}_{k}{sfx}']
-                            pre_coords[dims[0]] = np.asarray(vv[0])
-                            if ndim > 1:
-                                dims.append(f'rho_{field}_{k}{sfx}')
-                                pre_coords[dims[1]] = np.asarray(vv[1])
-                            data_vars[f'{key}.{field}.{k}{sfx}'] = (dims, np.asarray(vv[-1]))
+                        if isinstance(v, dict):
+                            sfxmap = dict(self._prescribed_value_channels.get(field, ()))
+                            for ch, vv in v.items():
+                                sfx = sfxmap.get(ch)
+                                if sfx is None or not isinstance(vv, (tuple, list)):
+                                    continue
+                                ndim = len(vv) - 1
+                                dims = [f'time_{field}_{k}{sfx}']
+                                pre_coords[dims[0]] = np.asarray(vv[0])
+                                if ndim > 1:
+                                    dims.append(f'rho_{field}_{k}{sfx}')
+                                    pre_coords[dims[1]] = np.asarray(vv[1])
+                                data_vars[f'{key}.{field}.{k}{sfx}'] = (dims, np.asarray(vv[-1]))
                     elif isinstance(v, (tuple, list)):
                         ndim = len(v) - 1
                         dims = [f'time_{field}_{k}']
@@ -3712,7 +3712,7 @@ class torax_io(io):
                 fusion_el_source = None
                 fusion_ion_source = None
                 if 'qohme' in data and np.abs(data['qohme']).sum() != 0.0:
-                    attrs['sources.ohmic.mode'] = 'PRESCRIBED'
+                    attrs['sources.ohmic.mode'] = 'prescribed'
                     data_vars['sources.ohmic.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qohme'].to_numpy())
                 if 'qbeame' in data and np.abs(data['qbeame']).sum() != 0.0:
                     if external_el_heat_source is None:
@@ -3731,21 +3731,18 @@ class torax_io(io):
                         external_ion_heat_source = np.zeros_like(data['qrfi'].to_numpy())
                     external_ion_heat_source += 1.0e6 * data['qrfi'].to_numpy()
                 if 'qsync' in data and np.abs(data['qsync']).sum() != 0.0:
-                    attrs['sources.cyclotron_radiation.mode'] = 'PRESCRIBED'
+                    attrs['sources.cyclotron_radiation.mode'] = 'prescribed'
                     data_vars['sources.cyclotron_radiation.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qsync'].to_numpy())
                 if 'qbrem' in data and np.abs(data['qbrem']).sum() != 0.0:
-                    attrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
+                    attrs['sources.bremsstrahlung.mode'] = 'prescribed'
                     data_vars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qbrem'].to_numpy())
                 if 'qline' in data and np.abs(data['qline']).sum() != 0.0:
-                    attrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
+                    attrs['sources.impurity_radiation.mode'] = 'prescribed'
                     data_vars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qline'].to_numpy())
                 if 'qfuse' in data and np.abs(data['qfuse']).sum() != 0.0:
                     fusion_el_source = 1.0e6 * data['qfuse'].to_numpy()
                 if 'qfusi' in data and np.abs(data['qfusi']).sum() != 0.0:
                     fusion_ion_source = 1.0e6 * data['qfusi'].to_numpy()
-                if 'qei' in data and np.abs(data['qei']).sum() != 0.0:
-                    attrs['sources.ei_exchange.mode'] = 'PRESCRIBED'
-                    data_vars['sources.ei_exchange.prescribed_values'] = (['time', 'rho'], 1.0e6 * data['qei'].to_numpy())
                 #if 'qione' in data and np.abs(data['qione']).sum() != 0.0:
                 #    pass
                 #if 'qioni' in data and np.abs(data['qioni']).sum() != 0.0:
@@ -3784,24 +3781,24 @@ class torax_io(io):
                 #    pass
                 if external_el_heat_source is not None:
                     attrs['use_generic_heat'] = True
-                    attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
+                    attrs['sources.generic_heat.mode'] = 'prescribed'
                     data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], external_el_heat_source)
                 if external_ion_heat_source is not None:
                     attrs['use_generic_heat'] = True
-                    attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
+                    attrs['sources.generic_heat.mode'] = 'prescribed'
                     data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], external_ion_heat_source)
                 if external_particle_source is not None:
                     attrs['use_generic_particle'] = True
-                    attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
+                    attrs['sources.generic_particle.mode'] = 'prescribed'
                     data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], external_particle_source)
                 if external_current_source is not None:
                     attrs['use_generic_current'] = True
-                    attrs['sources.generic_current.mode'] = 'PRESCRIBED'
+                    attrs['sources.generic_current.mode'] = 'prescribed'
                     data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], external_current_source)
                     attrs['sources.generic_current.use_absolute_current'] = True
                 if fusion_el_source is not None or fusion_ion_source is not None:
                     attrs['use_fusion'] = True
-                    attrs['sources.fusion.mode'] = 'PRESCRIBED'
+                    attrs['sources.fusion.mode'] = 'prescribed'
                     data_vars['sources.fusion.prescribed_values_el'] = (['time', 'rho'], fusion_el_source if fusion_el_source is not None else np.zeros_like(fusion_ion_source))
                     data_vars['sources.fusion.prescribed_values_ion'] = (['time', 'rho'], fusion_ion_source if fusion_ion_source is not None else np.zeros_like(fusion_el_source))
                 newobj.input = xr.Dataset(data_vars=data_vars, coords=coords, attrs=attrs)
@@ -4034,15 +4031,15 @@ class torax_io(io):
                 if omas_tag in data:
                     srctag = 'ohmic'
                     if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
-                        cs_attrs['sources.ohmic.mode'] = 'PRESCRIBED'
+                        cs_attrs['sources.ohmic.mode'] = 'prescribed'
                         cs_data_vars['sources.ohmic.prescribed_values'] = (['time', 'rho'], data.sel({src_cs: srctag})[omas_tag].to_numpy())
                     srctag = 'line_radiation'
                     if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
-                        cs_attrs['sources.impurity_radiation.mode'] = 'PRESCRIBED'
+                        cs_attrs['sources.impurity_radiation.mode'] = 'prescribed'
                         cs_data_vars['sources.impurity_radiation.prescribed_values'] = (['time', 'rho'], data.sel({src_cs: srctag})[omas_tag].to_numpy())
                     srctag = 'bremsstrahlung'
                     if srctag in srclist and np.abs(data.sel({src_cs: srctag})[omas_tag]).sum() != 0.0:
-                        cs_attrs['sources.bremsstrahlung.mode'] = 'PRESCRIBED'
+                        cs_attrs['sources.bremsstrahlung.mode'] = 'prescribed'
                         cs_data_vars['sources.bremsstrahlung.prescribed_values'] = (['time', 'rho'], data.sel({src_cs: srctag})[omas_tag].to_numpy())
                     #srctag = 'synchrotron'
                     srctag = 'ic'
@@ -4076,17 +4073,17 @@ class torax_io(io):
                         fusion_source += data.sel({src_cs: srctag})[omas_tag].sum(ion_cp_i).to_numpy()
                 if external_el_heat_source is not None:
                     cs_attrs['use_generic_heat'] = True
-                    cs_attrs['sources.generic_heat.mode'] = 'PRESCRIBED'
+                    cs_attrs['sources.generic_heat.mode'] = 'prescribed'
                     cs_data_vars['sources.generic_heat.prescribed_values_el'] = (['time', 'rho'], external_el_heat_source)
                     if external_ion_heat_source is not None:
                         cs_data_vars['sources.generic_heat.prescribed_values_ion'] = (['time', 'rho'], external_ion_heat_source)
                 if external_particle_source is not None:
                     cs_attrs['use_generic_particle'] = True
-                    cs_attrs['sources.generic_particle.mode'] = 'PRESCRIBED'
+                    cs_attrs['sources.generic_particle.mode'] = 'prescribed'
                     cs_data_vars['sources.generic_particle.prescribed_values'] = (['time', 'rho'], external_particle_source)
                 if external_current_source is not None:
                     cs_attrs['use_generic_current'] = True
-                    cs_attrs['sources.generic_current.mode'] = 'PRESCRIBED'
+                    cs_attrs['sources.generic_current.mode'] = 'prescribed'
                     cs_data_vars['sources.generic_current.prescribed_values'] = (['time', 'rho'], external_current_source)
                     cs_attrs['sources.generic_current.use_absolute_current'] = True
                 #if fusion_source is not None:
