@@ -97,6 +97,7 @@ TORAX_VARIABLE_HINTS: Final[Sequence[str]] = [
     'rho_cell_norm',
     'rho_face_norm',
     'j_bootstrap',
+    'j_toroidal_bootstrap',
 ]
 FASTRAN_VARIABLE_HINTS: Final[Sequence[str]] = [
     'rhob',

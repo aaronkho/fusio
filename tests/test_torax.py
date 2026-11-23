@@ -482,6 +482,20 @@ class TestToraxV2Config:
         t.add_fixed_linear_solver(dt_fixed=0.05)
         _torax_pkg.ToraxConfig.from_dict(t.to_config())
 
+    def test_model_state_groups_are_namespaced_on_read(self, tmp_path):
+        nc_path = tmp_path / 'synthetic_v2.nc'
+        t_coord = np.array([0.0, 0.1])
+        dt = xr.DataTree.from_dict({
+            '/': xr.Dataset(coords={'time': t_coord}),
+            '/scalars': xr.Dataset({'rho_norm_top': ('time', np.array([0.9, 0.9]))}, coords={'time': t_coord}),
+            '/model_state/pedestal': xr.Dataset({'rho_norm_top': ('time', np.array([0.85, 0.85]))}, coords={'time': t_coord}),
+        })
+        dt.to_netcdf(nc_path)
+        ds = torax_io(output=nc_path).output
+        np.testing.assert_allclose(ds['rho_norm_top'].to_numpy(), [0.9, 0.9])
+        np.testing.assert_allclose(ds['model_state.pedestal.rho_norm_top'].to_numpy(), [0.85, 0.85])
+
+
 class TestPrescribedTransport:
 
     def test_scalars_1d_and_2d_arrays_on_distinct_grids(self):

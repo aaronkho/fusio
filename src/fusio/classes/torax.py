@@ -54,6 +54,7 @@ TORAX_V2_OUTPUT_RENAMES: Final[Mapping[str, str]] = {
     'ei_exchange': 'p_ei_exchange_i',
     'n_impurity': 'n_impurity_bundled',
     'Z_impurity': 'Z_impurity_bundled',
+    'vloop_lcfs': 'v_loop_lcfs',
 }
 
 
@@ -618,6 +619,10 @@ class torax_io(io):
                     if key.startswith('/auxiliary'):
                         if dsg.data_vars:
                             prefix = '.'.join(key.split('/')[2:])
+                            auxlist.append(dsg.rename({var: f'{prefix}.{var}' for var in dsg.data_vars}))
+                    elif key.startswith('/model_state'):
+                        if dsg.data_vars:
+                            prefix = '.'.join(key.split('/')[1:])
                             auxlist.append(dsg.rename({var: f'{prefix}.{var}' for var in dsg.data_vars}))
                     elif key == '/' or dsg.data_vars:
                         dslist.append(dsg)
