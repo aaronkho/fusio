@@ -77,6 +77,7 @@ _SKIP_FIELDS = frozenset({
 _ABS_FIELDS = frozenset({
     'psi',
     'Ip_profile',
+    'I_p_profile',
 })
 
 _TRIM_AXIS_FIELDS = frozenset({
@@ -84,6 +85,7 @@ _TRIM_AXIS_FIELDS = frozenset({
     'vpr',
     'int_dl_over_Bp',
     'Ip_profile',
+    'I_p_profile',
     'flux_surf_avg_grad_psi',
     'flux_surf_avg_grad_psi2',
     'flux_surf_avg_grad_psi2_over_R2',
@@ -98,6 +100,7 @@ _N_TRIM = 5
 
 _N_TRIM_AXIS_OVERRIDES = {
     'Ip_profile': 10,
+    'I_p_profile': 10,
     'trapped_fraction': 1,
 }
 
@@ -107,6 +110,7 @@ _FIELD_TOLERANCES = {
     'psi': 0.25,
     'int_dl_over_Bp': 0.15,
     'Ip_profile': 0.10,
+    'I_p_profile': 0.10,
     'flux_surf_avg_B2': 0.05,
 }
 
@@ -127,18 +131,15 @@ def _build_intermediates_from_eqdsk(eqdsk_path: str, cocos: int = 11):
         geometry_file=os.path.basename(eqdsk_path),
         geometry_directory=os.path.dirname(eqdsk_path),
         cocos=cocos,
-        Ip_from_parameters=False,
     )
     intermediates = torax_eqdsk._construct_intermediates_from_eqdsk(
-        geometry_directory=config.geometry_directory,
-        geometry_file=config.geometry_file,
-        eqdsk_object=config.eqdsk_object,
-        Ip_from_parameters=config.Ip_from_parameters,
+        eqdsk_data=config.eqdsk_data,
         face_centers=config.get_face_centers(),
         hires_factor=config.hires_factor,
-        cocos=config.cocos,
         n_surfaces=config.n_surfaces,
         last_surface_factor=config.last_surface_factor,
+        target_psi_grid_resolution=config.target_psi_grid_resolution,
+        trapped_fraction_source=config.trapped_fraction_source,
     )
     return intermediates
 
@@ -257,21 +258,49 @@ def _build_intermediates_from_roundtrip(eqdsk_path: str, cocos: int = 11):
         config = torax_imas.IMASConfig(
             imas_filepath='equilibrium.nc',
             geometry_directory=tmp_dir,
-            Ip_from_parameters=False,
             explicit_convert=False,
         )
-        inputs_by_time = imas_geometry.geometry_from_IMAS(
-            geometry_directory=config.geometry_directory,
-            imas_filepath=config.imas_filepath,
-            Ip_from_parameters=config.Ip_from_parameters,
+        slice_data = config.imas_data
+        if isinstance(slice_data, dict):
+            slice_data = next(iter(slice_data.values()))
+        intermediates = standard_geometry.StandardGeometryIntermediates(
+            geometry_type=geometry.GeometryType.IMAS,
+            R_major=np.array(slice_data.R_major),
+            a_minor=np.array(slice_data.a_minor),
+            B_0=np.array(slice_data.B_0),
+            psi=slice_data.psi,
+            I_p_profile=slice_data.I_p_profile,
+            Phi=slice_data.Phi,
+            R_in=slice_data.R_in,
+            R_out=slice_data.R_out,
+            F=slice_data.F,
+            int_dl_over_Bp=slice_data.int_dl_over_Bp,
+            flux_surf_avg_1_over_R=slice_data.flux_surf_avg_1_over_R,
+            flux_surf_avg_1_over_R2=slice_data.flux_surf_avg_1_over_R2,
+            flux_surf_avg_grad_psi=slice_data.flux_surf_avg_grad_psi,
+            flux_surf_avg_grad_psi2=slice_data.flux_surf_avg_grad_psi2,
+            flux_surf_avg_grad_psi2_over_R2=slice_data.flux_surf_avg_grad_psi2_over_R2,
+            flux_surf_avg_B2=slice_data.flux_surf_avg_B2,
+            flux_surf_avg_1_over_B2=slice_data.flux_surf_avg_1_over_B2,
+            trapped_fraction=slice_data.trapped_fraction,
+            delta_upper_face=slice_data.delta_upper_face,
+            delta_lower_face=slice_data.delta_lower_face,
+            elongation=slice_data.elongation,
+            vpr=slice_data.vpr,
             face_centers=config.get_face_centers(),
             hires_factor=config.hires_factor,
-            explicit_convert=config.explicit_convert,
-        )
-        # Single time slice was written above, so take the only entry.
-        inputs = next(iter(inputs_by_time.values()))
-        intermediates = standard_geometry.StandardGeometryIntermediates(
-            geometry_type=geometry.GeometryType.IMAS, **inputs
+            z_magnetic_axis=(
+                np.array(slice_data.z_magnetic_axis)
+                if slice_data.z_magnetic_axis is not None
+                else None
+            ),
+            diverted=slice_data.diverted,
+            connection_length_target=None,
+            connection_length_divertor=None,
+            angle_of_incidence_target=None,
+            R_OMP=None,
+            R_target=None,
+            B_pol_OMP=None,
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

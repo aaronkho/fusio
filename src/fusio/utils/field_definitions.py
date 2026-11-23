@@ -507,53 +507,44 @@ gacode_unit_strings: Final[Mapping[str, str]] = {
 }
 
 
-# TORAX full settings list available at https://torax.readthedocs.io/en/v1.3.0/configuration.html
+# TORAX full settings list available at https://torax.readthedocs.io/en/v2.0.0/configuration.html
 torax_plasma_composition: Final[Mapping[str, tuple[str, ...]]] = {
     'main_ion': ('-', 'main ion species'),
     'impurity': ('-', 'impurity species'),
     'Z_eff': ('-', 'effective charge'),
     'Z_i_override': ('-', 'override for ion charge number'),
     'A_i_override': ('-', 'override for ion mass number'),
-    'Z_impurity_override': ('-', 'override for impurity charge number'),
-    'A_impurity_override': ('-', 'override for impurity mass number'),
 }
 torax_profile_conditions: Final[Mapping[str, tuple[str, ...]]] = {
-    'Ip': ('A', 'total plasma current'),
-    'use_v_loop_lcfs_boundary_condition': ('', 'toggle LCFS loop voltage as a boundary condition'),
+    'I_p': ('A', 'total plasma current'),
+    'I_p_source': ('-', 'source of plasma current (profile_conditions or geometry)'),
+    'psi_bc_source': ('-', 'outer boundary condition source for poloidal flux (I_p or v_loop)'),
     'v_loop_lcfs': ('V', 'LCFS loop voltage'),
     'T_i': ('keV', 'ion temperature'),
     'T_i_right_bc': ('keV', 'outer boundary condition for ion temperature'),
     'T_e': ('keV', 'electron temperature'),
     'T_e_right_bc': ('keV', 'outer boundary condition for electron temperature'),
     'psi': ('Wb', 'poloidal flux'),
+    'psi_source': ('-', 'source of initial poloidal flux (j, geometry, or profile_conditions)'),
     'n_e': ('m**-3', 'electron density'),
-    'normalize_n_e_to_nbar': ('-', 'toggle normalization of electron density to line-averaged electron density'),
-    'nbar': ('m**-3', 'line-averaged electron density'),
-    'n_e_nbar_is_fGW': ('-', 'toggle whether normalized electron density represents Greenwald fraction'),
+    'normalize_n_e': ('-', 'toggle normalization of electron density to line-averaged electron density'),
+    'n_e_bar': ('m**-3', 'line-averaged electron density'),
+    'n_e_bar_is_f_GW': ('-', 'toggle whether normalized electron density represents Greenwald fraction'),
     'n_e_right_bc': ('m**-3', 'outer boundary condition for electron density'),
-    'n_e_right_bc_is_fGW': ('-', 'toggle whether the outer boundary condition for electron density represents Greenwald fraction'),
-    'current_profile_nu': ('-', 'toggle usage of analytical current profile'),
+    'n_e_right_bc_is_f_GW': ('-', 'toggle whether the outer boundary condition for electron density represents Greenwald fraction'),
+    'current_profile_nu': ('-', 'peaking factor for analytical initial current profile'),
     'initial_j_is_total_current': ('-', 'toggle whether initial current profile represents total current'),
-    'initial_psi_from_j': ('-', 'toggle whether initial poloidal flux is computed from initial current profile'),
     'internal_boundary_conditions': ('-', 'internal boundary conditions for kinetic profiles'),
 }
 torax_numerics: Final[Mapping[str, tuple[str, ...]]] = {
-    't_initial': ('s', 'initial time of simulation'),
-    't_final': ('s', 'final time of simulation'),
-    'exact_t_final': ('s', 'exact final time of simulation'),
     'evolve_ion_heat': ('-', 'toggle solving of ion energy equation'),
     'evolve_electron_heat': ('-', 'toggle solving of electron energy equation'),
     'evolve_current': ('-', 'toggle solving of poloidal flux equation'),
     'evolve_density': ('-', 'toggle solving of electron continuity equation'),
     'current_diffusion_time_reduction_factor': ('-', 'reduction factor for current diffusion time in poloidal flux evolution equation'),
-    'max_dt': ('s', 'maximum time step'),
-    'min_dt': ('s', 'minimum time step'),
-    'chi_timestep_prefactor': ('-', 'multiplier for chi time step calculator'),
-    'fixed_dt': ('s', 'fixed time step'),
-    'dt_reduction_factor': ('-', 'reduction factor for time step'),
 }
 torax_geometry: Final[Mapping[str, tuple[str, ...]]] = {
-    'geometry_type': ('-', 'type of geometry'),
+    'model_name': ('-', 'type of geometry'),
     'n_rho': ('-', 'number of radial grid points'),
     'face_centers': ('-', 'rho toroidal flux coordinates to be used as face center radial grid points for non-uniform grids'),
     'hires_factor': ('-', 'high-resolution factor'),
@@ -585,15 +576,25 @@ torax_transport: Final[Mapping[str, tuple[str, ...]]] = {
 torax_solver: Final[Mapping[str, tuple[str, ...]]] = {
     'solver_type': ('-', 'type of solver'),
     'theta_implicit': ('-', 'toggle implicit theta scheme'),
-    'use_predictor_corrector': ('-', 'toggle use of predictor-corrector method'),
-    'n_corrector_steps': ('-', 'number of corrector steps'),
+    'use_fixed_point': ('-', 'toggle use of fixed-point iterations'),
+    'n_fixed_point_iterations': ('-', 'number of fixed-point iterations'),
     'use_pereverzev': ('-', 'toggle use of Pereverzev method'),
     'chi_pereverzev': ('-', 'chi value for Pereverzev method'),
     'D_pereverzev': ('-', 'diffusivity value for Pereverzev method'),
 }
 torax_time_step_calculator: Final[Mapping[str, tuple[str, ...]]] = {
     'calculator_type': ('-', 'type of time step calculator'),
+    't_initial': ('s', 'initial time of simulation'),
+    't_final': ('s', 'final time of simulation'),
+    'exact_t_final': ('-', 'exact final time of simulation'),
     'tolerance': ('-', 'tolerance for time step calculation'),
+    'min_dt': ('s', 'minimum time step'),
+    'max_dt': ('s', 'maximum time step'),
+    'dt': ('s', 'fixed time step'),
+    'chi_timestep_prefactor': ('-', 'multiplier for chi time step calculator'),
+    'dt_backtracking_factor': ('-', 'reduction factor for time step backtracking'),
+    'allow_backtracking': ('-', 'toggle time step backtracking on solver failure'),
+    'max_steps': ('-', 'maximum number of simulation steps'),
 }
 torax_restart: Final[Mapping[str, tuple[str, ...]]] = {
     'filename': ('-', 'restart file name'),
@@ -611,50 +612,47 @@ torax_geometry_circular: Final[Mapping[str, tuple[str, ...]]] = {
 torax_geometry_chease: Final[Mapping[str, tuple[str, ...]]] = {
     'geometry_file': ('-', 'geometry file name'),
     'geometry_directory': ('-', 'directory containing geometry file'),
-    'Ip_from_parameters': ('A', 'plasma current from parameters'),
     'R_major': ('m', 'major radius'),
     'a_minor': ('m', 'minor radius'),
     'B_0': ('T', 'magnetic field at magnetic axis'),
 }
-torax_geometry_fbt: Final[Mapping[str, tuple[str, ...]]] = {
+torax_geometry_meq: Final[Mapping[str, tuple[str, ...]]] = {
     'geometry_file': ('-', 'geometry file name'),
     'geometry_directory': ('-', 'directory containing geometry file'),
-    'Ip_from_parameters': ('A', 'plasma current from parameters'),
     'LY_object': ('-', 'LY object'),
     'LY_bundle_object': ('-', 'LY bundle object'),
     'LY_to_torax_times': ('s', 'times for LY to torax'),
     'L_object': ('-', 'L object'),
 }
 torax_geometry_eqdsk: Final[Mapping[str, tuple[str, ...]]] = {
-    'geometry_file': ('-', 'geometry file name'),
+    'geometry_file': ('-', 'geometry file name or time mapping'),
     'geometry_directory': ('-', 'directory containing geometry file'),
-    'Ip_from_parameters': ('A', 'plasma current from parameters'),
     'n_surfaces': ('-', 'number of surfaces'),
     'last_surface_factor': ('-', 'factor for last surface'),
 }
 torax_geometry_options: Final[Mapping[str, Any]] = {
     'circular': torax_geometry_circular,
     'chease': torax_geometry_chease,
-    'fbt': torax_geometry_fbt,
+    'meq': torax_geometry_meq,
     'eqdsk': torax_geometry_eqdsk,
 }
 torax_pedestal_nped_tped: Final[Mapping[str, tuple[str, ...]]] = {
-    'n_e_ped': ('m**-3', 'electron density at pedestal'),
-    'n_e_ped_is_fGW': ('-', 'flag for fGW normalization'),
-    'T_i_ped': ('keV', 'ion temperature at pedestal'),
-    'T_e_ped': ('keV', 'electron temperature at pedestal'),
-    'rho_norm_ped_top': ('-', 'normalized radial position at pedestal top'),
+    'n_e_top': ('m**-3', 'electron density at pedestal top'),
+    'n_e_top_is_f_GW': ('-', 'flag for fGW normalization'),
+    'T_i_top': ('keV', 'ion temperature at pedestal top'),
+    'T_e_top': ('keV', 'electron temperature at pedestal top'),
+    'rho_norm_top': ('-', 'normalized radial position at pedestal top'),
 }
 torax_pedestal_pped_nped: Final[Mapping[str, tuple[str, ...]]] = {
-    'P_ped': ('Pa', 'pedestal pressure'),
-    'n_e_ped': ('m**-3', 'electron density at pedestal'),
-    'n_e_ped_is_fGW': ('-', 'flag for fGW normalization'),
+    'p_top': ('Pa', 'pedestal top pressure'),
+    'n_e_top': ('m**-3', 'electron density at pedestal top'),
+    'n_e_top_is_f_GW': ('-', 'flag for fGW normalization'),
     'T_i_T_e_ratio': ('-', 'ratio of ion to electron temperature'),
-    'rho_norm_ped_top': ('-', 'normalized radial position at pedestal top'),
+    'rho_norm_top': ('-', 'normalized radial position at pedestal top'),
 }
 torax_pedestal_options: Final[Mapping[str, Any]] = {
-    'set_T_ped_n_ped': torax_pedestal_nped_tped,
-    'set_P_ped_n_ped': torax_pedestal_pped_nped,
+    'set_T_top_n_top': torax_pedestal_nped_tped,
+    'set_p_top_n_top': torax_pedestal_pped_nped,
 }
 torax_neoclassical_bootstrap: Final[Mapping[str, tuple[str, ...]]] = {
     'model_name': ('-', 'model name'),
@@ -719,7 +717,6 @@ torax_sources_generic_current: Final[Mapping[str, tuple[str, ...]]] = {
     'use_absolute_current': ('-', 'toggle use of absolute current'),
 }
 torax_sources_ei_exchange: Final[Mapping[str, Any]] = {
-    'prescribed_values': '',
     'mode': '',
     'is_explicit': '',
     'Qei_multiplier': '',
