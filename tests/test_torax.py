@@ -244,6 +244,19 @@ class TestPlasmaFromToraxVersions:
         p = plasma_io.from_torax(_torax_with_output(v2), side='output').input
         np.testing.assert_allclose(p['current'].to_numpy(), v2['I_p'].to_numpy())
 
+    def test_gacode_from_torax_falls_back_to_zero_zmag(self):
+        v2 = _torax_v2_output(_torax_v1_output()).drop_vars('z_magnetic_axis')
+        v2 = v2.assign(toroidal_angular_velocity=(['time', 'rho_norm'], np.full_like(v2['T_e'].to_numpy(), 1.0e4)))
+        v2.attrs['config'] = {'plasma_composition': {'main_ion': {'D': {'value': ['float', [1.0]]}}}}
+        gc = gacode_io.from_torax(_torax_with_output(v2), side='output').input
+        assert 'zmag' in gc
+        assert 'zeta' in gc
+        assert 'shape_cos0' in gc
+        assert 'omega0' in gc
+        np.testing.assert_allclose(gc['zmag'].to_numpy(), 0.0)
+        np.testing.assert_allclose(gc['zeta'].to_numpy(), 0.0)
+        np.testing.assert_allclose(gc['omega0'].to_numpy(), 1.0e4)
+
 
 class TestImpuritiesFromGacode:
 
