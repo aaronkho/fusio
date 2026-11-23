@@ -1895,23 +1895,25 @@ class gacode_io(io):
                     data_vars['rmaj'] = (['n', 'rho'], rmaj.to_numpy())
                 if 'z_magnetic_axis' in data:
                     data_vars['zmag'] = (['n', 'rho'], np.repeat(np.expand_dims(data['z_magnetic_axis'].to_numpy(), axis=1), len(coords['rho']), axis=1))
+                else:
+                    data_vars['zmag'] = (['n', 'rho'], copy.deepcopy(zeros))
                 if 'elongation' in data:
                     data_vars['kappa'] = (['n', 'rho'], data['elongation'].to_numpy())
                 if 'delta' in data:
                     delta = data['delta'].interp({'rho_face_norm': data['rho_norm'].to_numpy().flatten()}, kwargs={'fill_value': 'extrapolate'})
                     data_vars['delta'] = (['n', 'rho'], delta.to_numpy())
-                data['zeta'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_cos0'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_cos1'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_cos2'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_cos3'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_cos4'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_cos5'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_cos6'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_sin3'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_sin4'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_sin5'] = (['n', 'rho'], copy.deepcopy(zeros))
-                data['shape_sin6'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['zeta'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_cos0'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_cos1'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_cos2'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_cos3'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_cos4'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_cos5'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_cos6'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_sin3'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_sin4'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_sin5'] = (['n', 'rho'], copy.deepcopy(zeros))
+                data_vars['shape_sin6'] = (['n', 'rho'], copy.deepcopy(zeros))
                 if 'n_i' in data and 'n_e' in data:
                     names = []
                     masses = []
@@ -2075,8 +2077,8 @@ class gacode_io(io):
                     dvec = data['s_generic_particle'].to_numpy()
                     dvec = np.concatenate([np.expand_dims(dvec[..., 0], axis=-1), dvec, np.expand_dims(dvec[..., -1], axis=-1)], axis=-1)
                     data_vars['qpar_beam'] = (['n', 'rho'], dvec)
-                if 'rotation_sonic' in data:
-                    data_vars['omega0'] = (['n', 'rho'], data['rotation_sonic'].to_numpy())
+                if 'toroidal_angular_velocity' in data:
+                    data_vars['omega0'] = (['n', 'rho'], data['toroidal_angular_velocity'].to_numpy())
                 #'qione'
                 #'qioni'
                 #'qcxi'
