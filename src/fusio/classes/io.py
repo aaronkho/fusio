@@ -1,13 +1,12 @@
-from .. import Version, __python_version_object__
 import importlib
 import logging
+import sys
 from pathlib import Path
 from typing import Any      # Available in Python 3.5+
 from typing import Optional # Available in Python 3.6+
 from typing import Final    # Available in Python 3.8+
-Self: Any
-if __python_version_object__ > Version("3.11"):
-    from typing import Self  # type: ignore
+if sys.version_info >= (3, 11):
+    from typing import Self
 else:
     from typing_extensions import Self
 from collections.abc import Mapping, Sequence, Iterable
@@ -144,7 +143,7 @@ class io():
 
     # These functions always assume data is placed on input side of target format
 
-    def to(self, fmt: str, **kwargs: Any) -> Self:
+    def to(self, fmt: str, **kwargs: Any) -> 'io':
         try:
             mod = importlib.import_module(f'fusio.classes.{fmt}')
             cls = getattr(mod, f'{fmt}_io')
@@ -153,7 +152,7 @@ class io():
             raise NotImplementedError(f'Direct conversion to {fmt} not implemented.')
 
     @classmethod
-    def _from(cls, obj: Self, side: str = 'output', **kwargs: Any) -> Self | None:
+    def _from(cls, obj: 'io', side: str = 'output', **kwargs: Any) -> Self | None:
         newobj = None
         if isinstance(obj, io):
             if hasattr(cls, f'from_{obj.format}'):
